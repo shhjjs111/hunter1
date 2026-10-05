@@ -182,6 +182,17 @@ class TestSettingsPage:
         response = client.get("/settings")
         assert "sk-test" not in response.text  # 完整 key 不能出现在页面里
 
+    def test_api_key_input_is_masked(self, app_env) -> None:  # type: ignore[no-untyped-def]
+        """密钥输入框必须是 password —— type=text 会让肩窥直接读到。
+
+        这与 README 承诺的「界面只回显掩码、不输出完整密钥」是同一条要求：
+        回显掩码但输入框明文，等于把承诺的一半丢掉了。
+        """
+        client, _db, _llm = app_env
+        body = client.get("/settings").text
+        assert 'id="api_key" type="password"' in body
+        assert 'id="api_key" type="text"' not in body
+
     def test_invalid_base_url_is_reported_inline(self, app_env) -> None:  # type: ignore[no-untyped-def]
         """填错地址要就地告诉他哪里错，并把刚填的内容留着 —— 不是甩一个 500。"""
         client, db, _llm = app_env

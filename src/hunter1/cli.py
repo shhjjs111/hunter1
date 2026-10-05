@@ -17,6 +17,8 @@ import argparse
 import contextlib
 import os
 import sys
+import threading
+import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -70,17 +72,57 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _serve(args: argparse.Namespace) -> int:
-    import threading
-    import webbrowser
+def _onboarding_note(*, is_new_db: bool, configured: bool) -> str | None:
+    """需要引导时返回提示文案，否则 None。
 
+    判据是**「用户能不能用」**，不是「库文件在不在」。只看文件存在与否会漏掉
+    最常见的困境：库建过了、也抓过几次，但一直没配 API Key —— 此时
+    `db_path.exists()` 为真，引导全部失效，而用户此刻最需要知道的正是
+    「先去配置页」。
+    """
+    if is_new_db:
+        return (
+            "首次运行：库已建好。先到「配置」页填 base_url / 模型 / API Key，再去「抓取」页跑一轮。"
+        )
+    if not configured:
+        return "尚未配置模型：先到「配置」页填 base_url / 模型 / API Key，助手与评分才能用。"
+    return None
+
+
+def _open_browser_later(url: str, *, delay: float = 1.2) -> threading.Timer:
+    """过一小会儿打开浏览器（让服务先起来）。
+
+    `daemon=True` 是必须的：非守护线程会让解释器在退出时 join 它，
+    Ctrl+C 之后还要干等一个 delay 才真正退出。
+    """
+    timer = threading.Timer(delay, lambda: webbrowser.open(url))
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def _is_llm_configured(context: AppContext) -> bool:
+    """库里是否已有可用的模型配置。
+
+    配置损坏时**不静默**：打印一句警告并当作未配置，让用户知道要重新保存，
+    而不是看到一个「已配置」的假象或一次启动崩溃。
+    """
+    try:
+        settings = context.db.settings().get_llm()
+    except ValueError as exc:
+        print(f"警告：已保存的模型配置读不出来（{exc}）。请到「配置」页重新保存一次。")
+        return False
+    return settings is not None and settings.is_configured
+
+
+def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     from hunter1.web.app import create_app
 
     db_path = Path(args.db)
-    # 先看库在不在，再让 AppContext 去建 —— 建过之后这个判断就失效了
-    first_run = not db_path.exists()
+    # 必须在建库之前判断 —— Database 一初始化，这个信息就没了
+    is_new_db = not db_path.exists()
 
     context = AppContext.default(db_path=db_path, site_keys=_site_keys(args.sites))
     app = create_app(context)
@@ -88,18 +130,15 @@ def _serve(args: argparse.Namespace) -> int:
 
     print(f"Hunter1 已启动：{url}")
     print(f"数据库：{db_path}")
-    if first_run:
-        print(
-            "首次运行：库已建好。先到「配置」页填 base_url / 模型 / API Key，再去「抓取」页跑一轮。"
-        )
 
-    if args.no_browser:
-        pass
-    elif first_run:
-        # 首次运行自动开浏览器（用户还不知道要手点网址）；之后不再打扰
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    else:
-        print("（加 --no-browser 可关闭自动打开浏览器；已配置过则不会自动打开）")
+    note = _onboarding_note(is_new_db=is_new_db, configured=_is_llm_configured(context))
+    if note is not None:
+        print(note)
+        # 需要引导时才自动开浏览器（用户还不知道要手点网址）；
+        # 已经配好的人不该被反复弹浏览器。
+        if not args.no_browser:
+            _open_browser_later(url)
+            print("（已尝试打开浏览器；加 --no-browser 可关闭）")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

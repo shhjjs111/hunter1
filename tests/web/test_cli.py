@@ -6,7 +6,14 @@ import io
 
 import pytest
 
-from hunter1.cli import _build_parser, _enable_utf8_console, _site_keys, main
+from hunter1.cli import (
+    _build_parser,
+    _enable_utf8_console,
+    _onboarding_note,
+    _open_browser_later,
+    _site_keys,
+    main,
+)
 from hunter1.paths import data_dir, default_db_path
 
 
@@ -46,6 +53,59 @@ class TestServeOptions:
         args = _build_parser().parse_args(["serve", "--port", "9001", "--sites", "job910"])
         assert args.port == 9001
         assert args.sites == "job910"
+
+
+class TestOnboardingNote:
+    """引导该不该出现，判据是「用户能不能用」，不是「库文件在不在」。
+
+    原先只看 `db_path.exists()`，于是最常见的困境恰好没有引导：
+    用户建过库、抓过几次，但一直没配 API Key —— 此时 `first_run=False`，
+    既不给提示也不开浏览器，而用户此刻最需要知道的就是「你得先去配置页」。
+    """
+
+    def test_new_database_gets_a_first_run_note(self) -> None:
+        note = _onboarding_note(is_new_db=True, configured=False)
+        assert note is not None
+        assert "首次运行" in note
+
+    def test_existing_database_without_config_still_gets_a_note(self) -> None:
+        note = _onboarding_note(is_new_db=False, configured=False)
+        assert note is not None
+        assert "配置" in note
+
+    def test_configured_existing_database_gets_no_note(self) -> None:
+        assert _onboarding_note(is_new_db=False, configured=True) is None
+
+    def test_new_database_note_wins_over_configured(self) -> None:
+        """库刚建好（配置也只可能在这个库里）—— 按首次运行的口径说。"""
+        note = _onboarding_note(is_new_db=True, configured=True)
+        assert note is not None and "首次运行" in note
+
+    def test_note_points_at_the_settings_page(self) -> None:
+        for note in (
+            _onboarding_note(is_new_db=True, configured=False),
+            _onboarding_note(is_new_db=False, configured=False),
+        ):
+            assert note is not None and "「配置」页" in note
+
+
+class TestBrowserTimer:
+    def test_timer_is_daemon(self) -> None:
+        """非 daemon 的 Timer 会让 Ctrl+C 退出时 join 它 —— 最长卡一个 delay。"""
+        timer = _open_browser_later("http://127.0.0.1:1/", delay=30)
+        try:
+            assert timer.daemon is True
+        finally:
+            timer.cancel()  # 别在测试里真去开浏览器
+
+    def test_returns_the_timer_so_callers_can_cancel(self) -> None:
+        import threading
+
+        timer = _open_browser_later("http://127.0.0.1:1/", delay=30)
+        try:
+            assert isinstance(timer, threading.Timer)
+        finally:
+            timer.cancel()
 
 
 class TestUtf8Console:
