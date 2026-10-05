@@ -1,0 +1,61 @@
+# SLICE: scoring
+
+> 切片自述 —— 一个 Agent 只读本文件 + 根 `AGENTS.md`，即可合规地改这个切片。
+
+## 职责（一句话）
+
+读岗位 + 候选人画像 → 经 LLM 网关评分 → 把分数写回岗位。
+
+## 公开面（其他切片只能从这里 import）
+
+| 符号 | 用途 |
+|---|---|
+| `score_job` | 评分用例（失败抛 `ScoringError`，不返回 0 分） |
+| `CandidateProfile` / `ScoreCard` / `ScoringError` | 领域模型 |
+| `PROMPT_VERSION` / `build_user_prompt` / `SYSTEM_PROMPT` / `SCORE_SCHEMA` | 提示词（换代只动 `prompts.py`） |
+| `ScoreStore` / `build_router` | 存取门面与 HTTP 面工厂 |
+
+## 依赖
+
+- 允许：`hunter1.platform.*`、`hunter1.domain.models`（Job，过渡期）、
+  `hunter1.application.ports`（LLMProvider，进程边界协议）
+
+## 文件
+
+| 文件 | 职责 |
+|---|---|
+| `router.py` | HTTP 端点（`POST /api/scoring/{job_id}`） |
+| `service.py` | 评分用例（`score_job`） |
+| `prompts.py` | **提示词与口径**（与代码共置；改它 = 改这一版评分行为） |
+| `models.py` | 切片自有领域模型（画像 / 评分卡 / 失败类型） |
+| `store.py` | 读写岗位分数（唯一接触数据库处） |
+
+## API 面
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/scoring/{job_id}` | 评分并写回；404 岗位不存在、422 模型失败 |
+
+## 独立验证命令
+
+```bash
+cd backend && <python> -m pytest tests/slices/scoring -q
+```
+
+## 模型换代规程（本切片存在的意义之一）
+
+模型能力会持续增长，评分口径要跟着变。换代时**只动 `prompts.py`**：
+
+1. 改提示词 / 口径 → 升 `PROMPT_VERSION`；
+2. 跑 `pytest tests/slices/scoring` 确认结构契约没破；
+3. 用同一批岗位对照新旧版本的分数分布（**没有对照就没有换代收益的证据**）；
+4. 提交时在 message 里写下这一版改了什么、为什么。
+
+## 迁移注（切换完成时删除本段）
+
+- `CandidateProfile` / `ScoreCard` / `ScoringError` 曾住在 `domain/matching.py`，
+  已随本切片归位；旧文件待下线。
+- `store.py` 直接访问 `platform.db` 的岗位仓储；jobs 切片将来若提供评分写回
+  的公开面，可改经其调用（协议不变，只换实现）。
+- `CandidateProfile` 目前由组装处在启动时构造并注入；画像的持久化与编辑界面
+  尚未实现（迁移范围外）。
