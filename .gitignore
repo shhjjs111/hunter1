@@ -5,6 +5,10 @@ __pycache__/
 .venv/
 venv/
 
+# Node（前端工程：依赖目录可重建、体量巨大，永不入库）
+node_modules/
+*.tsbuildinfo
+
 # 构建产物
 dist/
 build/

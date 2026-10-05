@@ -1,0 +1,10 @@
+{
+  "name": "hunter1-contract-codegen",
+  "private": true,
+  "version": "0.0.0",
+  "description": "契约代码生成器环境 —— 与主工程依赖树隔离：openapi-typescript 声明 peer typescript@^5.x，而主工程用 TS 7；生成器只产出 .d.ts 文本，编译器版本互不影响。",
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}
