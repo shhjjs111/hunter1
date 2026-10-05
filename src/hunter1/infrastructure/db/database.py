@@ -9,6 +9,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
+from hunter1.infrastructure.db.conversations import SqliteConversationRepository
 from hunter1.infrastructure.db.repository import (
     SqliteCompanyRepository,
     SqliteJobRepository,
@@ -42,6 +43,9 @@ class Database:
 
     def jobs(self) -> SqliteJobRepository:
         return SqliteJobRepository(self)
+
+    def conversations(self) -> SqliteConversationRepository:
+        return SqliteConversationRepository(self)
 
     def dispose(self) -> None:
         self.engine.dispose()

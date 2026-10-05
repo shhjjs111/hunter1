@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func, select
 
 from hunter1.domain.models import CaptureStatus, Company, Job
+from hunter1.domain.text import normalize_job_title
 from hunter1.infrastructure.db.schema import CompanyRow, JobRow
 
 if TYPE_CHECKING:
@@ -117,6 +118,19 @@ class SqliteJobRepository:
             statement = (
                 select(JobRow).order_by(JobRow.last_seen_at.desc()).limit(limit).offset(offset)
             )
+            return [_to_job(row) for row in session.scalars(statement)]
+
+    def search(self, *, keyword: str, limit: int = 20, offset: int = 0) -> list[Job]:
+        """按关键词搜索岗位（在归一化标题上匹配，大小写/全角/括号不敏感）。
+
+        空关键词退化为「列出最近岗位」—— 助手问「有什么岗位」时的用法。
+        """
+        normalized = normalize_job_title(keyword)
+        with self._db.session() as session:
+            statement = select(JobRow).order_by(JobRow.last_seen_at.desc())
+            if normalized:
+                statement = statement.where(JobRow.title_key.contains(normalized))
+            statement = statement.limit(limit).offset(offset)
             return [_to_job(row) for row in session.scalars(statement)]
 
 

@@ -117,3 +117,48 @@ class TestJobs:
         reopened.initialize()
         assert reopened.jobs().count() == 1
         assert reopened.jobs().get("j1") is not None
+
+
+class TestJobSearch:
+    """按关键词搜索岗位 —— 助手的 search_jobs 工具依赖它。"""
+
+    def _seed(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(_job(id="j1", title="AI产品经理", company_id="c1"))
+        repo.upsert(_job(id="j2", title="大模型产品经理（2027校招）", company_id="c1"))
+        repo.upsert(_job(id="j3", title="行政专员", company_id="c2"))
+        repo.upsert(_job(id="j4", title="数据产品经理", company_id="c3"))
+
+    def test_matches_normalized_title(self, db: Database) -> None:
+        """搜「AI产品经理」应命中归一化后相同的项（含括号补充说明的那条）。"""
+        self._seed(db)
+        hits = db.jobs().search(keyword="产品经理")
+        assert {j.id for j in hits} == {"j1", "j2", "j4"}
+
+    def test_is_case_insensitive_and_fullwidth_tolerant(self, db: Database) -> None:
+        self._seed(db)
+        assert {j.id for j in db.jobs().search(keyword="ai产品")} == {"j1"}
+
+    def test_no_match_returns_empty(self, db: Database) -> None:
+        self._seed(db)
+        assert db.jobs().search(keyword="不存在的岗位") == []
+
+    def test_empty_keyword_returns_recent(self, db: Database) -> None:
+        """空关键词 = 列出最近岗位（助手「看看有什么」的用法）。"""
+        self._seed(db)
+        hits = db.jobs().search(keyword="", limit=2)
+        assert len(hits) == 2
+
+    def test_respects_limit(self, db: Database) -> None:
+        self._seed(db)
+        assert len(db.jobs().search(keyword="产品经理", limit=2)) == 2
+
+    def test_orders_by_last_seen_desc(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(
+            _job(id="old", title="产品经理A", last_seen_at=datetime(2026, 9, 1, tzinfo=UTC))
+        )
+        repo.upsert(
+            _job(id="new", title="产品经理B", last_seen_at=datetime(2026, 10, 1, tzinfo=UTC))
+        )
+        assert [j.id for j in repo.search(keyword="产品经理")] == ["new", "old"]

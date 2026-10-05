@@ -38,6 +38,8 @@ class JobRepository(Protocol):
 
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Job]: ...
 
+    def search(self, *, keyword: str, limit: int = 20, offset: int = 0) -> list[Job]: ...
+
 
 @runtime_checkable
 class TextFetcher(Protocol):
