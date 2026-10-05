@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,10 @@ from hunter1.cli import (
     _site_keys,
     main,
 )
-from hunter1.paths import data_dir, default_db_path
+from hunter1.paths import default_db_path
+
+# tests/web/test_cli.py → 上溯三级是仓库根
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestSiteKeys:
@@ -42,9 +46,17 @@ class TestServeOptions:
         args = _build_parser().parse_args(["serve"])
         assert args.no_browser is False
 
-    def test_default_db_lives_in_data_dir(self) -> None:
-        """默认库位置由 paths 决定，随打包形态变化 —— 这里锁住「在数据目录里」。"""
-        assert default_db_path().parent == data_dir()
+    def test_default_db_path_is_concrete(self) -> None:
+        """断言**具体落点**，而不是拿同一函数算出的两个值互相比对。
+
+        原先写的是 `default_db_path().parent == data_dir()`，而
+        `default_db_path()` 的实现就是 `data_dir() / DB_FILENAME` ——
+        两边同源，恒为真，什么都没验证到（包括打包后路径对不对）。
+        """
+        db = default_db_path()
+        assert db.name == "hunter1.db"
+        assert db.parent.name == ".data"  # 开发态：仓库根的 .data/
+        assert db == ROOT / ".data" / "hunter1.db"
 
     def test_default_db_is_a_db_file(self) -> None:
         assert default_db_path().suffix == ".db"

@@ -4,7 +4,7 @@
 
 填入**自己的大模型 API Key**（任意 OpenAI 兼容厂商）即可使用：在本地完成
 「岗位抓取 → 匹配评分 → **AI 求职助手** → 投递管理」全流程。
-安装体积目标 **~120MB**（旧系统 1.9GB 的约 1/16）。
+打包产物**约 42MB**（硬上限 200MB；旧系统 1.9GB 的约 1/45）。
 
 ## 现状
 
@@ -22,14 +22,18 @@
 
 ```bash
 pip install -e ".[dev,web,db,crawler]"
-hunter1 serve --db .data/hunter1.db      # 打开 http://127.0.0.1:8000
+hunter1 serve                     # 打开 http://127.0.0.1:8000
 ```
 
 先到「配置」页填 base_url / 模型 / API Key（点「测试连接」验证），
 再到「抓取」页跑一轮，岗位库就有数据了。
 
+数据库位置不用你操心（`paths.py` 决定）：仓库里开发是 `.data/hunter1.db`，
+打包运行是程序旁的 `data/hunter1.db`，`pip install` 后是平台的用户数据目录。
+只有想换个位置时才需要 `--db <路径>`。
+
 > 本机开发（项目自带 Python embeddable 版，忽略 `PYTHONPATH`、装不了 editable）：
-> `./.tools/python/python.exe scripts/serve.py --db .data/hunter1.db`
+> `./.tools/python/python.exe scripts/serve.py`
 
 ## 打包分发
 

@@ -70,14 +70,25 @@ docs/                规划与文档
 ## 运行
 
 ```bash
-hunter1 serve --db .data/hunter1.db --port 8000   # Web UI
-hunter1 crawl --db .data/hunter1.db               # 命令行跑一轮抓取
+hunter1 serve            # Web UI（数据位置见下）
+hunter1 crawl            # 命令行跑一轮抓取
+hunter1 update --source <版本清单 URL>   # 检查更新
 ```
+
+数据位置由 `paths.py` 按运行形态决定，**通常不需要传 `--db`**：
+
+| 形态 | 数据目录 |
+|---|---|
+| 仓库里开发 | `.data/hunter1.db` |
+| 打包产物 | 程序旁的 `data/hunter1.db` |
+| `pip install` 后 | 平台用户数据目录（如 `%LOCALAPPDATA%\hunter1`） |
+
+只有想换位置时才加 `--db <路径>`。
 
 本机开发（项目自带 Python embeddable 版）：
 
 ```bash
-./.tools/python/python.exe scripts/serve.py --db .data/hunter1.db
+./.tools/python/python.exe scripts/serve.py
 ```
 
 > ⚠️ embeddable 版用 `python312._pth` 接管 `sys.path`，**会忽略 `PYTHONPATH`**，
