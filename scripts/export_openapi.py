@@ -22,9 +22,8 @@ sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 
 def build_spec() -> dict[str, object]:
+    from hunter1.main import AppContext, create_app
     from hunter1.slices.scoring.models import CandidateProfile
-    from hunter1.web.app import create_app
-    from hunter1.web.context import AppContext
 
     # 传一个**占位画像**：契约描述的是「接口形状」，不是「当前配置下是否可用」。
     # 不传的话评分端点会因「画像未配置」而不挂载，契约里就少了这个能力 ——

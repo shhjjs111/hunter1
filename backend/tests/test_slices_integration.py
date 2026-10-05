@@ -20,10 +20,9 @@ from fastapi.testclient import TestClient
 from hunter1.domain.crawl import RawJob
 from hunter1.domain.llm import LLMResponse
 from hunter1.domain.models import Job
+from hunter1.main import AppContext, create_app
 from hunter1.platform.db import Database
 from hunter1.slices.scoring.models import CandidateProfile
-from hunter1.web.app import create_app
-from hunter1.web.context import AppContext
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 JOB_ID = "i" * 32
@@ -179,23 +178,112 @@ class TestAssistantStreamThroughApi:
         assert len(db.conversations().list()) == 1
 
 
-class TestTransitionCoexistence:
-    """过渡期：切片 API 与旧 SSR 页面共存于同一 app（Wave 6 删旧页面前的状态）。"""
+def _seeded_job() -> Job:
+    """集成测试用的种子岗位。"""
+    return Job(
+        id=JOB_ID,
+        company_id="c1",
+        title="集成测试岗",
+        detail_url="https://x/1",
+        source="实习僧",
+        company_name="集成公司",
+        last_seen_at=NOW,
+    )
 
-    def test_legacy_pages_still_render(self, client) -> None:  # type: ignore[no-untyped-def]
-        test_client, _db = client
-        for path, needle in (
-            ("/", "岗位库"),
-            ("/crawl", "开始抓取"),
-            ("/applications", "投递记录"),
-        ):
-            response = test_client.get(path)
-            assert response.status_code == 200, f"{path} 挂了"
-            assert needle in response.text, f"{path} 内容不含「{needle}」"
 
-    def test_api_and_legacy_share_one_database(self, client) -> None:  # type: ignore[no-untyped-def]
-        """两条路径读的是同一个库 —— 否则接口与页面会各说各话。"""
-        test_client, _db = client
-        test_client.post(f"/api/jobs/{JOB_ID}/apply")
-        # 旧投递页面应看到 API 写入的这条记录
-        assert "集成公司" in test_client.get("/applications").text
+def _make_app(tmp_path: Path, *, frontend: Path | None) -> tuple[TestClient, Database]:
+    """按指定前端目录装配一个 app（None = 不提供产物）。"""
+    from hunter1.main import frontend_dir as _fd
+
+    db = Database(tmp_path / f"app-{frontend is not None}.db")
+    db.initialize()
+    db.jobs().upsert(_seeded_job())
+    context = AppContext(
+        db=db,
+        fetcher=_FakeFetcher(),
+        llm_factory=lambda _settings: _FakeLLM(),  # type: ignore[arg-type,return-value]
+        clock=lambda: NOW,
+    )
+    if frontend is not None:
+        monkey_target = frontend
+        import hunter1.main as main_module
+
+        original = main_module.frontend_dir
+        main_module.frontend_dir = lambda: monkey_target  # type: ignore[assignment]
+        try:
+            app = create_app(context)
+        finally:
+            main_module.frontend_dir = original  # type: ignore[assignment]
+    else:
+        import hunter1.main as main_module
+
+        original = main_module.frontend_dir
+        main_module.frontend_dir = lambda: None  # type: ignore[assignment]
+        try:
+            app = create_app(context)
+        finally:
+            main_module.frontend_dir = original  # type: ignore[assignment]
+    assert _fd is not None
+    return TestClient(app), db
+
+
+class TestFrontendServing:
+    """Wave 6：后端不再渲染页面，只服务前端构建产物。
+
+    两个方向都要测（确定性由「显式指定产物目录」保证，不依赖本机是否 build 过）：
+    - 没有产物 → 503 + 可行动的提示（不是 500、不是白屏）；
+    - 有产物 → SPA 回落：任意前端路由返回 index.html，真实文件按文件返回。
+    """
+
+    def test_without_build_explains_actionably(self, tmp_path: Path) -> None:
+        test_client, db = _make_app(tmp_path, frontend=None)
+        response = test_client.get("/")
+        assert response.status_code == 503
+        payload = response.json()
+        assert "前端产物未构建" in payload["detail"]
+        assert "dev.sh" in payload["hint"]  # 给出可行动的下一步
+        db.dispose()
+
+    def test_with_build_serves_spa_and_falls_back(self, tmp_path: Path) -> None:
+        dist = tmp_path / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text("<html><div id=root></div></html>", encoding="utf-8")
+        (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+        (dist / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+
+        test_client, db = _make_app(tmp_path, frontend=dist)
+
+        # 根路径 → index.html
+        root = test_client.get("/")
+        assert root.status_code == 200 and "id=root" in root.text
+
+        # 前端路由（/settings 等）→ 回落 index.html（SPA 自己解析路径）
+        for path in ("/settings", "/applications", "/assistant", "/crawl"):
+            fallback = test_client.get(path)
+            assert fallback.status_code == 200, f"{path} 未回落"
+            assert "id=root" in fallback.text
+
+        # 真实文件优先
+        assert test_client.get("/favicon.svg").status_code == 200
+        assert test_client.get("/assets/app.js").status_code == 200
+        db.dispose()
+
+    def test_api_takes_precedence_over_spa_fallback(self, tmp_path: Path) -> None:
+        """SPA 回落不能吞掉 API —— 否则前端永远拿不到数据。"""
+        dist = tmp_path / "dist2"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>spa</html>", encoding="utf-8")
+        test_client, db = _make_app(tmp_path, frontend=dist)
+
+        response = test_client.get("/api/jobs")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/json")
+        assert response.json()["total"] == 1
+        db.dispose()
+
+    def test_no_legacy_ssr_layer(self, tmp_path: Path) -> None:
+        """旧 SSR 层已删 —— 渲染层只有前端一处。"""
+        import hunter1
+
+        package_dir = Path(hunter1.__file__).resolve().parent
+        assert not (package_dir / "web").exists()

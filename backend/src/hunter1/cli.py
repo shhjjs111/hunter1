@@ -24,9 +24,9 @@ from pathlib import Path
 
 from hunter1 import __version__
 from hunter1.crawlers.registry import available_sites
+from hunter1.main import AppContext
 from hunter1.paths import data_dir, default_db_path
 from hunter1.platform.db.database import DatabaseLocationError
-from hunter1.web.context import AppContext
 
 # 更新源没有内建默认值：这个项目还没有发布渠道，编一个假 URL 只会让
 # `hunter1 update` 发一次必然失败的请求。没配就明说没配。
@@ -119,7 +119,7 @@ def _is_llm_configured(context: AppContext) -> bool:
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
-    from hunter1.web.app import create_app
+    from hunter1.main import create_app
 
     db_path = Path(args.db)
     # 必须在建库之前判断 —— Database 一初始化，这个信息就没了
@@ -153,7 +153,7 @@ def _serve(args: argparse.Namespace) -> int:
 
 
 def _crawl(args: argparse.Namespace) -> int:
-    from hunter1.application.crawl import crawl_all
+    from hunter1.slices.crawl import crawl_all
 
     context = AppContext.default(db_path=args.db, site_keys=_site_keys(args.sites))
     batch = crawl_all(context.crawler_factory(), jobs=context.db.jobs())

@@ -17,8 +17,8 @@ from hunter1.cli import (
 )
 from hunter1.paths import default_db_path
 
-# tests/web/test_cli.py → 上溯三级是后端工程根（backend/）
-ROOT = Path(__file__).resolve().parents[2]
+# tests/test_cli.py → 上溯一级是后端工程根（backend/）
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestSiteKeys:

@@ -39,20 +39,22 @@ build = _load_build_module()
 EXE_NAME = "hunter1.exe" if os.name == "nt" else "hunter1"
 
 
-def _make_dist(tmp_path: Path, *, exe: bool = True, templates: str = "v6") -> Path:
+def _make_dist(tmp_path: Path, *, exe: bool = True, frontend: str = "v6") -> Path:
+    """造一个产物目录。`frontend` 控制前端产物的布局（None = 不放）。"""
     dist = tmp_path / "dist" / "hunter1"
     dist.mkdir(parents=True)
     if exe:
         (dist / EXE_NAME).write_bytes(b"stub")
-    if templates == "v6":
-        folder = dist / "_internal" / "hunter1" / "web" / "templates"
-    elif templates == "v5":
-        folder = dist / "hunter1" / "web" / "templates"
+    if frontend == "v6":
+        folder = dist / "_internal" / "hunter1" / "web_dist"
+    elif frontend == "v5":
+        folder = dist / "hunter1" / "web_dist"
     else:
         folder = None
     if folder is not None:
-        folder.mkdir(parents=True)
-        (folder / "base.html").write_text("<html></html>", encoding="utf-8")
+        (folder / "assets").mkdir(parents=True)
+        (folder / "index.html").write_text('<html><div id="root"></div></html>', encoding="utf-8")
+        (folder / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
     return dist
 
 
@@ -64,20 +66,20 @@ class TestLayoutProblems:
         problems = build.layout_problems(_make_dist(tmp_path, exe=False))
         assert any("可执行文件" in p for p in problems)
 
-    def test_reports_missing_templates(self, tmp_path: Path) -> None:
-        problems = build.layout_problems(_make_dist(tmp_path, templates="none"))
-        assert any("模板" in p for p in problems)
+    def test_reports_missing_frontend(self, tmp_path: Path) -> None:
+        problems = build.layout_problems(_make_dist(tmp_path, frontend="none"))
+        assert any("前端产物" in p for p in problems)
 
-    def test_reports_empty_template_directory(self, tmp_path: Path) -> None:
+    def test_reports_frontend_without_index(self, tmp_path: Path) -> None:
+        """有目录但缺 index.html —— 产物是半截的。"""
         dist = _make_dist(tmp_path)
-        for html in (dist / "_internal" / "hunter1" / "web" / "templates").glob("*.html"):
-            html.unlink()
+        (dist / "_internal" / "hunter1" / "web_dist" / "index.html").unlink()
         problems = build.layout_problems(dist)
-        assert any("空的" in p for p in problems)
+        assert any("index.html" in p for p in problems)
 
     def test_accepts_pyinstaller_5_flat_layout(self, tmp_path: Path) -> None:
-        """5.x 的模板是平铺的 —— 不该把「模板在」误报成「不在」。"""
-        assert build.layout_problems(_make_dist(tmp_path, templates="v5")) == []
+        """5.x 的产物是平铺的 —— 不该把「产物在」误报成「不在」。"""
+        assert build.layout_problems(_make_dist(tmp_path, frontend="v5")) == []
 
     def test_reports_oversized_product(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -152,7 +154,7 @@ class TestVerify:
             return "不该被调用"
 
         monkeypatch.setattr(build, "smoke_run", boom)
-        problems = build.verify(_make_dist(tmp_path, templates="none"))
+        problems = build.verify(_make_dist(tmp_path, frontend="none"))
         assert called["n"] == 0
         assert problems
 
@@ -194,11 +196,11 @@ class TestCheckPages:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 body = {
-                    "/": "<html>岗位库</html>",
-                    "/settings": "<html>Base URL</html>",
-                    "/assistant": "<html>求职助手</html>",
-                    "/crawl": "<html>开始抓取</html>",
-                    "/applications": "<html>投递记录</html>",
+                    "/": '<html><div id="root"></div></html>',
+                    "/assets/": "<html>asset</html>",
+                    "/api/jobs": '{"items": []}',
+                    "/api/crawl/status": '{"running": false}',
+                    "/api/settings": "null",
                 }.get(self.path, "")
                 if not body:
                     self.send_error(404)
@@ -255,8 +257,8 @@ class TestCheckPages:
         problems = build.check_pages("http://127.0.0.1:1", timeout=2.0)
         assert problems
 
-    def test_covers_the_template_rendering_pages(self) -> None:
-        """冒烟必须覆盖实际渲染模板的页面 —— 只请求 / 会漏掉配置页等。"""
+    def test_covers_spa_shell_and_api(self) -> None:
+        """冒烟必须同时覆盖 SPA 外壳与 API —— 只请求 / 会漏掉「API 全挂」这类事故。"""
         requested: list[str] = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -274,7 +276,7 @@ class TestCheckPages:
         for base in self._serve(Handler):
             build.check_pages(base)
         paths = set(requested)
-        assert {"/", "/settings", "/assistant", "/crawl", "/applications"} <= paths
+        assert {"/", "/assets/", "/api/jobs", "/api/crawl/status", "/api/settings"} <= paths
 
 
 class TestFreePort:
@@ -289,11 +291,11 @@ class TestFreePort:
         assert len(ports) > 1
 
 
-class TestFindTemplates:
+class TestFindFrontendDist:
     def test_prefers_the_v6_layout(self, tmp_path: Path) -> None:
-        dist = _make_dist(tmp_path, templates="v6")
-        found = build.find_templates(dist)
+        dist = _make_dist(tmp_path, frontend="v6")
+        found = build.find_frontend_dist(dist)
         assert found is not None and "_internal" in str(found)
 
     def test_returns_none_when_absent(self, tmp_path: Path) -> None:
-        assert build.find_templates(_make_dist(tmp_path, templates="none")) is None
+        assert build.find_frontend_dist(_make_dist(tmp_path, frontend="none")) is None

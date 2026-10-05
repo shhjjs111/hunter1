@@ -30,11 +30,12 @@ ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
 DIST = ROOT / "dist"
 APP_NAME = "hunter1"
-# 模板打进去的目标目录随 PyInstaller 大版本变过：6.x 放进 `_internal/`，
-# 5.x 及更早是平铺。两种都认，免得在 5.x 上把「模板在」误报成「不在」。
-TEMPLATE_SUBDIRS = (
-    Path("_internal") / "hunter1" / "web" / "templates",
-    Path("hunter1") / "web" / "templates",
+# 前端产物打进去的目标目录随 PyInstaller 大版本变过：6.x 放进 `_internal/`，
+# 5.x 及更早是平铺。两种都认，免得在 5.x 上把「产物在」误报成「不在」。
+# （Wave 6 之前这里找的是 web/templates；SSR 层删除后换成前端构建产物。）
+FRONTEND_SUBDIRS = (
+    Path("_internal") / "hunter1" / "web_dist",
+    Path("hunter1") / "web_dist",
 )
 
 # 体积硬上限。实测约 42MB，给它约 2x 余量：
@@ -48,20 +49,44 @@ SMOKE_HELP_TIMEOUT_SECONDS = 90
 SMOKE_SERVE_TIMEOUT_SECONDS = 90
 SMOKE_PAGE_TIMEOUT_SECONDS = 20.0
 
-# 冒烟要请求的页面，以及每个页面必须出现的**特征词**。
-# 这些词都取自各自模板里的可见文案：页面渲染出来就一定在。
-# 覆盖的是实际渲染 Jinja 模板的页面 —— 模板类事故正是在这些页面上暴露。
+# 冒烟探针：(路径, 断言说明)。前端现在是 SPA —— 页面内容由 JS 渲染，
+# 静态 HTML 里只有挂载点与资源引用，所以断言换成「**结构性事实**」：
+# SPA 外壳能返回、入口脚本被引用、API 有响应。
+#
+# 为什么不再断言中文文案：那需要执行 JS（headless 浏览器）。本层冒烟
+# 的职责是「产物能不能起、前端与 API 两条路通不通」，渲染正确性由
+# 前端的组件测试与整体渲染验收覆盖（见 frontend/src/app/App.test.tsx）。
 SMOKE_PAGES: tuple[tuple[str, str], ...] = (
-    ("/", "岗位库"),
-    ("/settings", "Base URL"),
-    ("/assistant", "求职助手"),
-    ("/crawl", "开始抓取"),
-    ("/applications", "投递记录"),
+    ("/", "id=\"root\""),          # SPA 挂载点：产物里必须有
+    ("/assets/", ""),                # 资源目录可达（前缀匹配，下方单独处理）
+    ("/api/jobs", "\"items\""),     # API 有响应且是预期的 JSON 形状
+    ("/api/crawl/status", "\"running\""),
+    ("/api/settings", ""),           # 配置端点可达（未配置时返回 null）
 )
 
 
 def _exe_name() -> str:
     return f"{APP_NAME}.exe" if os.name == "nt" else APP_NAME
+
+
+def _ensure_frontend_built() -> None:
+    """确保前端产物存在（构建前先 build 一次）。
+
+    产物缺失时**明确失败**而不是继续：打一个没有界面的包出来，用户解开
+    只会看到一段裸 API —— 那比直接报错的排查成本高得多。
+    """
+    dist = ROOT / "frontend" / "dist"
+    frontend_dir = ROOT / "frontend"
+    if not (frontend_dir / "package.json").is_file():
+        raise SystemExit(f"缺少前端工程：{frontend_dir}")
+
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    print("== 构建前端 ==")
+    result = subprocess.run([npm, "run", "build"], cwd=frontend_dir, check=False, shell=False)
+    if result.returncode != 0:
+        raise SystemExit(f"前端构建失败（exit {result.returncode}）")
+    if not (dist / "index.html").is_file():
+        raise SystemExit(f"前端构建未产出 index.html：{dist}")
 
 
 def _require_pyinstaller() -> None:
@@ -102,9 +127,9 @@ def _dir_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
-def find_templates(dist_dir: Path) -> Path | None:
-    """在产物里找模板目录（兼容 PyInstaller 5.x 与 6.x 两种布局）。"""
-    for subdir in TEMPLATE_SUBDIRS:
+def find_frontend_dist(dist_dir: Path) -> Path | None:
+    """在产物里找前端产物目录（兼容 PyInstaller 5.x 与 6.x 两种布局）。"""
+    for subdir in FRONTEND_SUBDIRS:
         candidate = dist_dir / subdir
         if candidate.is_dir():
             return candidate
@@ -119,13 +144,14 @@ def layout_problems(dist_dir: Path) -> list[str]:
     if not exe.is_file():
         problems.append(f"缺少可执行文件：{exe.name}")
 
-    templates = find_templates(dist_dir)
-    if templates is None:
+    frontend = find_frontend_dist(dist_dir)
+    if frontend is None:
         problems.append(
-            f"模板目录没打进去（找过 {[str(p) for p in TEMPLATE_SUBDIRS]}）——界面会全线 500"
+            f"前端产物没打进去（找过 {[str(p) for p in FRONTEND_SUBDIRS]}）"
+            "——界面会打不开（只剩裸 API）"
         )
-    elif not list(templates.glob("*.html")):
-        problems.append(f"模板目录是空的：{templates}")
+    elif not (frontend / "index.html").is_file():
+        problems.append(f"前端产物缺 index.html：{frontend}")
 
     size_mb = _dir_size(dist_dir) / 1024 / 1024
     if size_mb > SIZE_BUDGET_MB:
@@ -205,8 +231,8 @@ def check_pages(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -
             if response.status_code != 200:
                 problems.append(f"{path} 返回 {response.status_code}（期望 200）")
                 continue
-            if needle not in response.text:
-                problems.append(f"{path} 内容不含「{needle}」——模板可能没渲染出来")
+            if needle and needle not in response.text:
+                problems.append(f"{path} 内容不含「{needle}」——产物可能不完整")
     return problems
 
 
@@ -342,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--zip", action="store_true", help="构建后再打一个 zip")
     args = parser.parse_args(argv)
 
+    _ensure_frontend_built()
     _require_pyinstaller()
     _run_pyinstaller()
 
@@ -352,10 +379,10 @@ def main(argv: list[str] | None = None) -> int:
     print("\n== 校验 ==")
     problems = verify(dist_dir)
     size_mb = _dir_size(dist_dir) / 1024 / 1024
-    templates = find_templates(dist_dir)
+    frontend = find_frontend_dist(dist_dir)
     print(f"  目录：{dist_dir}")
     print(f"  体积：{size_mb:.1f}MB（预算 {SIZE_BUDGET_MB}MB）")
-    print(f"  模板：{templates if templates is not None else '缺失'}")
+    print(f"  前端产物：{frontend if frontend is not None else '缺失'}")
     print(f"  冒烟：{'通过' if not problems else '未通过'}")
 
     if problems:

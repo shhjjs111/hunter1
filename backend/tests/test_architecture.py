@@ -11,7 +11,7 @@
   对 platform 只允许 `platform.text`（纯函数）。
 - `application`（用例）不得 import `hunter1.{platform, web, crawlers, slices}` ——
   只依赖 domain 与端口（Protocol）。
-- `slices`（业务切片）不得 import `hunter1.{web, crawlers}`；对旧层
+- `slices`（业务切片）不得 import `hunter1.{main, crawlers}`；对旧层
   （`hunter1.application`）的依赖必须登记在 `SLICE_LEGACY_ALLOW`（Wave 4 清空）；
   切片之间只经公开面（`__init__`），不得深链其他切片的内部模块。
 """
@@ -27,9 +27,14 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "hunter1"
 
 # 每层禁止的顶层包前缀（迁移期规则；见模块 docstring）
 FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
-    "platform": ("hunter1.slices", "hunter1.application", "hunter1.web", "hunter1.crawlers"),
-    "domain": ("hunter1.application", "hunter1.web", "hunter1.crawlers", "hunter1.slices"),
-    "application": ("hunter1.platform", "hunter1.web", "hunter1.crawlers", "hunter1.slices"),
+    "platform": ("hunter1.slices", "hunter1.application", "hunter1.crawlers", "hunter1.main"),
+    "domain": ("hunter1.application", "hunter1.crawlers", "hunter1.slices", "hunter1.main"),
+    "application": (
+        "hunter1.platform",
+        "hunter1.crawlers",
+        "hunter1.slices",
+        "hunter1.main",
+    ),
 }
 
 # 切片 → 过渡期登记的旧层依赖（Wave 4 完成后必须清空；新增条目需评审）
@@ -106,8 +111,19 @@ def test_domain_layer_has_no_third_party_io_libraries() -> None:
 
 
 def test_layers_exist() -> None:
-    for layer in ["platform", "slices", "domain", "application", "web", "crawlers"]:
+    for layer in ["platform", "slices", "domain", "application", "crawlers"]:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
+
+
+def test_assembly_root_exists() -> None:
+    """组装根存在 —— 它是唯一认识所有切片的地方。"""
+    assert (SRC / "main.py").is_file()
+
+
+def test_legacy_ssr_layer_is_gone() -> None:
+    """旧 SSR 层必须不存在（Wave 6 删除）：前后端完全分离后，
+    留着旧渲染层会让「界面在哪实现」有两个答案。"""
+    assert not (SRC / "web").exists(), "旧 web/ 层残留"
 
 
 def test_slices_respect_boundaries() -> None:
@@ -121,7 +137,7 @@ def test_slices_respect_boundaries() -> None:
         allowed = SLICE_LEGACY_ALLOW.get(slice_dir.name, ())
         for path in sorted(slice_dir.rglob("*.py")):
             for module in _imported_modules(path):
-                if module.startswith(("hunter1.web", "hunter1.crawlers")):
+                if module.startswith(("hunter1.main", "hunter1.crawlers")):
                     offenders.append(f"{_rel(path)} imports {module}")
                 elif module == SHARED_PORT_MODULE:
                     continue  # 进程边界协议：见 SHARED_PORT_MODULE 的说明

@@ -5,10 +5,11 @@
 
 1. **入口是 `src/hunter1/__main__.py`**：它调 `cli.main()`，与安装后的
    `hunter1` 命令走同一条路径，不存在「打包版行为不一样」。
-2. **templates 必须显式带上**：`web/app.py` 用 `Path(__file__).parent / "templates"`
-   定位模板，而 `.py` 被编译进归档后不会顺带带上同目录的 `.html`。
-   目标路径 `hunter1/web/templates` 与源码结构保持一致 —— 于是同一行代码在
-   开发态与打包态都能解析到。
+2. **前端构建产物必须显式带上**：`main.py` 在打包态用
+   `sys._MEIPASS / "hunter1" / "web_dist"` 定位它（见 `main.frontend_dir()`）。
+   `.py` 被编译进归档时不会顺带带上 `frontend/dist`，所以必须在 datas 里声明；
+   目标路径与解析分支保持一致 —— 于是同一行代码在开发态与打包态都成立。
+   （Wave 6 之前这里是 `web/templates`；SSR 层删除后换成前端产物。）
 3. **`pathex=['src']`**：src 布局下包不在仓库根，得告诉分析器去哪找。
 
 产物是**单目录**模式（`dist/hunter1/`：一个 exe + `_internal/`），实测约 42MB。
@@ -16,11 +17,25 @@
 防病毒软件误报。
 """
 
+import os
+from pathlib import Path
+
+# scripts/build.py 会以 cwd=backend 调用；允许环境变量覆盖以便独立调试
+_BACKEND = Path(os.environ.get("HUNTER1_BACKEND_DIR") or Path.cwd())
+_FRONTEND_DIST = Path(
+    os.environ.get("HUNTER1_FRONTEND_DIST") or (_BACKEND.parent / "frontend" / "dist")
+)
+
+datas = []
+if _FRONTEND_DIST.is_dir():
+    # 目标 "hunter1/web_dist" 与 main.frontend_dir() 的打包态分支一致
+    datas.append((str(_FRONTEND_DIST), "hunter1/web_dist"))
+
 a = Analysis(
     ['src/hunter1/__main__.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('src/hunter1/web/templates', 'hunter1/web/templates')],
+    datas=datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
