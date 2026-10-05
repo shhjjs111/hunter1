@@ -1,48 +1,52 @@
 # Hunter1
 
-> 求职工作台 · 轻量 · 跨平台 · 零托管
+> 求职工作台 · 轻量 · 跨平台 · 零托管 · **前后端完全分离**
 
 填入**自己的大模型 API Key**（任意 OpenAI 兼容厂商）即可使用：在本地完成
-「岗位抓取 → 匹配评分 → **AI 求职助手** → 投递管理」全流程。
-打包产物**约 42MB**（硬上限 200MB；旧系统 1.9GB 的约 1/45）。
+「岗位抓取 → 匹配评分 → AI 求职助手 → 投递管理」全流程。
 
-## 现状
+## 架构一览
 
-| 里程碑 | 状态 | 说明 |
-|---|---|---|
-| M0 地基 | ✅ | 分层骨架、质量门禁、CI |
-| M1 数据层 | ✅ | SQLite + 仓储 + 领域模型 |
-| M2 抓取 | ✅ | 站点注册表 + 6 个真实站点；选择器有真实页面快照守回归 |
-| M3 评分 + 统一 provider 层 | ✅ | 任意 OpenAI 兼容端点，结构化输出分级降级 |
-| M4 求职助手 | ✅ | 自研 agent 循环 + 工具注册表 + 会话持久化 + **流式输出** |
-| M5 Web UI | ✅ | 岗位库 / 配置 / 投递 / 抓取进度 / 助手对话（逐字流式） |
-| M6 打包分发 | ✅ | PyInstaller 单目录产物 42MB，解压即用；`hunter1 update` 检查并下载更新 |
+**后端**：切片化的纯 API（FastAPI + SQLite）。
+**前端**：独立的 React SPA（Vite + TypeScript）。
+**两者只经 OpenAPI 契约对话**：改后端模型 → 生成契约 → 前端类型自动跟进。
+
+```
+backend/src/hunter1/
+├── platform/   机制内核（db / llm / fetch / update）
+├── slices/     业务切片（jobs crawl applications assistant scoring settings）
+└── main.py     组装根
+frontend/src/
+├── features/   ★ 与后端切片同名（认知对称）
+└── shared/     设计系统 / 契约客户端 / SSE 原语
+contracts/      OpenAPI 快照（生成物）
+```
+
+设计公理、依赖方向、已知取舍见 **docs/ARCHITECTURE.md**；
+协作规则（多 Agent 并行开发）见 **AGENTS.md**。
 
 ## 快速开始
 
+### 开发（双进程，前后端完全分离）
+
 ```bash
-pip install -e ".[dev,web,db,crawler]"
-hunter1 serve                     # 打开 http://127.0.0.1:8000
+cd backend && pip install -e ".[dev,web,db,crawler]" && cd ..
+cd frontend && npm install && cd ..
+bash scripts/dev.sh          # 起 API(:8000) + Vite(:5173)
+# 浏览器访问 http://127.0.0.1:5173
 ```
 
-先到「配置」页填 base_url / 模型 / API Key（点「测试连接」验证），
+首次使用：到「配置」页填 base_url / 模型 / API Key（点「测试连接」验证），
 再到「抓取」页跑一轮，岗位库就有数据了。
 
-数据库位置不用你操心（`paths.py` 决定）：仓库里开发是 `.data/hunter1.db`，
-打包运行是程序旁的 `data/hunter1.db`，`pip install` 后是平台的用户数据目录。
-只有想换个位置时才需要 `--db <路径>`。
-
-> 本机开发（项目自带 Python embeddable 版，忽略 `PYTHONPATH`、装不了 editable）：
-> `./.tools/python/python.exe scripts/serve.py`
-
-## 打包分发
+### 交付（单进程单目录）
 
 ```bash
 ./.tools/python/python.exe scripts/build.py --zip
 ```
 
-产出 `dist/hunter1/`（`hunter1.exe` + `_internal/`，约 **42MB**）与
-`dist/hunter1-win32.zip`（约 24MB）。解压后直接运行，数据自动放在程序旁的 `data/`：
+产出 `dist/hunter1/`（exe + `_internal/`，含前端产物）与 `dist/hunter1-win32.zip`。
+解压后直接运行，数据放在程序旁的 `data/`：
 
 ```
 hunter1/hunter1.exe
@@ -50,36 +54,43 @@ hunter1/_internal/
 hunter1/data/          ← 首次运行自动创建
 ```
 
-构建脚本会做硬校验：**模板没打进去就判不合格** —— 那种包能启动，但每个页面都 500。
+构建脚本会做硬校验：**前端产物没打进去就判不合格** —— 那种包能启动，
+但界面打不开（只剩裸 API）。
 
-### 更新
+## 命令
 
-```bash
-hunter1 update --source <版本清单 URL>              # 只看有没有新版
-hunter1 update --source <版本清单 URL> --download   # 下到 data/updates/<版本>/
-```
+| 目的 | 命令 |
+|---|---|
+| 全量门禁 | `bash scripts/check.sh` |
+| 契约导出 / 漂移检查 | `bash scripts/contracts.sh` / `--check` |
+| 开发双进程 | `bash scripts/dev.sh` |
+| 后端测试 | `cd backend && <python> -m pytest` |
+| 单切片测试 | `cd backend && <python> -m pytest tests/slices/jobs` |
+| 前端检查 | `cd frontend && npm run check` |
+| 命令行抓取 | `<python> scripts/serve.py` 之外的 `hunter1 crawl` |
+| 自更新 | `hunter1 update --source <版本清单 URL>` |
 
-清单里每个产物都带 `sha256`，**校验不过就什么都不留**（半个坏包比没有包更危险）。
-更新**不会自动覆盖正在运行的程序**：Windows 上运行中的 exe 覆盖不了自己，
-绕开它要引入辅助进程那一套；便携工具的自然做法就是「下好 → 关掉 → 覆盖」。
+## 现状
 
-> 项目目前还没有发布渠道，所以没有内建默认更新源 —— 不配 `--source` 时
-> 它明说「未配置」，而不是去请求一个占位地址。
+| 维度 | 状态 |
+|---|---|
+| 后端切片 | ✅ 6 个（jobs / crawl / applications / assistant / scoring / settings） |
+| 前端 SPA | ✅ 5 个页面（岗位库 / 抓取 / 投递 / 助手 / 配置） |
+| 契约流水线 | ✅ 导出 + 双漂移门禁（快照 + 前端类型） |
+| 测试 | 后端 812 + 前端 27（含整体渲染验收） |
+| 打包分发 | ✅ 单目录产物，前端产物嵌入 |
 
 ## 务实说明
 
-- **抓取的是公开列表页**，不做登录、不绕验证码、**不做自动投递**（合规与伦理，见规划 §9）。
+- **抓取的是公开列表页**，不做登录、不绕验证码、**不做自动投递**。
   站点若返回风控页，会当作**显式失败**报出来，而不是静默给一个空列表。
-- **API Key 明文存在本地 SQLite**：单用户单机场景下，系统钥匙串方案会引入平台特有
-  依赖、与「零托管」冲突。界面只回显掩码，日志不输出完整密钥。
-- **只绑本机**：服务默认监听 `127.0.0.1:8000`。`--host 0.0.0.0` 会把无鉴权的界面
-  暴露到局域网/公网（写操作是裸 POST 表单，无 CSRF token），除临时演示外不要这么做。
-- 助手**只读**：它查岗位与投递、给建议，写操作由你在界面上确认。
-- **助手回复逐字流式**；模型不支持流式时自动退化为一次性返回，并在气泡下方
-  如实说明。浏览器没开 JS 时退回普通表单提交，功能不缺失。
-
-- 📄 **[开发规划 →](docs/DEVELOPMENT-PLAN.md)** ← 架构与路线基线
-- 🛠 **[开发指引 →](docs/DEVELOPMENT.md)** ← 环境、质量门禁、目录与约定
+- **API Key 明文存在本地 SQLite**：单机单用户场景下，系统钥匙串方案会引入
+  平台特有依赖、与「零托管」冲突。界面只回显掩码，日志不输出完整密钥。
+- **只绑本机**：默认监听 `127.0.0.1`。`--host 0.0.0.0` 会把无鉴权的界面
+  暴露到局域网/公网，除临时演示外不要这么做。
+- **助手只读**：它查岗位与投递、给建议；写操作由你在界面上确认。
+- **无 no-JS 回退**：SPA 的取舍。旧版本（服务端渲染）有表单回退，v2 放弃了 ——
+  换来的是前后端完全分离与更清晰的迭代边界。
 
 ## 与旧系统的关系
 
@@ -89,13 +100,9 @@ Hunter1 是对旧项目 `RecruitOps` 的重做：**迁移抓取资产与数据�
 - ❌ 丢弃：Electron 壳、PostgreSQL、Chromium 三重运行时（约 1.5GB）
 - 🔄 替换：codex 求职助手（297MB 二进制、硬绑 DeepSeek）→ **自研轻量 agent**（任意 API 可用）
 
-## 设计目标
+## 文档
 
-| 目标 | 判据 |
-|---|---|
-| 可分发给他人使用 | 陌生机器上解压即用 |
-| 自备 API | 支持任意 OpenAI 兼容端点，**不硬绑任何厂商** |
-| **含 AI 求职助手** | 聊天式助手，能查岗位 / 看投递 / 答疑；换一家 API 仍可用 |
-| 轻量 | 安装体积 ≤ 200MB |
-| 结构精良 | 核心测试覆盖 ≥ 80%，分层清晰、可复现 |
-| UI 从简 | 本地 Web UI，无前端构建链 |
+- 📐 **[架构 →](docs/ARCHITECTURE.md)** ← 设计公理、依赖方向、已知取舍
+- 🤖 **[协作宪法 →](AGENTS.md)** ← 切片地图、契约规则、门禁矩阵
+- 🛠 **[开发指引 →](docs/DEVELOPMENT.md)** ← 环境、命令、打包细节
+- 📄 **[历史规划 →](docs/DEVELOPMENT-PLAN.md)** ← v1 基线（已被 v2 取代）

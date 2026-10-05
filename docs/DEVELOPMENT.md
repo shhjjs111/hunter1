@@ -41,39 +41,60 @@ python -m pytest
 bash scripts/check.sh
 ```
 
-或分别跑：
+或分别跑（后端在 `backend/` 下）：
 
 ```bash
-ruff format --check .   # 格式
-ruff check .            # 静态检查
-pyright                 # 类型检查
-pytest                  # 测试
+cd backend
+<python> -m ruff format --check .   # 格式
+<python> -m ruff check .            # 静态检查
+<python> -m pyright --pythonpath <python>   # 类型检查（须传解释器，否则报假 import 错）
+<python> -m pytest                  # 测试
+```
+
+> ⚠️ `pyproject.toml` 的 `addopts=-q` 与命令行 `-q` 叠加成 `-qq` 会吞掉汇总行：
+> 要读「N passed」用 `-o addopts=` 覆盖。
+
+前端：
+
+```bash
+cd frontend
+npm run check    # tsc --noEmit + vitest
+npm run build    # 产出 dist/（交付形态由后端服务它）
 ```
 
 **提交前必须全绿。** 详见 `.github/workflows/ci.yml`。
 
-## 目录结构
+## 目录结构（v2：前后端分离）
 
 ```
-src/hunter1/
-├── domain/          纯模型与规则（无 IO 依赖）
-├── application/     用例编排（抓取 / 评分 / 投递 / 助手）
-├── infrastructure/  外部实现（SQLite / LLM / 抓取 / 邮件）
-├── crawlers/        站点适配器（声明式规格 + 注册表）
-├── web/             本地 Web UI（FastAPI + 服务端模板）
-└── cli.py           命令行入口
-tests/               单元 + 集成（镜像 src 结构）
-scripts/             质量门禁、快照刷新、开发期启动
-docs/                规划与文档
+backend/
+├── src/hunter1/
+│   ├── platform/     机制内核（db / llm / fetch / update / text）
+│   ├── slices/       业务切片（jobs crawl applications assistant scoring settings）
+│   ├── domain/       共享模型（过渡期，见 docs/ARCHITECTURE.md）
+│   ├── application/  端口协议（进程边界）
+│   ├── main.py       组装根（挂路由 + 服务前端产物）
+│   └── cli.py        命令行入口
+└── tests/            镜像 src；tests/slices/<name> = 该切片独立验证
+frontend/             React SPA（features/ 与 slices/ 同名）
+contracts/            OpenAPI 快照（生成物，禁手改）
+scripts/              check.sh / dev.sh / contracts.sh / build.py
+docs/                 架构白皮书与开发指引
 ```
+
+依赖方向与切片规则见 `AGENTS.md`；设计理由见 `docs/ARCHITECTURE.md`。
 
 ## 运行
 
 ```bash
-hunter1 serve            # Web UI（数据位置见下）
+bash scripts/dev.sh      # 开发形态：API(:8000) + Vite(:5173)，浏览器访问 5173
+hunter1 serve            # 交付形态：单进程服务 API + 前端产物
 hunter1 crawl            # 命令行跑一轮抓取
 hunter1 update --source <版本清单 URL>   # 检查更新
 ```
+
+开发形态下前端由 Vite 服务、经 proxy 打 `/api` 到后端；交付形态下两者同源 ——
+**请求路径一致，业务代码零分支**。
 
 数据位置由 `paths.py` 按运行形态决定，**通常不需要传 `--db`**：
 
@@ -156,6 +177,18 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 `paths.py` 是「数据放哪」的唯一决定点：开发时仓库根的 `.data/`，打包后
 程序目录旁的 `data/`（便携：解压即用、删目录即卸载）。两边都用 `sys.frozen` 判别。
+
+### 前端与契约
+
+打包前会先 `npm run build`（缺产物直接失败，不产出一个「没有界面」的包）。
+
+契约改动流程：改后端 `slices/*/schemas.py` → `bash scripts/contracts.sh` →
+提交更新后的 `contracts/openapi.json` 与 `frontend/src/shared/api/schema.d.ts`。
+CI 用 `contracts.sh --check` 拦截漏导出。
+
+生成器跑在 `frontend/tools/contract-codegen` 的独立依赖树里：
+`openapi-typescript` 声明 peer `typescript@^5.x`，而主工程用 TS 7 ——
+生成器只产出 `.d.ts` 文本，两边编译器版本互不影响。
 
 ### 更新
 
