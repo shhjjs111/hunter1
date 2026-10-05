@@ -12,7 +12,8 @@ from typing import Any, Protocol, runtime_checkable
 from hunter1.domain.assistant import Message
 from hunter1.domain.crawl import RawJob
 from hunter1.domain.llm import LLMResponse
-from hunter1.domain.models import Company, Job
+from hunter1.domain.models import Application, Company, Job
+from hunter1.domain.settings import LLMSettings
 
 
 @runtime_checkable
@@ -39,6 +40,32 @@ class JobRepository(Protocol):
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Job]: ...
 
     def search(self, *, keyword: str, limit: int = 20, offset: int = 0) -> list[Job]: ...
+
+
+@runtime_checkable
+class ApplicationRepository(Protocol):
+    """投递记录仓储。"""
+
+    def upsert(self, application: Application) -> None: ...
+
+    def get(self, application_id: str) -> Application | None: ...
+
+    def list(self, *, limit: int = 100, offset: int = 0) -> list[Application]: ...
+
+    def by_job(self, job_id: str) -> list[Application]: ...
+
+    def count(self) -> int: ...
+
+    def delete(self, application_id: str) -> None: ...
+
+
+@runtime_checkable
+class SettingsRepository(Protocol):
+    """配置仓储（当前只有 LLM 配置）。"""
+
+    def get_llm(self) -> LLMSettings | None: ...
+
+    def save_llm(self, settings: LLMSettings) -> None: ...
 
 
 @runtime_checkable
@@ -101,9 +128,11 @@ class LLMProvider(Protocol):
 
 
 __all__ = [
+    "ApplicationRepository",
     "CompanyRepository",
     "Crawler",
     "JobRepository",
     "LLMProvider",
+    "SettingsRepository",
     "TextFetcher",
 ]

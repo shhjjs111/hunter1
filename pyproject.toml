@@ -15,7 +15,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+# Web UI：FastAPI + 服务端模板（jinja2）+ 表单解析（python-multipart）。
+# uvicorn 不取 [standard]：那是给生产部署用的加速件，本地单用户工具用不上，
+# 且在 Windows 上大部分装不了，徒增安装失败面。
+web = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
+]
 db = ["sqlalchemy>=2.0,<3"]
 crawler = ["beautifulsoup4>=4.12", "lxml>=5.0"]
 browser = ["playwright>=1.48"]
@@ -25,6 +33,9 @@ dev = [
   "ruff>=0.6",
   "pyright>=1.1",
 ]
+
+[project.scripts]
+hunter1 = "hunter1.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hunter1"]

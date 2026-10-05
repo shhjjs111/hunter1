@@ -34,6 +34,7 @@ def _to_job(row: JobRow) -> Job:
         detail_url=row.detail_url,
         source=row.source,
         source_ref=row.source_ref,
+        company_name=row.company_name,
         city=row.city,
         jd_raw=row.jd_raw,
         match_score=row.match_score,
@@ -92,6 +93,7 @@ class SqliteJobRepository:
             row.detail_url = job.detail_url
             row.source = job.source
             row.source_ref = job.source_ref
+            row.company_name = job.company_name
             row.city = job.city
             row.jd_raw = job.jd_raw
             row.match_score = job.match_score

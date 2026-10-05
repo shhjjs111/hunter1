@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hunter1.infrastructure.db.applications import SqliteApplicationRepository
 from hunter1.infrastructure.db.conversations import (
     Conversation,
     SqliteConversationRepository,
@@ -12,14 +13,18 @@ from hunter1.infrastructure.db.repository import (
     SqliteJobRepository,
 )
 from hunter1.infrastructure.db.schema import (
+    ApplicationRow,
     Base,
     CompanyRow,
     ConversationMessageRow,
     ConversationRow,
     JobRow,
+    SettingRow,
 )
+from hunter1.infrastructure.db.settings import SqliteSettingsRepository
 
 __all__ = [
+    "ApplicationRow",
     "Base",
     "CompanyRow",
     "Conversation",
@@ -27,7 +32,10 @@ __all__ = [
     "ConversationRow",
     "Database",
     "JobRow",
+    "SettingRow",
+    "SqliteApplicationRepository",
     "SqliteCompanyRepository",
     "SqliteConversationRepository",
     "SqliteJobRepository",
+    "SqliteSettingsRepository",
 ]

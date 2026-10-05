@@ -8,14 +8,32 @@
 
 from __future__ import annotations
 
-from hunter1.application.ports import JobRepository
+from hunter1.application.ports import ApplicationRepository, JobRepository
 from hunter1.application.tools import Tool, ToolRegistry, tool
 
 SEARCH_LIMIT_MAX = 50
 
+# 阶段的中文名（给助手读的消息用）
+_STAGE_LABELS: dict[str, str] = {
+    "applied": "已投递",
+    "written_test": "笔试",
+    "interview": "面试",
+    "offer": "Offer",
+    "rejected": "已拒",
+    "withdrawn": "已放弃",
+}
 
-def build_tools(*, jobs: JobRepository) -> ToolRegistry:
-    """按给定的仓储装配工具集。"""
+
+def build_tools(
+    *,
+    jobs: JobRepository,
+    applications: ApplicationRepository | None = None,
+) -> ToolRegistry:
+    """按给定的仓储装配工具集。
+
+    `applications` 不传时不注册投递查询工具 —— 让「没接线」表现为「工具不存在」，
+    而不是「工具存在但总是报错」。
+    """
 
     def search_jobs(keyword: str = "", limit: int = 10) -> str:
         """按关键词搜索岗位库。
@@ -76,6 +94,39 @@ def build_tools(*, jobs: JobRepository) -> ToolRegistry:
         tool(job_detail, name="job_detail", description=(job_detail.__doc__ or "").strip()),
         tool(job_stats, name="job_stats", description=(job_stats.__doc__ or "").strip()),
     ]
+
+    if applications is not None:
+
+        def application_query(job_id: str = "") -> str:
+            """查询投递记录与所处阶段。
+
+            不传 job_id 时列出全部投递；传了则只看该岗位的投递情况。
+            """
+            if job_id:
+                found = applications.by_job(job_id)
+                if not found:
+                    return f"没有查到岗位 {job_id} 的投递记录。"
+            else:
+                found = applications.list(limit=SEARCH_LIMIT_MAX)
+                if not found:
+                    return "还没有投递记录。"
+
+            lines = [f"共 {len(found)} 条投递："]
+            for item in found:
+                stage = _STAGE_LABELS.get(item.stage.value, item.stage.value)
+                when = item.updated_at.strftime("%Y-%m-%d")
+                note = f"，备注：{item.note}" if item.note else ""
+                lines.append(f"- {item.company} · {item.title} — {stage}（{when}）{note}")
+            return "\n".join(lines)
+
+        tools.append(
+            tool(
+                application_query,
+                name="application_query",
+                description=(application_query.__doc__ or "").strip(),
+            )
+        )
+
     return ToolRegistry(tools)
 
 

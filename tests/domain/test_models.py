@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from hunter1.domain.models import CaptureStatus, Company, Job
+from hunter1.domain.models import Application, ApplicationStage, CaptureStatus, Company, Job
 
 
 class TestCompany:
@@ -48,6 +48,11 @@ class TestJob:
     def test_capture_status_defaults_to_unknown(self) -> None:
         assert self._job().capture_status is CaptureStatus.UNKNOWN
 
+    def test_company_name_is_optional_display_field(self) -> None:
+        """`company_id` 是身份哈希，人读不懂；界面要的公司名单独存。"""
+        assert self._job().company_name is None
+        assert self._job(company_name="字节跳动").company_name == "字节跳动"
+
     def test_invalid_capture_status_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             self._job(capture_status="not-a-status")
@@ -71,3 +76,44 @@ class TestJob:
         # 颠倒应被拒绝
         with pytest.raises(ValidationError):
             self._job(first_seen_at=later, last_seen_at=earlier)
+
+
+class TestApplication:
+    """投递记录 —— 岗位库之外的「我投了什么」。"""
+
+    def _application(self, **overrides: object) -> Application:
+        base: dict[str, object] = {
+            "id": "a1",
+            "job_id": "j1",
+            "company": "字节跳动",
+            "title": "AI产品经理",
+            "applied_at": datetime(2026, 9, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 2, tzinfo=UTC),
+        }
+        base.update(overrides)
+        return Application(**base)  # type: ignore[arg-type]
+
+    def test_defaults_to_applied_stage(self) -> None:
+        assert self._application().stage is ApplicationStage.APPLIED
+
+    def test_stage_accepts_known_values(self) -> None:
+        assert self._application(stage="interview").stage is ApplicationStage.INTERVIEW
+
+    def test_invalid_stage_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._application(stage="nonsense")
+
+    def test_updated_at_cannot_precede_applied_at(self) -> None:
+        """不变量：投递时间不可能晚于最后更新时间。"""
+        with pytest.raises(ValidationError):
+            self._application(
+                applied_at=datetime(2026, 10, 1, tzinfo=UTC),
+                updated_at=datetime(2026, 9, 1, tzinfo=UTC),
+            )
+
+    def test_note_is_optional(self) -> None:
+        assert self._application().note is None
+
+    def test_unknown_field_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._application(salary="20k")

@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from hunter1.application.applications import change_stage, new_application
 from hunter1.application.job_tools import build_tools
-from hunter1.domain.models import CaptureStatus, Job
+from hunter1.domain.models import ApplicationStage, CaptureStatus, Job
 from hunter1.infrastructure.db import Database
 
 
@@ -105,10 +106,58 @@ class TestJobStatsTool:
         assert "2" in result.content
 
 
+class TestApplicationQueryTool:
+    """助手能查投递记录 —— 需要装配了投递仓储才有这个工具。"""
+
+    def _registry(self, jobs_db: Database):
+        return build_tools(jobs=jobs_db.jobs(), applications=jobs_db.applications())
+
+    def _seed(self, jobs_db: Database) -> None:
+        job = jobs_db.jobs().get("j1" + "0" * 30)
+        assert job is not None
+        application = new_application(
+            job=job, now=datetime(2026, 10, 1, tzinfo=UTC), application_id="a1"
+        )
+        application = change_stage(
+            application,
+            stage=ApplicationStage.INTERVIEW,
+            now=datetime(2026, 10, 4, tzinfo=UTC),
+            note="二面",
+        )
+        jobs_db.applications().upsert(application)
+
+    def test_reports_applications_with_stage(self, jobs_db: Database) -> None:
+        self._seed(jobs_db)
+        result = self._registry(jobs_db).invoke("application_query", {}, call_id="c1")
+        assert result.ok
+        assert "AI产品经理" in result.content
+        assert "面试" in result.content
+
+    def test_empty_library_says_so(self, jobs_db: Database) -> None:
+        result = self._registry(jobs_db).invoke("application_query", {}, call_id="c1")
+        assert result.ok
+        assert "还没有投递" in result.content
+
+    def test_can_filter_by_job_id(self, jobs_db: Database) -> None:
+        self._seed(jobs_db)
+        found = self._registry(jobs_db).invoke(
+            "application_query", {"job_id": "j1" + "0" * 30}, call_id="c1"
+        )
+        assert found.ok and "AI产品经理" in found.content
+        missing = self._registry(jobs_db).invoke(
+            "application_query", {"job_id": "nope"}, call_id="c1"
+        )
+        assert missing.ok and "没有查到" in missing.content
+
+
 class TestToolSetShape:
     def test_registry_exposes_three_tools(self, jobs_db: Database) -> None:
         registry = build_tools(jobs=jobs_db.jobs())
         assert registry.names() == ["job_detail", "job_stats", "search_jobs"]
+
+    def test_application_tool_appears_only_when_wired(self, jobs_db: Database) -> None:
+        registry = build_tools(jobs=jobs_db.jobs(), applications=jobs_db.applications())
+        assert "application_query" in registry.names()
 
     def test_tools_are_read_only(self, jobs_db: Database) -> None:
         """工具集里不该出现写操作（写由用户在界面确认）。"""

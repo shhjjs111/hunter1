@@ -59,6 +59,7 @@ class TestJobs:
             match_score=88,
             capture_status=CaptureStatus.COMPLETE,
             city="北京",
+            company_name="字节跳动",
             jd_raw="岗位描述正文",
             first_seen_at=datetime(2026, 9, 1, tzinfo=UTC),
             last_seen_at=datetime(2026, 10, 1, tzinfo=UTC),

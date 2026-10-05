@@ -103,6 +103,7 @@ def _new_job(job_id: str, raw: RawJob, timestamp: datetime) -> Job:
         title=raw.title,
         detail_url=raw.detail_url,
         source=raw.source or raw.company,
+        company_name=raw.company,
         city=raw.city,
         jd_raw=raw.jd_raw,
         capture_status=CaptureStatus.PENDING,
@@ -118,6 +119,8 @@ def _merge(existing: Job, raw: RawJob, timestamp: datetime) -> Job:
             "title": raw.title,
             "detail_url": raw.detail_url,
             "city": raw.city or existing.city,
+            # 公司名是「事实」不是「成果」：站点填错/改名后重抓要能纠正
+            "company_name": raw.company or existing.company_name,
             # 已有 JD 正文不被空值抹掉
             "jd_raw": raw.jd_raw or existing.jd_raw,
             "last_seen_at": timestamp,

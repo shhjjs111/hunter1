@@ -38,8 +38,8 @@ class FakeCrawler:
         return list(self._jobs)
 
 
-def _raw(title: str, url: str, **kw: object) -> RawJob:
-    return RawJob(company="示例科技", title=title, detail_url=url, **kw)  # type: ignore[arg-type]
+def _raw(title: str, url: str, *, company: str = "示例科技", **kw: object) -> RawJob:
+    return RawJob(company=company, title=title, detail_url=url, **kw)  # type: ignore[arg-type]
 
 
 class TestCrawlCompany:
@@ -67,6 +67,26 @@ class TestCrawlCompany:
         crawl_company(crawler, jobs=db.jobs())
         expected_id = job_identity(detail_url="https://a.com/1")
         assert db.jobs().get(expected_id) is not None
+
+    def test_records_company_name_for_display(self, db: Database) -> None:
+        """落库时要带上人读的公司名 —— company_id 是哈希，界面显示不了。"""
+        crawler = FakeCrawler("示例科技", [_raw("A岗", "https://a.com/1")])
+        crawl_company(crawler, jobs=db.jobs())
+        job = db.jobs().get(job_identity(detail_url="https://a.com/1"))
+        assert job is not None and job.company_name == "示例科技"
+
+    def test_company_name_updates_when_corrected(self, db: Database) -> None:
+        """公司名写错后重抓应能纠正 —— 它不像 match_score 是「已有成果」。"""
+        crawl_company(FakeCrawler("示例科技", [_raw("A岗", "https://a.com/1")]), jobs=db.jobs())
+        crawl_company(
+            FakeCrawler(
+                "示例科技",
+                [_raw("A岗", "https://a.com/1", company="示例科技有限公司")],
+            ),
+            jobs=db.jobs(),
+        )
+        job = db.jobs().get(job_identity(detail_url="https://a.com/1"))
+        assert job is not None and job.company_name == "示例科技有限公司"
 
     def test_tracking_params_do_not_create_duplicate(self, db: Database) -> None:
         crawl_company(

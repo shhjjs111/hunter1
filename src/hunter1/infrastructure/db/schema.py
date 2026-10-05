@@ -62,6 +62,7 @@ class JobRow(Base):
     detail_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     source: Mapped[str] = mapped_column(String(128), nullable=False)
     source_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     jd_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     match_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -98,11 +99,39 @@ class ConversationMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class ApplicationRow(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    company: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="applied")
+    applied_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SettingRow(Base):
+    """通用键值配置。
+
+    用一张键值表而不是「每个设置一张表」：设置项会随版本增减（新增一个厂商
+    预设、加一个界面偏好），键值表不必每次都改 schema。
+    """
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+
+
 __all__ = [
+    "ApplicationRow",
     "Base",
     "CompanyRow",
     "ConversationMessageRow",
     "ConversationRow",
     "JobRow",
+    "SettingRow",
     "UtcDateTime",
 ]

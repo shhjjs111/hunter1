@@ -9,12 +9,14 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
+from hunter1.infrastructure.db.applications import SqliteApplicationRepository
 from hunter1.infrastructure.db.conversations import SqliteConversationRepository
 from hunter1.infrastructure.db.repository import (
     SqliteCompanyRepository,
     SqliteJobRepository,
 )
 from hunter1.infrastructure.db.schema import Base
+from hunter1.infrastructure.db.settings import SqliteSettingsRepository
 
 
 class Database:
@@ -46,6 +48,12 @@ class Database:
 
     def conversations(self) -> SqliteConversationRepository:
         return SqliteConversationRepository(self)
+
+    def applications(self) -> SqliteApplicationRepository:
+        return SqliteApplicationRepository(self)
+
+    def settings(self) -> SqliteSettingsRepository:
+        return SqliteSettingsRepository(self)
 
     def dispose(self) -> None:
         self.engine.dispose()
