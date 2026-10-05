@@ -9,14 +9,14 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
 
-from hunter1.infrastructure.db.applications import SqliteApplicationRepository
-from hunter1.infrastructure.db.conversations import SqliteConversationRepository
-from hunter1.infrastructure.db.repository import (
+from hunter1.platform.db.applications import SqliteApplicationRepository
+from hunter1.platform.db.conversations import SqliteConversationRepository
+from hunter1.platform.db.repository import (
     SqliteCompanyRepository,
     SqliteJobRepository,
 )
-from hunter1.infrastructure.db.schema import Base
-from hunter1.infrastructure.db.settings import SqliteSettingsRepository
+from hunter1.platform.db.schema import Base
+from hunter1.platform.db.settings import SqliteSettingsRepository
 
 
 class DatabaseLocationError(RuntimeError):

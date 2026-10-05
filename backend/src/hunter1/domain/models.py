@@ -13,7 +13,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
-from hunter1.domain.text import normalize_job_title
+from hunter1.platform.text import normalize_job_title
 
 
 class CaptureStatus(StrEnum):

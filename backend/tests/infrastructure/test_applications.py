@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from hunter1.domain.models import Application, ApplicationStage
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 @pytest.fixture()

@@ -12,9 +12,13 @@ from typing import Any
 
 import pytest
 
-from hunter1.application.update import check_for_update, prepare_update
-from hunter1.domain.update import ReleaseAsset, ReleaseManifest
-from hunter1.infrastructure.update import DownloadError
+from hunter1.platform.update import (
+    DownloadError,
+    ReleaseAsset,
+    ReleaseManifest,
+    check_for_update,
+    prepare_update,
+)
 
 SHA = "a" * 64
 
@@ -190,7 +194,7 @@ def test_status_is_a_plain_dataclass() -> None:
     """状态对象要能直接打印/序列化，方便 CLI 与将来的界面复用。"""
     from dataclasses import asdict, is_dataclass
 
-    from hunter1.application.update import UpdateStatus
+    from hunter1.platform.update import UpdateStatus
 
     assert is_dataclass(UpdateStatus)
     payload: dict[str, Any] = asdict(

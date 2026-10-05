@@ -23,7 +23,7 @@ import httpx
 
 from hunter1.domain.assistant import Message, ToolCall, parse_tool_calls, to_openai_messages
 from hunter1.domain.llm import LLMError, LLMResponse, StreamComplete, TextDelta
-from hunter1.infrastructure.llm.streaming import parse_sse_lines
+from hunter1.platform.llm.streaming import parse_sse_lines
 
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 STRUCTURED_MODES = ("json_schema", "json_object", "none")

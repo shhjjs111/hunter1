@@ -1,6 +1,6 @@
 """domain.text 单元测试 —— 岗位标题归一化。
 
-TDD 纪律：本文件先于实现编写，当前应处于 RED（`hunter1.domain.text` 尚不存在）。
+TDD 纪律：本文件先于实现编写，当前应处于 RED（`hunter1.platform.text` 尚不存在）。
 归一化结果用于「同题折叠」比较，因此必须稳定、可复现。
 """
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from hunter1.domain.text import normalize_job_title
+from hunter1.platform.text import normalize_job_title
 
 
 class TestNormalizeJobTitle:

@@ -16,10 +16,10 @@ from pydantic import ValidationError
 from sqlalchemy import delete
 
 from hunter1.domain.settings import LLMSettings
-from hunter1.infrastructure.db.schema import SettingRow
+from hunter1.platform.db.schema import SettingRow
 
 if TYPE_CHECKING:
-    from hunter1.infrastructure.db.database import Database
+    from hunter1.platform.db.database import Database
 
 LLM_KEY = "llm"
 

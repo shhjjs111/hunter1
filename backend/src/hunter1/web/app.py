@@ -517,7 +517,7 @@ def _probe(context: AppContext, settings: LLMSettings) -> dict[str, str]:
 
 
 def _presets() -> dict[str, dict[str, str]]:
-    from hunter1.infrastructure.llm import PROVIDER_PRESETS
+    from hunter1.platform.llm import PROVIDER_PRESETS
 
     return {
         name: {"base_url": preset.base_url, "model": preset.default_model}

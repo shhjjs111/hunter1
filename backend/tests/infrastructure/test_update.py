@@ -15,9 +15,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from hunter1.domain.update import ReleaseAsset
-from hunter1.infrastructure.update import (
+from hunter1.platform.update import (
     DownloadError,
+    ReleaseAsset,
     ReleaseClient,
     download_verified,
     file_sha256,

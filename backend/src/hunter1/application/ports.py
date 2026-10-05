@@ -7,8 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from pathlib import Path
+from collections.abc import Iterator
 from typing import Any, Protocol, runtime_checkable
 
 from hunter1.domain.assistant import Message
@@ -16,7 +15,6 @@ from hunter1.domain.crawl import RawJob
 from hunter1.domain.llm import LLMResponse, StreamComplete, TextDelta
 from hunter1.domain.models import Application, Company, Job
 from hunter1.domain.settings import LLMSettings
-from hunter1.domain.update import ReleaseAsset, ReleaseManifest
 
 
 @runtime_checkable
@@ -71,32 +69,6 @@ class SettingsRepository(Protocol):
     def get_llm(self) -> LLMSettings | None: ...
 
     def save_llm(self, settings: LLMSettings) -> None: ...
-
-
-# 下载进度回调：(已收字节数, 总字节数或 None)
-ProgressCallback = Callable[[int, int | None], None]
-
-
-@runtime_checkable
-class ReleaseSource(Protocol):
-    """版本清单与发布产物的来源（自更新用）。
-
-    应用层只依赖这两个方法，所以「检查更新」的决策逻辑可以完全离线测试；
-    真实实现见 `infrastructure.update.ReleaseClient`。
-
-    `download_asset` 的 `on_progress` 是契约的一部分（不是实现私有的扩展点）——
-    否则「按端口实现」的替身/第三方实现会悄悄缺少进度能力。
-    """
-
-    def fetch_manifest(self, url: str) -> ReleaseManifest: ...
-
-    def download_asset(
-        self,
-        asset: ReleaseAsset,
-        dest: Path,
-        *,
-        on_progress: ProgressCallback | None = None,
-    ) -> Path: ...
 
 
 @runtime_checkable
@@ -179,8 +151,6 @@ __all__ = [
     "Crawler",
     "JobRepository",
     "LLMProvider",
-    "ProgressCallback",
-    "ReleaseSource",
     "SettingsRepository",
     "TextFetcher",
 ]

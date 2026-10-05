@@ -13,7 +13,7 @@ import pytest
 from hunter1.application.score import score_job
 from hunter1.domain.matching import CandidateProfile, ScoreCard
 from hunter1.domain.models import Job
-from hunter1.infrastructure.llm import LLMResponse
+from hunter1.platform.llm import LLMResponse
 
 PROFILE = CandidateProfile(
     keywords=["AI产品经理", "大模型产品经理"],
@@ -136,7 +136,7 @@ class TestPartialPayloads:
 class TestLLMFailures:
     def test_llm_error_is_wrapped(self) -> None:
         from hunter1.domain.matching import ScoringError
-        from hunter1.infrastructure.llm import LLMError
+        from hunter1.platform.llm import LLMError
 
         with pytest.raises(ScoringError) as excinfo:
             score_job(job=_job(), profile=PROFILE, llm=FakeLLM(boom=LLMError("http_429")))

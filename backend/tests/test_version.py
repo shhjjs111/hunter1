@@ -15,7 +15,7 @@ import tomllib
 from pathlib import Path
 
 from hunter1 import __version__
-from hunter1.domain.update import parse_version
+from hunter1.platform.update import parse_version
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"

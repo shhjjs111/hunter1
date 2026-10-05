@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete, func, select
 
 from hunter1.domain.models import Application, ApplicationStage
-from hunter1.infrastructure.db.schema import ApplicationRow
+from hunter1.platform.db.schema import ApplicationRow
 
 if TYPE_CHECKING:
-    from hunter1.infrastructure.db.database import Database
+    from hunter1.platform.db.database import Database
 
 
 def _to_application(row: ApplicationRow) -> Application:

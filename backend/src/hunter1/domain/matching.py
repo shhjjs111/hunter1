@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from hunter1.domain.text import normalize_job_title
+from hunter1.platform.text import normalize_job_title
 
 
 class ScoringError(RuntimeError):

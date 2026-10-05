@@ -24,8 +24,8 @@ from pathlib import Path
 
 from hunter1 import __version__
 from hunter1.crawlers.registry import available_sites
-from hunter1.infrastructure.db.database import DatabaseLocationError
 from hunter1.paths import data_dir, default_db_path
+from hunter1.platform.db.database import DatabaseLocationError
 from hunter1.web.context import AppContext
 
 # 更新源没有内建默认值：这个项目还没有发布渠道，编一个假 URL 只会让
@@ -177,8 +177,12 @@ def _update(args: argparse.Namespace) -> int:
     绕开需要辅助进程那一套。这里做的是「下好并校验，你来覆盖」，与便携软件
     「解压即用」的更新动作一致。
     """
-    from hunter1.application.update import check_for_update, prepare_update
-    from hunter1.infrastructure.update import DownloadError, ReleaseClient
+    from hunter1.platform.update import (
+        DownloadError,
+        ReleaseClient,
+        check_for_update,
+        prepare_update,
+    )
 
     if not args.source:
         print(f"未配置更新源。用 --source 指定版本清单 URL，或设置环境变量 {UPDATE_SOURCE_ENV}。")

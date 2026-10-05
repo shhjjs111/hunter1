@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from hunter1.domain.assistant import Message, Role
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 class FakeClock:
@@ -33,7 +33,7 @@ def db(tmp_path: Path) -> Database:
 
 
 def _repo(db: Database, clock: FakeClock):
-    from hunter1.infrastructure.db import SqliteConversationRepository
+    from hunter1.platform.db import SqliteConversationRepository
 
     return SqliteConversationRepository(db, clock=clock)
 

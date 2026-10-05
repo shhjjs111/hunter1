@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hunter1.domain.text import normalize_job_title
+from hunter1.platform.text import normalize_job_title
 
 # 跟踪参数：只影响来源统计，不影响「是不是同一个岗位」
 _TRACKING_PARAMS = frozenset(

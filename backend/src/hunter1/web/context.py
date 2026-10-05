@@ -16,7 +16,7 @@ from pathlib import Path
 from hunter1.application.ports import Crawler, LLMProvider, TextFetcher
 from hunter1.crawlers.registry import build_all
 from hunter1.domain.settings import LLMSettings
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 def _now() -> datetime:
@@ -28,7 +28,7 @@ def _default_llm_factory(settings: LLMSettings) -> LLMProvider:
 
     延迟导入：不装 `web` 之外的依赖时，只要不碰这个函数就不必付出导入成本。
     """
-    from hunter1.infrastructure.llm import OpenAICompatibleClient
+    from hunter1.platform.llm import OpenAICompatibleClient
 
     return OpenAICompatibleClient(
         base_url=settings.base_url,
@@ -66,7 +66,7 @@ class AppContext:
         database = Database(db_path)
         database.initialize()
         if fetcher is None:
-            from hunter1.infrastructure.crawler.http import HttpFetcher
+            from hunter1.platform.fetch.http import HttpFetcher
 
             fetcher = HttpFetcher(timeout=20, retries=2)
         return cls(db=database, fetcher=fetcher, site_keys=site_keys)

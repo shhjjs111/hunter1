@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from hunter1.infrastructure.crawler.limits import (
+from hunter1.platform.fetch.limits import (
     HostLimiter,
     ResourceLimitTimeoutError,
 )

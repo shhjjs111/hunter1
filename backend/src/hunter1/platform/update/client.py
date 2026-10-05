@@ -20,8 +20,8 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
-from hunter1.application.ports import ProgressCallback
-from hunter1.domain.update import ReleaseAsset, ReleaseManifest
+from hunter1.platform.update.ports import ProgressCallback
+from hunter1.platform.update.rules import ReleaseAsset, ReleaseManifest
 
 _CHUNK = 1024 * 1024
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 from hunter1.web.app import create_app
 from hunter1.web.context import AppContext
 from tests.web.helpers import FIXTURES, NOW, FakeFetcher, FakeLLM, seed_jobs

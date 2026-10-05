@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from hunter1.domain.update import (
+from hunter1.platform.update import (
     ReleaseAsset,
     ReleaseManifest,
     is_newer,

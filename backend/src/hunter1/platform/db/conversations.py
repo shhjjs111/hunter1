@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import delete, func, select
 
 from hunter1.domain.assistant import Message, Role, ToolCall
-from hunter1.infrastructure.db.schema import ConversationMessageRow, ConversationRow
+from hunter1.platform.db.schema import ConversationMessageRow, ConversationRow
 
 if TYPE_CHECKING:
-    from hunter1.infrastructure.db.database import Database
+    from hunter1.platform.db.database import Database
 
 
 @dataclass

@@ -15,7 +15,7 @@ from typing import ClassVar
 import httpx
 import pytest
 
-from hunter1.infrastructure.llm import (
+from hunter1.platform.llm import (
     PROVIDER_PRESETS,
     LLMError,
     OpenAICompatibleClient,

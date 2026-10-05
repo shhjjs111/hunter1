@@ -13,7 +13,7 @@ import pytest
 from hunter1.application.applications import change_stage, new_application
 from hunter1.application.job_tools import build_tools
 from hunter1.domain.models import ApplicationStage, CaptureStatus, Job
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 @pytest.fixture()

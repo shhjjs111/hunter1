@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from hunter1.infrastructure.db.applications import SqliteApplicationRepository
-from hunter1.infrastructure.db.conversations import (
+from hunter1.platform.db.applications import SqliteApplicationRepository
+from hunter1.platform.db.conversations import (
     Conversation,
     SqliteConversationRepository,
 )
-from hunter1.infrastructure.db.database import Database, DatabaseLocationError
-from hunter1.infrastructure.db.repository import (
+from hunter1.platform.db.database import Database, DatabaseLocationError
+from hunter1.platform.db.repository import (
     SqliteCompanyRepository,
     SqliteJobRepository,
 )
-from hunter1.infrastructure.db.schema import (
+from hunter1.platform.db.schema import (
     ApplicationRow,
     Base,
     CompanyRow,
@@ -21,7 +21,7 @@ from hunter1.infrastructure.db.schema import (
     JobRow,
     SettingRow,
 )
-from hunter1.infrastructure.db.settings import SqliteSettingsRepository
+from hunter1.platform.db.settings import SqliteSettingsRepository
 
 __all__ = [
     "ApplicationRow",

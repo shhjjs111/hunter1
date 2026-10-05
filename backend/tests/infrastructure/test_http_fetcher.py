@@ -8,8 +8,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from hunter1.infrastructure.crawler.http import FetchError, HttpFetcher
-from hunter1.infrastructure.crawler.limits import HostLimiter
+from hunter1.platform.fetch.http import FetchError, HttpFetcher
+from hunter1.platform.fetch.limits import HostLimiter
 from tests.conftest import FakeClock
 
 

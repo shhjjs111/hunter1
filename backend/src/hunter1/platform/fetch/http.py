@@ -11,7 +11,7 @@ from collections.abc import Iterable
 
 import httpx
 
-from hunter1.infrastructure.crawler.limits import (
+from hunter1.platform.fetch.limits import (
     TRANSIENT_STATUS,
     HostLimiter,
     ResourceLimitTimeoutError,

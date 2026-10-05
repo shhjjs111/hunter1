@@ -13,7 +13,7 @@ import pytest
 
 from hunter1.domain.crawl import RawJob
 from hunter1.domain.models import CaptureStatus
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 from hunter1.web.crawl_runner import CrawlRunner
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)

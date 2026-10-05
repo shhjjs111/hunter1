@@ -14,7 +14,7 @@ from hunter1.application.crawl import BatchCrawlResult, CrawlResult, crawl_all, 
 from hunter1.crawlers.static_html import ListPageSpec, StaticHtmlCrawler
 from hunter1.domain.crawl import RawJob, job_identity
 from hunter1.domain.models import Job
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 @pytest.fixture()

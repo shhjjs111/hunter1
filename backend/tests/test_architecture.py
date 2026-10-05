@@ -2,9 +2,15 @@
 
 把「分层」从口头约定变成**可执行断言** —— 否则它会在某次赶工里悄悄破掉。
 
-规则（见 docs/DEVELOPMENT.md）：
-- `domain` 不得 import `hunter1.infrastructure`（领域层不认识外部世界）
-- `application` 不得 import `hunter1.infrastructure`（用例只依赖端口）
+规则（迁移期版本；终态随各波次收紧，见 AGENTS.md）：
+
+- `platform`（机制内核）不得 import `hunter1.{slices, application, web, crawlers}`。
+  过渡期豁免：允许依赖 `hunter1.domain.*`（共享模型 —— Wave 4 后随各切片归位，
+  届时本豁免删除）。
+- `domain`（纯模型与规则）不得 import `hunter1.{application, web, crawlers, slices}`；
+  对 platform 只允许 `platform.text`（纯函数）。
+- `application`（用例）不得 import `hunter1.{platform, web, crawlers, slices}` ——
+  只依赖 domain 与端口（Protocol）。
 """
 
 from __future__ import annotations
@@ -15,6 +21,13 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "hunter1"
+
+# 每层禁止的顶层包前缀（迁移期规则；见模块 docstring）
+FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
+    "platform": ("hunter1.slices", "hunter1.application", "hunter1.web", "hunter1.crawlers"),
+    "domain": ("hunter1.application", "hunter1.web", "hunter1.crawlers", "hunter1.slices"),
+    "application": ("hunter1.platform", "hunter1.web", "hunter1.crawlers", "hunter1.slices"),
+}
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -36,23 +49,25 @@ def _rel(path: Path) -> str:
     return path.relative_to(SRC.parent.parent).as_posix()
 
 
-@pytest.mark.parametrize("layer", ["domain", "application"])
-def test_layer_does_not_import_infrastructure(layer: str) -> None:
+@pytest.mark.parametrize("layer", sorted(FORBIDDEN_IMPORTS))
+def test_layer_respects_import_boundaries(layer: str) -> None:
     offenders: list[str] = []
     for path in _py_files(layer):
         for module in _imported_modules(path):
-            if module == "hunter1.infrastructure" or module.startswith("hunter1.infrastructure."):
-                offenders.append(f"{_rel(path)} imports {module}")
-    assert not offenders, "分层违规：\n" + "\n".join(offenders)
+            for banned in FORBIDDEN_IMPORTS[layer]:
+                if module == banned or module.startswith(f"{banned}."):
+                    offenders.append(f"{_rel(path)} imports {module}")
+    assert not offenders, f"{layer} 分层违规：\n" + "\n".join(offenders)
 
 
-def test_domain_does_not_import_application() -> None:
+def test_domain_uses_only_platform_text() -> None:
+    """domain 对 platform 的依赖仅限 text（纯函数）—— 其余一律禁止。"""
     offenders: list[str] = []
     for path in _py_files("domain"):
         for module in _imported_modules(path):
-            if module == "hunter1.application" or module.startswith("hunter1.application."):
+            if module.startswith("hunter1.platform") and module != "hunter1.platform.text":
                 offenders.append(f"{_rel(path)} imports {module}")
-    assert not offenders, "分层违规：\n" + "\n".join(offenders)
+    assert not offenders, "domain 越权依赖 platform：\n" + "\n".join(offenders)
 
 
 def test_domain_layer_has_no_third_party_io_libraries() -> None:
@@ -68,7 +83,7 @@ def test_domain_layer_has_no_third_party_io_libraries() -> None:
 
 
 def test_layers_exist() -> None:
-    for layer in ["domain", "application", "infrastructure", "web", "crawlers"]:
+    for layer in ["platform", "domain", "application", "web", "crawlers"]:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
 
 
@@ -81,8 +96,8 @@ def test_release_source_port_matches_client_signature() -> None:
     """
     import inspect
 
-    from hunter1.application.ports import ReleaseSource
-    from hunter1.infrastructure.update import ReleaseClient
+    from hunter1.platform.update.client import ReleaseClient
+    from hunter1.platform.update.ports import ReleaseSource
 
     for method in ("fetch_manifest", "download_asset"):
         port_signature = inspect.signature(getattr(ReleaseSource, method))

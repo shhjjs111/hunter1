@@ -15,8 +15,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from hunter1.application.ports import ReleaseSource
-from hunter1.domain.update import ReleaseAsset, is_newer
+from hunter1.platform.update.ports import ReleaseSource
+from hunter1.platform.update.rules import ReleaseAsset, is_newer
 
 
 @dataclass

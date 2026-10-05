@@ -1,8 +1,8 @@
 """大模型交互的领域契约 —— 纯数据与错误词汇，无 IO 依赖。
 
 放在 domain 层的原因：应用层需要「模型返回什么形状」「失败怎么表达」这两件事，
-但**不该**因此依赖任何具体厂商实现。基础设施层实现这些契约（见
-`hunter1.infrastructure.llm`），并在失败时抛出这里定义的 `LLMError`。
+但**不该**因此依赖任何具体厂商实现。基础设施实现这些契约
+（见 `hunter1.platform.llm`），并在失败时抛出这里定义的 `LLMError`。
 """
 
 from __future__ import annotations

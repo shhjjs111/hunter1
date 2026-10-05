@@ -23,8 +23,8 @@ from pathlib import Path
 import pytest
 
 from hunter1.domain.models import Job
-from hunter1.infrastructure.db import Database
-from hunter1.infrastructure.db.database import DatabaseLocationError
+from hunter1.platform.db import Database
+from hunter1.platform.db.database import DatabaseLocationError
 
 
 def _job(index: int) -> Job:
@@ -146,7 +146,7 @@ class TestSchemaExports:
             Path(__file__).resolve().parents[2]
             / "src"
             / "hunter1"
-            / "infrastructure"
+            / "platform"
             / "db"
             / "schema.py"
         )
@@ -162,7 +162,7 @@ class TestSchemaExports:
         assert len(assignments) == 1, f"schema.py 有 {len(assignments)} 处顶层 __all__ 赋值"
 
     def test_exported_names_exist(self) -> None:
-        from hunter1.infrastructure.db import schema
+        from hunter1.platform.db import schema
 
         for name in schema.__all__:
             assert hasattr(schema, name), f"__all__ 里的 {name} 在模块中不存在"

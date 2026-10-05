@@ -18,8 +18,8 @@ import httpx
 import pytest
 
 from hunter1.domain.llm import LLMError, StreamComplete, TextDelta
-from hunter1.infrastructure.llm import OpenAICompatibleClient
-from hunter1.infrastructure.llm.streaming import parse_sse_lines
+from hunter1.platform.llm import OpenAICompatibleClient
+from hunter1.platform.llm.streaming import parse_sse_lines
 
 
 def _client(handler: Any, **kwargs: Any) -> OpenAICompatibleClient:

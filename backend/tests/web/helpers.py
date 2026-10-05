@@ -14,7 +14,7 @@ from typing import Any
 from hunter1.domain.llm import LLMResponse, StreamComplete, TextDelta
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.domain.settings import LLMSettings
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 FIXTURES = Path(__file__).resolve().parent.parent / "crawlers" / "fixtures"

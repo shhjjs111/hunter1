@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func, select
 
 from hunter1.domain.models import CaptureStatus, Company, Job
-from hunter1.domain.text import normalize_job_title
-from hunter1.infrastructure.db.schema import CompanyRow, JobRow
+from hunter1.platform.db.schema import CompanyRow, JobRow
+from hunter1.platform.text import normalize_job_title
 
 if TYPE_CHECKING:
-    from hunter1.infrastructure.db.database import Database
+    from hunter1.platform.db.database import Database
 
 
 def _to_company(row: CompanyRow) -> Company:
