@@ -7,9 +7,10 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from hunter1.domain.crawl import RawJob
+from hunter1.domain.llm import LLMResponse
 from hunter1.domain.models import Company, Job
 
 
@@ -62,4 +63,36 @@ class Crawler(Protocol):
     def fetch(self) -> list[RawJob]: ...
 
 
-__all__ = ["CompanyRepository", "Crawler", "JobRepository", "TextFetcher"]
+@runtime_checkable
+class LLMProvider(Protocol):
+    """大模型能力的最小契约。
+
+    应用层只依赖这两个方法，因此换厂商（OpenAI / DeepSeek / 通义 / 智谱 / 自建网关…）
+    不需要改任何用例代码；测试可注入假实现，完全离线。
+    """
+
+    def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int | None = None,
+    ) -> LLMResponse: ...
+
+    def complete_structured(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        schema: dict[str, Any],
+        max_tokens: int | None = None,
+    ) -> LLMResponse: ...
+
+
+__all__ = [
+    "CompanyRepository",
+    "Crawler",
+    "JobRepository",
+    "LLMProvider",
+    "TextFetcher",
+]

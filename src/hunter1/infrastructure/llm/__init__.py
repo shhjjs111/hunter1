@@ -1,0 +1,329 @@
+"""统一 LLM provider 层 —— 任意 OpenAI 兼容端点，**不硬绑任何厂商**。
+
+与旧系统的关键差异：旧系统 `packages/model_policy.py` 的 `official_base()` 只允许
+`api.deepseek.com`，`official_model()` 只允许两个模型；非官方端点直接抛
+`ValueError("Only the official DeepSeek API is supported")`。结果是评分链与求职助手
+全被锁死在一家。hunter1 反过来：**默认走 OpenAI 兼容协议，端点由用户填**。
+
+不假设厂商都支持高级特性 —— `complete_structured` 带**分级降级链**：
+    json_schema → json_object → 纯提示词（并从 markdown 围栏里抠 JSON）
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+
+from hunter1.domain.llm import LLMError, LLMResponse
+
+TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+STRUCTURED_MODES = ("json_schema", "json_object", "none")
+
+_JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class ProviderPreset:
+    """常见厂商预设。用户也可完全手填 base_url，预设只是省事。"""
+
+    name: str
+    base_url: str
+    default_model: str
+
+
+PROVIDER_PRESETS: dict[str, ProviderPreset] = {
+    "deepseek": ProviderPreset("deepseek", "https://api.deepseek.com/v1", "deepseek-chat"),
+    "qwen": ProviderPreset(
+        "qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"
+    ),
+    "zhipu": ProviderPreset("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
+    "kimi": ProviderPreset("kimi", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+    "siliconflow": ProviderPreset(
+        "siliconflow", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"
+    ),
+    "openai": ProviderPreset("openai", "https://api.openai.com/v1", "gpt-4o-mini"),
+}
+
+
+class OpenAICompatibleClient:
+    """OpenAI 兼容 `/chat/completions` 客户端。"""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float = 45.0,
+        max_retries: int = 2,
+        transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        cleaned_url = (base_url or "").strip().rstrip("/")
+        if not cleaned_url:
+            raise ValueError("base_url is required")
+        parsed = urlsplit(cleaned_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"invalid base_url: {base_url!r}")
+        if not (api_key or "").strip():
+            raise ValueError("api_key is required")
+        if not (model or "").strip():
+            raise ValueError("model is required")
+
+        self.base_url = cleaned_url
+        self.api_key = api_key.strip()
+        self.model = model.strip()
+        self.timeout = max(1.0, float(timeout))
+        self.max_retries = max(1, int(max_retries))
+        self._sleep = sleep
+        self._client = httpx.Client(timeout=self.timeout, transport=transport)
+        # 记住哪些模式被厂商拒绝过，避免每次都重试一遍
+        self._rejected_modes: set[str] = set()
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> OpenAICompatibleClient:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    # ---- 纯文本 ----
+
+    def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        data = self._post(payload)
+        return LLMResponse(
+            content=_extract_content(data),
+            model=str(data.get("model") or self.model),
+            input_tokens=_usage(data, "prompt_tokens"),
+            output_tokens=_usage(data, "completion_tokens"),
+        )
+
+    # ---- 结构化输出（带降级链）----
+
+    def complete_structured(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        schema: dict[str, Any],
+        max_tokens: int | None = None,
+        name: str = "hunter1_result",
+    ) -> LLMResponse:
+        last_error: LLMError | None = None
+
+        for mode in STRUCTURED_MODES:
+            if mode in self._rejected_modes:
+                continue
+            instruction = (
+                user_prompt if mode != "none" else _prompt_only_instruction(user_prompt, schema)
+            )
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": instruction},
+                ],
+                "stream": False,
+            }
+            if max_tokens is not None:
+                payload["max_tokens"] = max_tokens
+            if mode != "none":
+                payload["response_format"] = _response_format(mode, schema, name)
+
+            try:
+                data = self._post(payload, reject_mode=mode)
+            except LLMError as exc:
+                # 厂商拒绝这种 response_format → 记住并降级
+                if exc.code == "format_unsupported":
+                    continue
+                last_error = exc
+                raise
+
+            content = _extract_content(data)
+            try:
+                parsed = _parse_json_payload(content)
+            except ValueError as exc:
+                last_error = LLMError("structured_response_invalid", str(exc))
+                continue
+
+            return LLMResponse(
+                content=json.dumps(parsed, ensure_ascii=False),
+                model=str(data.get("model") or self.model),
+                input_tokens=_usage(data, "prompt_tokens"),
+                output_tokens=_usage(data, "completion_tokens"),
+                structured_mode=mode,
+            )
+
+        if last_error is not None:
+            raise last_error
+        raise LLMError("structured_response_invalid")
+
+    # ---- 传输 ----
+
+    def _post(self, payload: dict[str, Any], *, reject_mode: str | None = None) -> dict[str, Any]:
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        code = "transport_failed"
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = self._client.post(url, headers=headers, json=payload)
+            except httpx.HTTPError:
+                code = "transport_failed"
+                if attempt >= self.max_retries:
+                    raise LLMError(code) from None
+                self._sleep(0.5 * attempt)
+                continue
+
+            if response.status_code in TRANSIENT_STATUS:
+                code = f"http_{response.status_code}"
+                if attempt >= self.max_retries:
+                    raise LLMError(code)
+                self._sleep(0.5 * attempt)
+                continue
+
+            if response.status_code >= 400:
+                # 400 且带了 response_format 时，很可能是厂商不支持该格式 → 触发降级
+                if (
+                    response.status_code == 400
+                    and reject_mode is not None
+                    and reject_mode != "none"
+                ):
+                    self._rejected_modes.add(reject_mode)
+                    raise LLMError("format_unsupported", _short(response.text))
+                raise LLMError(f"http_{response.status_code}", _short(response.text))
+
+            try:
+                data = response.json()
+            except ValueError:
+                raise LLMError("response_invalid") from None
+            if not isinstance(data, dict):
+                raise LLMError("response_invalid")
+            return data
+
+        raise LLMError(code)
+
+
+def resolve_preset(
+    name: str,
+    *,
+    api_key: str,
+    model: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+    timeout: float = 45.0,
+    max_retries: int = 2,
+) -> OpenAICompatibleClient:
+    """用内置预设构造客户端。`name` 不存在则 KeyError。"""
+    preset = PROVIDER_PRESETS[name]
+    return OpenAICompatibleClient(
+        base_url=preset.base_url,
+        api_key=api_key,
+        model=model or preset.default_model,
+        transport=transport,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+
+
+# ---- 内部工具 ----
+
+
+def _response_format(mode: str, schema: dict[str, Any], name: str) -> dict[str, Any]:
+    if mode == "json_schema":
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": name, "schema": schema, "strict": False},
+        }
+    return {"type": "json_object"}
+
+
+def _prompt_only_instruction(user_prompt: str, schema: dict[str, Any]) -> str:
+    return (
+        f"{user_prompt}\n\n"
+        "只输出一个 JSON 对象，不要任何解释或 markdown 围栏。"
+        f"它必须符合此 JSON Schema：\n{json.dumps(schema, ensure_ascii=False)}"
+    )
+
+
+def _extract_content(data: dict[str, Any]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise LLMError("response_invalid")
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise LLMError("response_invalid")
+    message = first.get("message")
+    if not isinstance(message, dict):
+        raise LLMError("response_invalid")
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise LLMError("response_empty")
+    return content
+
+
+def _parse_json_payload(content: str) -> Any:
+    """从模型输出里抠出 JSON —— 容忍 markdown 围栏与前后废话。"""
+    text = content.strip()
+    fence = _JSON_FENCE.search(text)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    # 退一步：抓第一个 { 到最后一个 }
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        try:
+            return json.loads(text[start : end + 1])
+        except ValueError:
+            pass
+    raise ValueError("no parseable JSON in model output")
+
+
+def _usage(data: dict[str, Any], key: str) -> int | None:
+    usage = data.get("usage")
+    value = usage.get(key) if isinstance(usage, dict) else None
+    return value if isinstance(value, int) and value >= 0 else None
+
+
+def _short(text: str, limit: int = 200) -> str:
+    return (text or "").strip()[:limit]
+
+
+__all__ = [
+    "PROVIDER_PRESETS",
+    "LLMError",
+    "LLMResponse",
+    "OpenAICompatibleClient",
+    "ProviderPreset",
+    "resolve_preset",
+]
