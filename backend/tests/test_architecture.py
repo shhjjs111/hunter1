@@ -38,6 +38,15 @@ SLICE_LEGACY_ALLOW: dict[str, tuple[str, ...]] = {
     "jobs": ("hunter1.application.applications",),
 }
 
+# 协议层的共享豁免：`application/ports.py` 里是**进程边界**的抽象
+# （Crawler / JobRepository / TextFetcher / LLMProvider），它们不是「某个切片的实现」，
+# 而是切片与外部世界之间的契约 —— 所有切片依赖它是设计意图，不是越权。
+#
+# 技术债（记在案）：这些协议与 `hunter1/platform/*` 的实现同处一个包，
+# 终态应把它们归位到各自的边界模块（如 Crawler 协议随抓取能力走），
+# 届时本豁免一并删除。
+SHARED_PORT_MODULE = "hunter1.application.ports"
+
 
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -114,6 +123,8 @@ def test_slices_respect_boundaries() -> None:
             for module in _imported_modules(path):
                 if module.startswith(("hunter1.web", "hunter1.crawlers")):
                     offenders.append(f"{_rel(path)} imports {module}")
+                elif module == SHARED_PORT_MODULE:
+                    continue  # 进程边界协议：见 SHARED_PORT_MODULE 的说明
                 elif module.startswith("hunter1.application") and not any(
                     module == entry or module.startswith(f"{entry}.") for entry in allowed
                 ):
