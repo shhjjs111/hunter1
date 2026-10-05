@@ -13,18 +13,33 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from hunter1.application.applications import change_stage, new_application
-from hunter1.application.assistant import run_turn
+from hunter1.application.assistant import (
+    ToolFinished,
+    ToolStarted,
+    TurnDone,
+    run_turn,
+    run_turn_stream,
+)
 from hunter1.application.job_tools import build_tools
 from hunter1.domain.assistant import Message, Role
+from hunter1.domain.llm import TextDelta
 from hunter1.domain.models import ApplicationStage, Job
 from hunter1.domain.settings import LLMSettings
 from hunter1.web.context import AppContext
@@ -291,6 +306,30 @@ def create_app(context: AppContext) -> FastAPI:
         )
         return RedirectResponse(f"/assistant?cid={conversation.id}", status_code=303)
 
+    @app.post("/assistant/stream")
+    def assistant_stream(
+        message: str = Form(...), conversation_id: str = Form("")
+    ) -> StreamingResponse:
+        """流式回合：以 `text/event-stream` 边生成边推。
+
+        与 `/assistant` 的差别只在交付方式 —— 内容逐段到达，工具执行前后各有
+        一个事件。**失败也走事件流**（一条 `error` 事件）：响应一旦开始就没法
+        再重定向，这是流式端点最容易漏掉的一条。
+        """
+        text = message.strip()
+        settings = context.db.settings().get_llm()
+
+        if not text:
+            return _event_stream([_error_event("请输入内容后再发送。")])
+        if settings is None or not settings.is_configured:
+            return _event_stream([_error_event("请先在「配置」页填好 API Key 与模型。")])
+
+        return StreamingResponse(
+            _stream_turn(context, text=text, conversation_id=conversation_id, settings=settings),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
     # ---- 抓取 ----
 
     @app.get("/crawl", response_class=HTMLResponse)
@@ -351,6 +390,102 @@ def _brief(message: str, limit: int = 300) -> str:
     """把错误消息压短：它要进查询串，原样塞进去会撑出一条超长 URL。"""
     text = " ".join((message or "").split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+# ---- SSE（助手流式）----
+
+# `X-Accel-Buffering: no` 是给反向代理看的：否则 nginx 一类会把分片攒起来
+# 一次性下发，「逐字输出」就名存实亡。
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+# 工具结果可能很长（搜出几十条岗位），但前端只需要一个摘要。
+_TOOL_PREVIEW_LIMIT = 1000
+
+
+def _sse(event: dict[str, object]) -> str:
+    """一条 SSE 事件。用 `\\n\\n` 收尾是协议要求的分隔。"""
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _error_event(message: str) -> dict[str, object]:
+    return {"type": "error", "message": message}
+
+
+def _event_stream(events: list[dict[str, object]]) -> StreamingResponse:
+    """把「已经知道结果」的事件列表包成流（用于开流前的校验失败）。"""
+
+    def generate() -> Iterator[str]:
+        for event in events:
+            yield _sse(event)
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+def _stream_turn(
+    context: AppContext, *, text: str, conversation_id: str, settings: LLMSettings
+) -> Iterator[str]:
+    """跑一轮流式对话并把每个事件翻成 SSE。
+
+    落库时机与 `/assistant` 保持一致：**整轮跑完才写**。失败（模型报错、
+    中止）不留空会话，也不留半截对话 —— 否则下次会把失败的那句话当成上下文
+    再问一遍。
+    """
+    repo = context.db.conversations()
+
+    try:
+        conversation = repo.get(conversation_id) if conversation_id else None
+        history = (
+            repo.messages(conversation.id, limit=context.assistant_history_limit)
+            if conversation is not None
+            else []
+        )
+        user_message = Message(role=Role.USER, content=text)
+        registry = build_tools(jobs=context.db.jobs(), applications=context.db.applications())
+
+        final: TurnDone | None = None
+        for event in run_turn_stream(
+            llm=context.llm_factory(settings),
+            registry=registry,
+            messages=[*history, user_message],
+        ):
+            if isinstance(event, TextDelta):
+                yield _sse({"type": "text", "text": event.text})
+            elif isinstance(event, ToolStarted):
+                yield _sse({"type": "tool_start", "name": event.name, "arguments": event.arguments})
+            elif isinstance(event, ToolFinished):
+                yield _sse(
+                    {
+                        "type": "tool_end",
+                        "name": event.name,
+                        "ok": event.ok,
+                        "content": event.content[:_TOOL_PREVIEW_LIMIT],
+                        "error": event.error,
+                    }
+                )
+            else:
+                final = event
+
+        if conversation is None:
+            conversation = repo.create(title=text[:40])
+        repo.append(conversation.id, user_message)
+        repo.append(
+            conversation.id,
+            Message(role=Role.ASSISTANT, content=final.reply.strip() or _FALLBACK_REPLY)
+            if final is not None and final.reply.strip()
+            else Message(role=Role.ASSISTANT, content=_FALLBACK_REPLY),
+        )
+
+        yield _sse(
+            {
+                "type": "done",
+                "conversation_id": conversation.id,
+                "reply": final.reply if final is not None else "",
+                "truncated": bool(final and final.truncated),
+                "degraded": bool(final and final.degraded),
+            }
+        )
+    except Exception as exc:
+        yield _sse(_error_event(_brief(f"{type(exc).__name__}: {exc}")))
 
 
 def _readable(exc: ValidationError) -> str:

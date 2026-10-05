@@ -98,6 +98,10 @@ hunter1 crawl --db .data/hunter1.db               # 命令行跑一轮抓取
 5. **不静默失败**：拿不到数据与「没有数据」必须能分辨 ——
    被风控拦截抛 `CrawlBlockedError`、配置损坏抛错而不是返回 `None`、
    模型报错要原样显示给用户。
+   **流式端点尤其要注意**：响应一旦开始就没法再重定向，所以失败必须作为
+   事件流里的一条 `error` 事件交出去（见 `web/app.py` 的 `_stream_turn`）；
+   而 `TextDelta`/`StreamComplete` 这套事件契约，让「真流式」与「降级后的
+   一次性返回」在调用方看来是同一个接口（`degraded` 标记是哪一种）。
 
 ## 运维脚本
 

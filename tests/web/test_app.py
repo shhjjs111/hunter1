@@ -9,123 +9,19 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
-from hunter1.domain.llm import LLMResponse
-from hunter1.domain.models import ApplicationStage, CaptureStatus, Job
-from hunter1.domain.settings import LLMSettings
+from hunter1.domain.models import ApplicationStage
 from hunter1.infrastructure.db import Database
 from hunter1.web.app import create_app
 from hunter1.web.context import AppContext
+from tests.web.helpers import NOW, FakeFetcher, FakeLLM, configure_llm
 
-NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
-FIXTURES = Path(__file__).resolve().parent.parent / "crawlers" / "fixtures"
-
-
-class FakeFetcher:
-    """任何 URL 都返回同一个页面快照 —— 让抓取链路可以离线跑通。"""
-
-    def __init__(self, html: str) -> None:
-        self.html = html
-        self.requested: list[str] = []
-
-    def get_text(self, url: str, **_kwargs: object) -> str:
-        self.requested.append(url)
-        return self.html
-
-
-class FakeLLM:
-    """按脚本作答的假模型。`reply` 为 None 时抛错，用于验证失败路径。"""
-
-    def __init__(self, reply: str | None = "好的，共 2 条岗位。") -> None:
-        self.reply = reply
-        self.seen_messages: list[object] = []
-
-    def complete(
-        self, *, system_prompt: str, user_prompt: str, max_tokens: int | None = None
-    ) -> LLMResponse:
-        if self.reply is None:
-            raise RuntimeError("模型不可用")
-        return LLMResponse(content=self.reply, model="fake-model")
-
-    def complete_structured(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        schema: dict[str, object],
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        return self.complete(system_prompt=system_prompt, user_prompt=user_prompt)
-
-    def complete_with_tools(
-        self,
-        *,
-        messages: list[object],
-        tools: list[dict[str, object]],
-        max_tokens: int | None = None,
-    ) -> LLMResponse:
-        self.seen_messages = list(messages)
-        if self.reply is None:
-            raise RuntimeError("模型不可用")
-        return LLMResponse(content=self.reply, model="fake-model")
-
-
-def _seed_jobs(db: Database) -> None:
-    repo = db.jobs()
-    repo.upsert(
-        Job(
-            id="j1" + "0" * 30,
-            company_id="c1",
-            title="AI产品经理",
-            detail_url="https://a.com/1",
-            source="实习僧",
-            company_name="字节跳动",
-            city="北京",
-            match_score=88,
-            capture_status=CaptureStatus.COMPLETE,
-            last_seen_at=NOW,
-        )
-    )
-    repo.upsert(
-        Job(
-            id="j2" + "0" * 30,
-            company_id="c2",
-            title="行政专员",
-            detail_url="https://a.com/2",
-            source="实习僧",
-            company_name="某国企",
-            last_seen_at=NOW,
-        )
-    )
-
-
-@pytest.fixture()
-def app_env(tmp_path: Path):  # type: ignore[no-untyped-def]
-    db = Database(tmp_path / "web.db")
-    db.initialize()
-    _seed_jobs(db)
-    llm = FakeLLM()
-    context = AppContext(
-        db=db,
-        fetcher=FakeFetcher((FIXTURES / "gaoxiaojob.html").read_text(encoding="utf-8")),
-        llm_factory=lambda settings: llm,
-        clock=lambda: NOW,
-        site_keys=["gaoxiaojob"],
-    )
-    app = create_app(context)
-    with TestClient(app) as client:
-        yield client, db, llm
-
-
-def _configure(db: Database) -> None:
-    db.settings().save_llm(
-        LLMSettings(base_url="https://api.example.com/v1", model="m", api_key="sk-test")
-    )
+# 模型替身与 app_env fixture 已移到 tests/web/helpers.py 与 conftest.py ——
+# 流式与非流式两条路径必须共用同一个 FakeLLM，两份定义迟早会漂移。
+_configure = configure_llm
 
 
 class TestJobsPage:
