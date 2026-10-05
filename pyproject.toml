@@ -44,8 +44,8 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-# 允许不安装即可从 src 导入（配合 `pip install -e .` 双保险）
-pythonpath = ["src"]
+# 允许不安装即可从 src 导入（配合 `pip install -e .` 双保险）；"." 让 tests 包可导入
+pythonpath = ["src", "."]
 
 [tool.coverage.run]
 source = ["src/hunter1"]

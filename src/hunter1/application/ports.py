@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from hunter1.domain.crawl import RawJob
 from hunter1.domain.models import Company, Job
 
 
@@ -36,4 +37,29 @@ class JobRepository(Protocol):
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Job]: ...
 
 
-__all__ = ["CompanyRepository", "JobRepository"]
+@runtime_checkable
+class TextFetcher(Protocol):
+    """能按 URL 取回文本的最小契约。
+
+    适配器只依赖这个窄接口，因此测试可注入假实现（返回内联 HTML），
+    无需真实网络；也不必依赖 httpx 的具体类型。
+    """
+
+    def get_text(self, url: str, *, headers: dict[str, str] | None = None) -> str: ...
+
+
+@runtime_checkable
+class Crawler(Protocol):
+    """一个招聘站点的适配器。
+
+    实现者只需把「某个公司的招聘页」翻成一批 `RawJob`；并发控制、重试、
+    限流由注入的抓取基础设施负责，适配器不重复实现这些。
+    """
+
+    company: str
+    careers_url: str
+
+    def fetch(self) -> list[RawJob]: ...
+
+
+__all__ = ["CompanyRepository", "Crawler", "JobRepository", "TextFetcher"]
