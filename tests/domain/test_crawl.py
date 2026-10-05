@@ -51,6 +51,24 @@ class TestNormalizeDetailUrl:
         assert normalize_detail_url("") == ""
         assert normalize_detail_url("   ") == ""
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "javascript:void(0)",
+            "javascript:openDetail('123')",
+            "#",
+            "mailto:hr@example.com",
+            "tel:+861000000000",
+        ],
+    )
+    def test_non_http_schemes_are_rejected(self, raw: str) -> None:
+        """非 http(s) 的「链接」不是岗位详情页 —— 必须判空，不能当 URL 用。
+
+        真实站点常见：列表项挂着 `javascript:void(0)`，真链接由 JS 绑定。
+        若不拦，会产出 `https://site.com/javascript:void(0)` 这种垃圾 URL。
+        """
+        assert normalize_detail_url(raw) == ""
+
 
 class TestJobIdentity:
     def test_same_url_yields_same_identity(self) -> None:

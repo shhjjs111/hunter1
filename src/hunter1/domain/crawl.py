@@ -57,10 +57,12 @@ def normalize_detail_url(url: str) -> str:
 
     规则：
     1. 已知跳转中间页（51job 的 apply.aspx）还原为真正的详情页
-    2. scheme / host 小写，path 大小写保留（有些站点 path 大小写敏感）
-    3. 去掉 fragment
-    4. 去掉跟踪类查询参数，保留其余（岗位 id 常在 query 里，不能一刀切删）
-    5. 去掉末尾斜杠
+    2. 非 http(s) 的「链接」判空 —— 真实站点里列表项常挂 `javascript:void(0)`，
+       真链接由 JS 绑定；这类不是可用的详情页地址
+    3. scheme / host 小写，path 大小写保留（有些站点 path 大小写敏感）
+    4. 去掉 fragment
+    5. 去掉跟踪类查询参数，保留其余（岗位 id 常在 query 里，不能一刀切删）
+    6. 去掉末尾斜杠
     """
     raw = (url or "").strip()
     if not raw:
@@ -68,6 +70,9 @@ def normalize_detail_url(url: str) -> str:
 
     rewritten = _rewrite_intermediary(raw)
     parts = urlsplit(rewritten)
+
+    if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+        return ""
 
     query_pairs = [
         (key, value)
