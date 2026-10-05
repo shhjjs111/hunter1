@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from hunter1 import paths
 
 
@@ -59,3 +61,96 @@ class TestDefaultDbPath:
 
     def test_is_a_path_object(self) -> None:
         assert isinstance(paths.default_db_path(), Path)
+
+
+class TestInstalledLayout:
+    """`pip install .`（非 editable，src 布局被展平到 site-packages）这一态。
+
+    这一格原先漏了，后果不轻：`__file__` 变成
+    `.../site-packages/hunter1/paths.py`，上溯两级是 `site-packages` 的父目录
+    （即 `Lib/`）—— 数据库会往 `Lib/.data/` 写，那里通常要管理员权限，
+    要么直接崩、要么污染安装目录。而 README 把 pip install 写成正式安装路径。
+    """
+
+    def _installed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """模拟安装态：没有仓库根可上溯。"""
+        monkeypatch.setattr(paths, "_repo_root", lambda: None)
+
+    def test_repo_root_is_detected_in_development(self) -> None:
+        # 开发态的对照：确实能找到仓库根
+        assert paths._repo_root() is not None
+
+    def test_data_dir_falls_back_to_user_directory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._installed(monkeypatch)
+        assert paths.data_dir() == paths.user_data_dir()
+
+    def test_data_dir_is_not_inside_the_install_tree(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """核心断言：不得落在包所在目录（以及它的父目录）里。"""
+        self._installed(monkeypatch)
+        package_dir = Path(paths.__file__).resolve().parent
+        chosen = paths.data_dir()
+        assert not chosen.is_relative_to(package_dir)
+        assert not chosen.is_relative_to(package_dir.parent)
+
+    def test_installed_default_db_path_is_under_user_directory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._installed(monkeypatch)
+        assert paths.default_db_path() == paths.user_data_dir() / "hunter1.db"
+
+
+class TestUserDataDir:
+    def _force(self, monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+        # 改 `_platform_key` 而不是 `os.name`：后者会被 pathlib 在调用时读到，
+        # 导致 `Path(...)` 变成当前系统无法实例化的类。
+        monkeypatch.setattr(paths, "_platform_key", lambda: key)
+
+    def test_windows_uses_local_appdata(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._force(monkeypatch, "windows")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        assert paths.user_data_dir() == tmp_path / "Local" / "hunter1"
+
+    def test_windows_falls_back_when_env_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._force(monkeypatch, "windows")
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
+        assert paths.user_data_dir() == tmp_path / "AppData" / "Local" / "hunter1"
+
+    def test_linux_uses_xdg_data_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._force(monkeypatch, "linux")
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+        assert paths.user_data_dir() == tmp_path / "share" / "hunter1"
+
+    def test_linux_falls_back_to_home_dot_local(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._force(monkeypatch, "linux")
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
+        assert paths.user_data_dir() == tmp_path / ".local" / "share" / "hunter1"
+
+    def test_macos_uses_application_support(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._force(monkeypatch, "macos")
+        monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
+        assert paths.user_data_dir() == tmp_path / "Library" / "Application Support" / "hunter1"
+
+    def test_is_named_after_the_app(self) -> None:
+        """目录名必须是 hunter1 —— 落进共享的用户数据根目录时靠它区分。"""
+        assert paths.user_data_dir().name == "hunter1"
+
+    def test_does_not_create_anything(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """只算路径，不落盘 —— 创建时机由调用方决定。"""
+        self._force(monkeypatch, "windows")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+        paths.user_data_dir()
+        assert not (tmp_path / "Local").exists()

@@ -4,7 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hunter1"
-version = "0.0.1"
+# 版本号只有一个来源：src/hunter1/__init__.py 的 __version__。
+# 不在这里再写一份 —— 两份靠人工同步时，「改了这边忘了那边」不会报任何错，
+# 只会让自更新的版本判断长期失准。见 tests/test_version.py。
+dynamic = ["version"]
 description = "求职工作台：轻量 · 跨平台 · 零托管"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,6 +44,9 @@ hunter1 = "hunter1.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hunter1"]
+
+[tool.hatch.version]
+path = "src/hunter1/__init__.py"
 
 [tool.ruff]
 line-length = 100
