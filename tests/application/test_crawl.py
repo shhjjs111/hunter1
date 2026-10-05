@@ -223,6 +223,25 @@ class TestCrawlAll:
         assert first is not None and second is not None
         assert first.first_seen_at == second.first_seen_at
 
+    def test_on_result_reports_each_site_as_it_finishes(self, db: Database) -> None:
+        """进度回调：每站跑完就报一次，供界面显示「正在抓哪个」。"""
+        crawlers = [
+            FakeCrawler("甲", [_raw("A岗", "https://a.com/1")]),
+            FakeCrawler("乙", [], boom=True),
+            FakeCrawler("丙", [_raw("C岗", "https://c.com/1")]),
+        ]
+        seen: list[tuple[str, int, str | None]] = []
+        crawl_all(
+            crawlers,
+            jobs=db.jobs(),
+            on_result=lambda r: seen.append((r.company, r.fetched, r.error)),
+        )
+        assert [company for company, _, _ in seen] == ["甲", "乙", "丙"]
+        assert seen[0][1] == 1
+        assert seen[1][2] is not None  # 失败也照样回调，不被吞掉
+        # 回调在整批结束前逐条发生（而非最后一次性给）
+        assert len(seen) == 3
+
 
 class _FixedFetcher:
     def __init__(self, html: str) -> None:

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -140,6 +140,7 @@ def crawl_all(
     *,
     jobs: JobRepository,
     now: datetime | None = None,
+    on_result: Callable[[CrawlResult], None] | None = None,
 ) -> BatchCrawlResult:
     """跑一批适配器，逐个 upsert。
 
@@ -148,11 +149,17 @@ def crawl_all(
 
     整批共用同一个 `timestamp`：这样同一轮抓到的新岗位，`first_seen_at` 完全
     一致，事后能按「批次」还原「这一轮发生了什么」，而不是每个站点各自为政。
+
+    `on_result` 每完成一个站点回调一次（成功失败都回调）——界面据此显示
+    抓取进度，不必等整批结束。
     """
     timestamp = now or datetime.now(UTC)
     batch = BatchCrawlResult()
     for crawler in crawlers:
-        batch.results.append(crawl_company(crawler, jobs=jobs, now=timestamp))
+        result = crawl_company(crawler, jobs=jobs, now=timestamp)
+        batch.results.append(result)
+        if on_result is not None:
+            on_result(result)
     return batch
 
 

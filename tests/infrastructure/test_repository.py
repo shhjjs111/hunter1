@@ -92,6 +92,25 @@ class TestJobs:
         assert repo.count() == 3
         assert repo.count(company_id="c1") == 2
 
+    def test_count_by_keyword_matches_search(self, db: Database) -> None:
+        """分页要显示「共几页」，所以计数必须和搜索命中同一批记录。"""
+        repo = db.jobs()
+        repo.upsert(_job(id="j1", title="AI产品经理"))
+        repo.upsert(_job(id="j2", title="数据产品经理（2027校招）"))
+        repo.upsert(_job(id="j3", title="行政专员"))
+        assert repo.count(keyword="产品经理") == 2
+        assert repo.count(keyword="产品经理") == len(repo.search(keyword="产品经理", limit=100))
+
+    def test_count_by_keyword_no_match(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(_job(id="j1", title="AI产品经理"))
+        assert repo.count(keyword="律师") == 0
+
+    def test_count_with_empty_keyword_is_total(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(_job(id="j1", title="AI产品经理"))
+        assert repo.count(keyword="") == 1
+
     def test_list_orders_by_last_seen_desc_nulls_last(self, db: Database) -> None:
         repo = db.jobs()
         repo.upsert(_job(id="old", last_seen_at=datetime(2026, 9, 1, tzinfo=UTC)))

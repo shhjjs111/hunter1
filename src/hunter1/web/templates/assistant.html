@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}助手{% endblock %}
+{% block content %}
+  <h1>求职助手</h1>
+  <p class="sub">问岗位、问投递、要建议。助手只会查询你的本地数据，不会替你改任何东西。</p>
+
+  {% if error %}
+    <div class="banner bad">{{ error }}</div>
+  {% endif %}
+
+  {% if not configured %}
+    <div class="banner info">
+      还没配好模型。去<a href="/settings">配置</a>页填写 base_url / 模型 / API Key 后即可对话。
+    </div>
+  {% endif %}
+
+  <div class="chat">
+    <div class="card">
+      <div class="muted" style="margin-bottom: 8px">会话</div>
+      <ul class="conv-list">
+        {% for conversation in conversations %}
+          <li class="{% if current and conversation.id == current.id %}on{% endif %}">
+            <a href="/assistant?cid={{ conversation.id }}">{{ conversation.title }}</a>
+          </li>
+        {% else %}
+          <li class="muted">还没有会话</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div>
+      <div class="card" style="min-height: 200px">
+        {% for message in messages %}
+          {% if message.role.value == "user" %}
+            <div class="msg user"><div class="who">你</div>{{ message.content }}</div>
+          {% elif message.role.value == "assistant" %}
+            <div class="msg assistant">
+              <div class="who">助手</div>
+              {% if message.content %}{{ message.content }}{% else %}<span class="muted">（调用了工具）</span>{% endif %}
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="empty">还没有对话。试着问：「有哪些产品经理岗位？」</div>
+        {% endfor %}
+      </div>
+
+      <div class="card">
+        <form method="post" action="/assistant">
+          <input type="hidden" name="conversation_id" value="{{ current.id if current else '' }}" />
+          <textarea name="message" placeholder="例如：帮我看看最近入库的岗位里有没有适合应届生的？"></textarea>
+          <div class="row" style="margin-top: 8px">
+            <button class="primary" type="submit" {% if not configured %}disabled{% endif %}>发送</button>
+            <a href="/assistant" class="muted">新会话</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endblock %}

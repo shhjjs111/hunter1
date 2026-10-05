@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}配置{% endblock %}
+{% block content %}
+  <h1>配置</h1>
+  <p class="sub">填自己的 API Key，任意 OpenAI 兼容端点都行（DeepSeek / 通义 / 智谱 / Kimi / 硅基流动 / 自建网关…）。配置只存在本机。</p>
+
+  {% if saved %}<div class="banner ok">已保存。</div>{% endif %}
+  {% if test_result %}
+    {% if test_result.ok == "1" %}
+      <div class="banner ok">{{ test_result.message }}</div>
+    {% else %}
+      <div class="banner bad">连接失败：{{ test_result.message }}</div>
+    {% endif %}
+  {% endif %}
+
+  <div class="card">
+    <form method="post" action="/settings">
+      <div class="grid2">
+        <div>
+          <label for="preset">厂商预设（选一个自动填地址与模型，也可手动改）</label>
+          <select id="preset" onchange="fillPreset()">
+            <option value="">自定义</option>
+            {% for name, preset in presets.items() %}
+              <option value="{{ name }}">{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="model">模型</label>
+          <input id="model" type="text" name="model" value="{{ form.model }}" placeholder="deepseek-chat" required />
+        </div>
+        <div>
+          <label for="base_url">Base URL（OpenAI 兼容）</label>
+          <input id="base_url" type="text" name="base_url" value="{{ form.base_url }}" placeholder="https://api.deepseek.com/v1" required />
+        </div>
+        <div>
+          <label for="api_key">API Key</label>
+          <input id="api_key" type="text" name="api_key" value="" placeholder="{{ form.key_hint }}" autocomplete="off" />
+          <div class="muted" style="font-size: 12px; margin-top: 4px">留空 = 不修改已保存的 key。</div>
+        </div>
+        <div>
+          <label for="temperature">temperature（可留空）</label>
+          <input id="temperature" type="text" name="temperature" value="{{ form.temperature }}" placeholder="0.2" />
+        </div>
+        <div>
+          <label for="max_tokens">max_tokens（可留空）</label>
+          <input id="max_tokens" type="text" name="max_tokens" value="{{ form.max_tokens }}" placeholder="1200" />
+        </div>
+      </div>
+      <div class="row" style="margin-top: 16px">
+        <button class="primary" type="submit">保存</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top: 0">测试连接</h2>
+    <p class="muted">按已保存的配置发一次最小请求。会消耗极少量额度。</p>
+    <form method="post" action="/settings/test">
+      <button type="submit" {% if not form.configured %}disabled{% endif %}>测试当前配置</button>
+    </form>
+  </div>
+
+  <script>
+    const PRESETS = {{ presets | tojson }};
+    function fillPreset() {
+      const name = document.getElementById("preset").value;
+      if (!name || !PRESETS[name]) return;
+      document.getElementById("base_url").value = PRESETS[name].base_url;
+      document.getElementById("model").value = PRESETS[name].model;
+    }
+  </script>
+{% endblock %}

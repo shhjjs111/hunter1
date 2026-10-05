@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}投递记录{% endblock %}
+{% block content %}
+  <h1>投递记录</h1>
+  <p class="sub">共 {{ applications | length }} 条</p>
+
+  {% if recorded %}
+    <div class="banner ok">已记录该投递。</div>
+  {% endif %}
+
+  {% if applications %}
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>公司 / 岗位</th>
+            <th>阶段</th>
+            <th>备注</th>
+            <th>更新于</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in applications %}
+            <tr>
+              <td>
+                <div>{{ item.company }}</div>
+                <div class="muted">{{ item.title }}</div>
+              </td>
+              <td>
+                <form class="inline" method="post" action="/applications/{{ item.id }}/stage">
+                  <select name="stage">
+                    {% for stage in stages %}
+                      <option value="{{ stage.value }}" {% if stage == item.stage %}selected{% endif %}>
+                        {{ stage_labels[stage.value] }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit">更新</button>
+                </form>
+              </td>
+              <td>
+                <form class="inline" method="post" action="/applications/{{ item.id }}/stage">
+                  <input type="hidden" name="stage" value="{{ item.stage.value }}" />
+                  <input type="text" name="note" value="{{ item.note or '' }}" placeholder="备注" style="width: 160px" />
+                  <button type="submit">保存</button>
+                </form>
+              </td>
+              <td class="muted">{{ item.updated_at.strftime("%Y-%m-%d %H:%M") }}</td>
+              <td>
+                <form class="inline" method="post" action="/applications/{{ item.id }}/delete">
+                  <button class="danger" type="submit">删除</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card empty">还没有投递记录。在<a href="/">岗位库</a>里点「记录投递」即可。</div>
+  {% endif %}
+{% endblock %}

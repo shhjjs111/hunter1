@@ -107,11 +107,14 @@ class SqliteJobRepository:
             row = session.get(JobRow, job_id)
             return _to_job(row) if row is not None else None
 
-    def count(self, *, company_id: str | None = None) -> int:
+    def count(self, *, company_id: str | None = None, keyword: str | None = None) -> int:
+        """计数。`keyword` 与 `search` 用同一套归一化匹配，保证「共 N 条」不虚报。"""
         with self._db.session() as session:
             statement = select(func.count()).select_from(JobRow)
             if company_id is not None:
                 statement = statement.where(JobRow.company_id == company_id)
+            if keyword is not None and (normalized := normalize_job_title(keyword)):
+                statement = statement.where(JobRow.title_key.contains(normalized))
             total = session.scalar(statement)
             return int(total or 0)
 
