@@ -19,6 +19,9 @@ build/
 .data/
 *.log
 
+# 本机工具链（uv / python 等，可重建）
+.tools/
+
 # 编辑器
 .vscode/
 .idea/
