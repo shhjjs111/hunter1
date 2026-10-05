@@ -77,6 +77,14 @@ class TestLayoutProblems:
         problems = build.layout_problems(dist)
         assert any("index.html" in p for p in problems)
 
+    def test_reports_missing_assets_dir(self, tmp_path: Path) -> None:
+        """index.html 在但 assets/ 没了 —— 界面加载不出脚本，必须拦。"""
+        import shutil
+
+        dist = _make_dist(tmp_path)
+        shutil.rmtree(dist / "_internal" / "hunter1" / "web_dist" / "assets")
+        assert any("assets" in p for p in build.layout_problems(dist))
+
     def test_accepts_pyinstaller_5_flat_layout(self, tmp_path: Path) -> None:
         """5.x 的产物是平铺的 —— 不该把「产物在」误报成「不在」。"""
         assert build.layout_problems(_make_dist(tmp_path, frontend="v5")) == []
@@ -196,8 +204,8 @@ class TestCheckPages:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 body = {
-                    "/": '<html><div id="root"></div></html>',
-                    "/assets/": "<html>asset</html>",
+                    "/": '<html><div id="root"></div><script src="/assets/app.js"></script></html>',
+                    "/assets/app.js": "console.log(1)",
                     "/api/jobs": '{"items": []}',
                     "/api/crawl/status": '{"running": false}',
                     "/api/settings": "null",
@@ -264,7 +272,11 @@ class TestCheckPages:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 requested.append(self.path)
-                payload = b"<html>x</html>"
+                payload = (
+                    b'<html><script src="/assets/app.js"></script></html>'
+                    if self.path == "/"
+                    else b"{}"
+                )
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
@@ -275,8 +287,88 @@ class TestCheckPages:
 
         for base in self._serve(Handler):
             build.check_pages(base)
+            build.check_frontend_assets(base)
         paths = set(requested)
-        assert {"/", "/assets/", "/api/jobs", "/api/crawl/status", "/api/settings"} <= paths
+        assert {"/api/jobs", "/api/crawl/status", "/api/settings"} <= paths
+        # 入口脚本由 check_frontend_assets 按 index.html 的引用去取
+        assert "/assets/app.js" in paths
+
+
+class TestFrontendAssetsProbe:
+    """入口脚本可达性 —— 前端产物能否被浏览器加载的最强静态证据。
+
+    设计要点：**不直接请求 `/assets/`**。目录路径没有索引文件，StaticFiles
+    返回 404 是正确行为；拿它当「资源不可达」的证据会误报（实测踩过：
+    打包产物本身完全正常，却被这个探针判成不合格）。
+    """
+
+    def _serve(self, handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_ok_when_script_reachable(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = (
+                    '<html><div id="root"></div><script src="/assets/a.js"></script></html>'
+                    if self.path == "/"
+                    else "console.log(1)"
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        for base in self._serve(Handler):
+            assert build.check_frontend_assets(base) == []
+
+    def test_flags_missing_entry_script(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path == "/":
+                    body = (
+                        b'<html><div id="root"></div><script src="/assets/gone.js"></script></html>'
+                    )
+                    self.send_response(200)
+                else:
+                    body = b"nope"
+                    self.send_response(404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        for base in self._serve(Handler):
+            problems = build.check_frontend_assets(base)
+            assert problems and "gone.js" in problems[0]
+
+    def test_flags_html_without_script(self) -> None:
+        """HTML 里没有 script 引用 —— 产物不完整（不是「没资源要加载」）。"""
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = b"<html><div id='root'></div></html>"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        for base in self._serve(Handler):
+            assert build.check_frontend_assets(base)
 
 
 class TestFreePort:

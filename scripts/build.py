@@ -16,6 +16,7 @@ import argparse
 import contextlib
 import importlib.util
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -57,12 +58,16 @@ SMOKE_PAGE_TIMEOUT_SECONDS = 20.0
 # 的职责是「产物能不能起、前端与 API 两条路通不通」，渲染正确性由
 # 前端的组件测试与整体渲染验收覆盖（见 frontend/src/app/App.test.tsx）。
 SMOKE_PAGES: tuple[tuple[str, str], ...] = (
-    ("/", "id=\"root\""),          # SPA 挂载点：产物里必须有
-    ("/assets/", ""),                # 资源目录可达（前缀匹配，下方单独处理）
-    ("/api/jobs", "\"items\""),     # API 有响应且是预期的 JSON 形状
-    ("/api/crawl/status", "\"running\""),
-    ("/api/settings", ""),           # 配置端点可达（未配置时返回 null）
+    ("/", 'id="root"'),          # SPA 挂载点：产物里必须有
+    ("/api/jobs", '"items"'),     # API 有响应且是预期的 JSON 形状
+    ("/api/crawl/status", '"running"'),
+    ("/api/settings", ""),        # 配置端点可达（未配置时返回 null）
 )
+
+# 前端静态资源的可达性单独断言：**先请求 index.html，取出它引用的资源路径再请求**。
+# 不直接请求 `/assets/`：目录路径没有索引文件，StaticFiles 返回 404 是正确行为，
+# 拿它当「资源不可达」的证据会误报（这个坑是实测踩到的）。
+_SCRIPT_SRC = re.compile(r'<script[^>]+src="([^"]+)"')
 
 
 def _exe_name() -> str:
@@ -152,6 +157,8 @@ def layout_problems(dist_dir: Path) -> list[str]:
         )
     elif not (frontend / "index.html").is_file():
         problems.append(f"前端产物缺 index.html：{frontend}")
+    elif not (frontend / "assets").is_dir():
+        problems.append(f"前端产物缺 assets 目录：{frontend / 'assets'}（界面会加载不出脚本）")
 
     size_mb = _dir_size(dist_dir) / 1024 / 1024
     if size_mb > SIZE_BUDGET_MB:
@@ -211,6 +218,33 @@ def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
+
+
+def check_frontend_assets(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -> list[str]:
+    """从 index.html 里取出入口脚本路径并请求它。
+
+    这是「前端产物真的能被浏览器加载」的最强静态证据：HTML 能取回、
+    它引用的脚本能被取回。JS 执行后的渲染由前端测试覆盖（见
+    frontend/src/app/App.test.tsx 的整体渲染验收）。
+    """
+    problems: list[str] = []
+    with httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
+        try:
+            index = client.get("/")
+        except httpx.HTTPError as exc:
+            return [f"/ 请求失败：{type(exc).__name__}"]
+        sources = _SCRIPT_SRC.findall(index.text)
+        if not sources:
+            return ["index.html 里找不到 <script src=...> —— 前端产物不完整"]
+        for src in sources:
+            try:
+                response = client.get(src)
+            except httpx.HTTPError as exc:
+                problems.append(f"{src} 请求失败：{type(exc).__name__}")
+                continue
+            if response.status_code != 200:
+                problems.append(f"{src} 返回 {response.status_code}（入口脚本加载不了）")
+    return problems
 
 
 def check_pages(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -> list[str]:
@@ -320,7 +354,7 @@ def smoke_serve(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECONDS) -> s
                     return (
                         f"产物起服务后 {timeout:.0f}s 内未能就绪；日志尾部：{_read_tail(log_path)}"
                     )
-                problems = check_pages(base_url)
+                problems = check_pages(base_url) + check_frontend_assets(base_url)
             finally:
                 _stop(process)
 
