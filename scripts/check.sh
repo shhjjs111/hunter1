@@ -15,7 +15,7 @@ echo "== 静态检查 (ruff check) =="
 "$PY" -m ruff check .
 
 echo "== 类型检查 (pyright) =="
-"$PY" -m pyright
+"$PY" -m pyright --pythonpath "$PY"
 
 echo "== 测试 (pytest) =="
 "$PY" -m pytest
