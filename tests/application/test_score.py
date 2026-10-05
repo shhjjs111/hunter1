@@ -82,6 +82,31 @@ class TestHappyPath:
         assert "score" in schema["required"]
 
 
+class TestCompanyField:
+    """评分提示词里的公司必须是**人读得懂的名字**。
+
+    `company_id` 是身份哈希（domain/models.py 注释写得很清楚），把它喂给
+    模型等于送一个无意义字符串 —— 评分质量直接受损。
+    """
+
+    def test_prompt_uses_company_name_not_hash(self) -> None:
+        llm = FakeLLM({"score": 70})
+        score_job(
+            job=_job(company_id="6a9e2f112b9cbce6e591b229add2e2b1", company_name="阿里巴巴"),
+            profile=PROFILE,
+            llm=llm,
+        )
+        prompt = llm.calls[0]["user_prompt"]
+        assert "阿里巴巴" in prompt
+        assert "6a9e2f112b9cbce6e591b229add2e2b1" not in prompt
+
+    def test_prompt_falls_back_to_source_without_company_name(self) -> None:
+        """没有公司名时退回来源名（与 applications.new_application 同一约定）。"""
+        llm = FakeLLM({"score": 70})
+        score_job(job=_job(source="offerbiu"), profile=PROFILE, llm=llm)
+        assert "offerbiu" in llm.calls[0]["user_prompt"]
+
+
 class TestPartialPayloads:
     def test_score_only_payload_is_accepted(self) -> None:
         card = score_job(job=_job(), profile=PROFILE, llm=FakeLLM({"score": 55}))

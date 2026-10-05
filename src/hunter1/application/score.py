@@ -40,7 +40,10 @@ def score_job(
 
     user_prompt = build_user_prompt(
         title=title,
-        company=job.company_id,
+        # 公司用「人读得懂的名字」：company_id 是身份哈希（见 domain/models.py），
+        # 喂给模型等于送一个无意义字符串。缺名字时退回来源名 —— 与
+        # applications.new_application 的同一约定。
+        company=job.company_name or job.source,
         jd_text=job.jd_raw,
         profile=profile,
     )

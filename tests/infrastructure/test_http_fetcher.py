@@ -146,3 +146,21 @@ class TestFetchErrorShape:
         assert error.code == "http_403"
         assert error.url == "https://a.com/secret"
         assert "http_403" in str(error)
+
+
+class TestMalformedUrl:
+    def test_malformed_url_fails_fast_with_stable_code(self, clock: FakeClock) -> None:
+        """畸形 URL 必须变成 FetchError，且不碰网络、不共享主机桶。
+
+        限流器对解析不出主机的 URL fail-closed（抛 ValueError）；HttpFetcher
+        把它翻译成统一的 FetchError —— 「错误一律 FetchError」是这层的承诺，
+        不能让 ValueError / httpx.InvalidURL 以别的形状漏出去。
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise AssertionError("畸形 URL 不该到达传输层")
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("not a url")
+        assert excinfo.value.code == "invalid_url"

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -37,6 +37,8 @@ class JobRepository(Protocol):
     def upsert(self, job: Job) -> None: ...
 
     def get(self, job_id: str) -> Job | None: ...
+
+    def get_by_prefix(self, prefix: str) -> list[Job]: ...
 
     def count(self, *, company_id: str | None = None, keyword: str | None = None) -> int: ...
 
@@ -71,17 +73,30 @@ class SettingsRepository(Protocol):
     def save_llm(self, settings: LLMSettings) -> None: ...
 
 
+# 下载进度回调：(已收字节数, 总字节数或 None)
+ProgressCallback = Callable[[int, int | None], None]
+
+
 @runtime_checkable
 class ReleaseSource(Protocol):
     """版本清单与发布产物的来源（自更新用）。
 
     应用层只依赖这两个方法，所以「检查更新」的决策逻辑可以完全离线测试；
     真实实现见 `infrastructure.update.ReleaseClient`。
+
+    `download_asset` 的 `on_progress` 是契约的一部分（不是实现私有的扩展点）——
+    否则「按端口实现」的替身/第三方实现会悄悄缺少进度能力。
     """
 
     def fetch_manifest(self, url: str) -> ReleaseManifest: ...
 
-    def download_asset(self, asset: ReleaseAsset, dest: Path) -> Path: ...
+    def download_asset(
+        self,
+        asset: ReleaseAsset,
+        dest: Path,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> Path: ...
 
 
 @runtime_checkable
@@ -101,8 +116,12 @@ class Crawler(Protocol):
 
     实现者只需把「某个公司的招聘页」翻成一批 `RawJob`；并发控制、重试、
     限流由注入的抓取基础设施负责，适配器不重复实现这些。
+
+    `key` 是适配器的**唯一标识**（站点注册表的 key），进度关联用它；
+    `company` 是给人看的显示名，可能两个站点同名 —— 不用作关联键。
     """
 
+    key: str
     company: str
     careers_url: str
 
@@ -160,6 +179,7 @@ __all__ = [
     "Crawler",
     "JobRepository",
     "LLMProvider",
+    "ProgressCallback",
     "ReleaseSource",
     "SettingsRepository",
     "TextFetcher",

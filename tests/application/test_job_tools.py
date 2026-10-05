@@ -98,6 +98,69 @@ class TestJobDetailTool:
         assert "找不到" in result.content
 
 
+class TestJobDetailPrefixLookup:
+    """前缀查找必须下推到 SQL —— 不能在「最近 500 条」里碰运气。"""
+
+    def test_prefix_lookup_reaches_beyond_recent_window(self, tmp_path: Path) -> None:
+        """目标岗位排在最近窗口之外时也要找得到（旧实现只扫 list(500) 会漏）。"""
+        db = Database(tmp_path / "big.db")
+        db.initialize()
+        repo = db.jobs()
+        old = datetime(2020, 1, 1, tzinfo=UTC)
+        new = datetime(2026, 10, 1, tzinfo=UTC)
+        # 目标：id 前缀唯一，且是库里最老的一条（一定排进「最近 500 条」之外）
+        target_id = "f0f0" + "a" * 60
+        repo.upsert(
+            Job(
+                id=target_id,
+                company_id="c",
+                title="远古岗位",
+                detail_url="https://x/0",
+                source="t",
+                last_seen_at=old,
+            )
+        )
+        for index in range(500):
+            repo.upsert(
+                Job(
+                    id=f"{index:064x}",
+                    company_id="c",
+                    title=f"岗位{index}",
+                    detail_url=f"https://x/{index}",
+                    source="t",
+                    last_seen_at=new,
+                )
+            )
+        result = build_tools(jobs=repo).invoke("job_detail", {"job_id": "f0f0"}, call_id="c1")
+        assert result.ok
+        assert "远古岗位" in result.content
+
+    def test_ambiguous_prefix_reports_count(self, jobs_db: Database) -> None:
+        """多个前缀命中时提示更长的 id，而不是随便挑一条。"""
+        repo = jobs_db.jobs()
+        repo.upsert(
+            Job(
+                id="p1" + "0" * 30,
+                company_id="c",
+                title="甲岗",
+                detail_url="https://x/a",
+                source="t",
+            )
+        )
+        repo.upsert(
+            Job(
+                id="p2" + "0" * 30,
+                company_id="c",
+                title="乙岗",
+                detail_url="https://x/b",
+                source="t",
+            )
+        )
+        result = build_tools(jobs=repo).invoke("job_detail", {"job_id": "p"}, call_id="c1")
+        assert result.ok
+        assert "2 条匹配" in result.content
+
+
 class TestJobStatsTool:
     def test_reports_total(self, jobs_db: Database) -> None:
         registry = build_tools(jobs=jobs_db.jobs())

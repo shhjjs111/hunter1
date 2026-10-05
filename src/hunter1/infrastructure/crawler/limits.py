@@ -156,7 +156,15 @@ class HostLimiter:
 
 
 def _host_of(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower() or "unknown"
+    """取 URL 的主机名；解析不出主机就拒绝（fail-closed）。
+
+    绝不回退到共享的 "unknown" 桶：那样一个畸形 URL 的失败会连带所有
+    「无主机」请求一起冷却/排队（共享 per_host 配额），一处坏值拖累整轮。
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        raise ValueError(f"cannot determine host from url: {url!r}")
+    return host
 
 
 def _parse_retry_after(value: str) -> float | None:

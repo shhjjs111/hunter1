@@ -20,7 +20,10 @@ NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
 
 class FakeCrawler:
-    def __init__(self, company: str, *, count: int = 1, boom: bool = False) -> None:
+    def __init__(
+        self, company: str, *, count: int = 1, boom: bool = False, key: str = ""
+    ) -> None:
+        self.key = key or company
         self.company = company
         self.careers_url = f"https://{company}.example.com/jobs"
         self._count = count
@@ -69,6 +72,21 @@ class TestRun:
         assert [site.status for site in snapshot.sites] == ["failed", "ok"]
         assert "boom" in (snapshot.sites[0].error or "")
         assert snapshot.total_fetched == 1
+
+    def test_same_label_sites_are_tracked_separately(self, db: Database) -> None:
+        """两个站点恰好同名时进度不能串行 —— 关联用 key，显示才用 label。
+
+        旧实现按 label 匹配：第二个同名站点的结果会被记到第一行，
+        第二行永远停在 running（页面看起来「卡住了」）。
+        """
+        first = FakeCrawler("同名站", count=2, key="site_a")
+        second = FakeCrawler("同名站", count=1, key="site_b")
+        runner = _runner(db, [first, second])
+        runner.run()
+        snapshot = runner.snapshot()
+        assert [site.status for site in snapshot.sites] == ["ok", "ok"]
+        assert snapshot.sites[0].fetched == 2
+        assert snapshot.sites[1].fetched == 1
 
     def test_factory_failure_does_not_leave_it_running(self, db: Database) -> None:
         """装配阶段就炸了也必须收敛到「已结束」——否则进度页永远转圈。"""

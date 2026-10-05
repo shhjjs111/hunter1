@@ -53,7 +53,13 @@ class FakeSource:
         assert self.manifest is not None, "测试没给清单"
         return self.manifest
 
-    def download_asset(self, asset: ReleaseAsset, dest: Path) -> Path:
+    def download_asset(
+        self,
+        asset: ReleaseAsset,
+        dest: Path,
+        *,
+        on_progress: Any = None,
+    ) -> Path:
         if self.fail_download is not None:
             raise self.fail_download
         dest.parent.mkdir(parents=True, exist_ok=True)

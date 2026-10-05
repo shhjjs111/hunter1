@@ -5,6 +5,7 @@ TDD：本文件先于实现编写，当前应为 RED。
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,10 @@ def db(tmp_path: Path) -> Database:
 
 
 class FakeCrawler:
-    def __init__(self, company: str, jobs: list[RawJob], *, boom: bool = False) -> None:
+    def __init__(
+        self, company: str, jobs: list[RawJob], *, boom: bool = False, key: str = ""
+    ) -> None:
+        self.key = key or company
         self.company = company
         self.careers_url = "https://example.com/careers"
         self._jobs = jobs
@@ -87,6 +91,51 @@ class TestCrawlCompany:
         )
         job = db.jobs().get(job_identity(detail_url="https://a.com/1"))
         assert job is not None and job.company_name == "示例科技有限公司"
+
+    def test_merge_keeps_first_seen_not_later_than_last_seen(self, db: Database) -> None:
+        """合并不得绕过领域不变量：last_seen 改到 first_seen 之前必须被拦住。
+
+        `model_copy(update=...)` 不重跑 pydantic 校验器，会把
+        last_seen(新) < first_seen(旧) 的非法对象直接写库 —— 读回时才炸。
+        这里模拟「库里带未来时间戳的旧数据」（旧库迁移/手工改动/时区异常），
+        再抓一次：修复前 get() 读回即抛 ValidationError。
+        """
+        job_id = job_identity(detail_url="https://a.com/1")
+        future = datetime(2027, 1, 1, tzinfo=UTC)
+        db.jobs().upsert(
+            Job(
+                id=job_id,
+                company_id="c1",
+                title="A岗",
+                detail_url="https://a.com/1",
+                source="示例科技",
+                first_seen_at=future,
+                last_seen_at=future,
+            )
+        )
+        result = crawl_company(
+            FakeCrawler("示例科技", [_raw("A岗", "https://a.com/1")]),
+            jobs=db.jobs(),
+            now=datetime(2026, 10, 5, tzinfo=UTC),
+        )
+        assert result.updated == 1
+        after = db.jobs().get(job_id)
+        assert after is not None
+        assert after.first_seen_at is not None and after.last_seen_at is not None
+        assert after.first_seen_at <= after.last_seen_at
+        # last_seen 只前进不倒退：时钟倒流时保持原值
+        assert after.last_seen_at == future
+
+    def test_company_id_is_stable_across_runs(self, db: Database) -> None:
+        """公司 id 是身份契约：basis 格式一变，全库公司关联断裂且无法自动修复。
+
+        锁定值 = sha256("ct:示例科技:__company__")[:32]（见 domain.crawl.job_identity）。
+        如果有人改动哈希 basis 格式，这个测试会红 —— 那正是「静默失败」变显式的时刻。
+        """
+        crawl_company(FakeCrawler("示例科技", [_raw("A岗", "https://a.com/1")]), jobs=db.jobs())
+        job = db.jobs().get(job_identity(detail_url="https://a.com/1"))
+        assert job is not None
+        assert job.company_id == "962b18655b5db8eafd8fece6edfd4ef9"
 
     def test_tracking_params_do_not_create_duplicate(self, db: Database) -> None:
         crawl_company(

@@ -55,6 +55,28 @@ class TestJobsPage:
             response = client.get("/")
         assert "岗位库还是空的" in response.text
 
+    def test_page_param_is_clamped(self, app_env, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """page 无上界时 page=999999 会变成天量 OFFSET —— 必须压到上限。
+
+        超界时页面渲染为空列表（页码不可见），所以直接观察下推到仓储的
+        offset：它就是「SQLite 要扫描并丢弃的行数」。
+        """
+        client, _db, _llm = app_env
+        from hunter1.infrastructure.db.repository import SqliteJobRepository
+
+        seen: list[int] = []
+        original = SqliteJobRepository.list
+
+        def spy(self, *, limit: int = 100, offset: int = 0):  # type: ignore[no-untyped-def]
+            seen.append(offset)
+            return original(self, limit=limit, offset=offset)
+
+        monkeypatch.setattr(SqliteJobRepository, "list", spy)
+        response = client.get("/", params={"page": "999999"})
+        assert response.status_code == 200
+        # 钳到第 10000 页：offset = 9999 * 20（默认 page_size）
+        assert seen == [9_999 * 20]
+
 
 class TestApplyFlow:
     def test_record_application_from_job(self, app_env) -> None:  # type: ignore[no-untyped-def]

@@ -71,9 +71,6 @@ class JobRow(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True, index=True)
 
 
-__all__ = ["Base", "CompanyRow", "JobRow", "UtcDateTime"]
-
-
 class ConversationRow(Base):
     __tablename__ = "conversations"
 

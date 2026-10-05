@@ -133,3 +133,40 @@ class TestCrossThreadWrites:
         db = Database(tmp_path / "cfg.db")
         options = db.engine.dialect.create_connect_args(db.engine.url)[1]
         assert options.get("check_same_thread") is False
+
+
+class TestSchemaExports:
+    """schema.py 的 `__all__` 只能有一处 —— 重复赋值会让后者静默覆盖前者。"""
+
+    def test_all_is_assigned_exactly_once(self) -> None:
+        """出现第二个顶层 __all__ 赋值时，往第一个里加的名字会被无声吞掉。"""
+        import ast
+
+        source = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "hunter1"
+            / "infrastructure"
+            / "db"
+            / "schema.py"
+        )
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        assignments = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in node.targets
+            )
+        ]
+        assert len(assignments) == 1, f"schema.py 有 {len(assignments)} 处顶层 __all__ 赋值"
+
+    def test_exported_names_exist(self) -> None:
+        from hunter1.infrastructure.db import schema
+
+        for name in schema.__all__:
+            assert hasattr(schema, name), f"__all__ 里的 {name} 在模块中不存在"
+        assert {"ApplicationRow", "Base", "CompanyRow", "JobRow", "UtcDateTime"} <= set(
+            schema.__all__
+        )

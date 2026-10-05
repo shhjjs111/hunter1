@@ -89,6 +89,11 @@ class HttpFetcher:
             try:
                 with self.limiter.acquire(url, timeout=self.timeout):
                     response = self._client.get(url, headers=request_headers)
+            except (ValueError, httpx.InvalidURL) as exc:
+                # 畸形 URL 没有可治理的主机：限流器 fail-closed 拒绝（ValueError），
+                # httpx 也可能在更深处拒绝（InvalidURL）。统一翻译成 FetchError ——
+                # 「错误一律 FetchError」是这层的承诺，不让别的形状漏出去。
+                raise FetchError("invalid_url", url) from exc
             except ResourceLimitTimeoutError:
                 last_code = "resource_timeout"
                 if attempt >= self.retries:

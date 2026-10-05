@@ -176,8 +176,9 @@ class StaticHtmlCrawler(BaseCrawler):
         careers_url: str,
         spec: ListPageSpec,
         fetcher: TextFetcher,
+        key: str = "",
     ) -> None:
-        super().__init__(company=company, careers_url=careers_url, fetcher=fetcher)
+        super().__init__(key=key, company=company, careers_url=careers_url, fetcher=fetcher)
         self.spec = spec
 
     def fetch(self) -> list[RawJob]:

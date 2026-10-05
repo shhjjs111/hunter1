@@ -152,6 +152,7 @@ def build_site(key: str, *, fetcher: TextFetcher) -> Crawler:
     """按 key 构造一个抓取器。"""
     site = get_site(key)
     return site.crawler_class(
+        key=site.key,
         company=site.label,
         careers_url=site.careers_url,
         spec=site.spec,

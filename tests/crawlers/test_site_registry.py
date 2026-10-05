@@ -59,6 +59,8 @@ def test_site_builds_with_explicit_url(key: str) -> None:
     site = get_site(key)
     crawler = build_site(key, fetcher=_OfflineFetcher("<html></html>"))
     assert crawler.company == site.label
+    # key 是进度关联的唯一标识（label 只是显示名，可能重名）
+    assert crawler.key == key
     assert crawler.careers_url.startswith("http")
 
 

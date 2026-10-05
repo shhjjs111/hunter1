@@ -57,8 +57,9 @@ def build_tools(
         """查看某个岗位的完整信息（按 id 前缀或全 id）。"""
         job = jobs.get(job_id)
         if job is None:
-            # 支持用前缀查找（模型常只看到前 8 位）
-            candidates = [j for j in jobs.list(limit=500) if j.id.startswith(job_id)]
+            # 支持用前缀查找（模型常只看到前 8 位）——查询下推到 SQL，
+            # 不在内存里扫「最近 N 条」（那会随库增长变慢，且漏掉窗口外的匹配）
+            candidates = jobs.get_by_prefix(job_id)
             if len(candidates) == 1:
                 job = candidates[0]
             elif len(candidates) > 1:

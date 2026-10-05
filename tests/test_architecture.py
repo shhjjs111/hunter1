@@ -70,3 +70,25 @@ def test_domain_layer_has_no_third_party_io_libraries() -> None:
 def test_layers_exist() -> None:
     for layer in ["domain", "application", "infrastructure", "web", "crawlers"]:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
+
+
+def test_release_source_port_matches_client_signature() -> None:
+    """端口签名必须与实现一致 —— 实现不得多出端口里没有的隐藏参数。
+
+    `@runtime_checkable` 的 isinstance 只检查方法存在、不检查签名，所以
+    「实现多一个带默认值的参数」能悄悄存活：按端口写的测试替身/第三方实现
+    会在某天以奇怪的方式失败。端口是唯一契约来源，参数集必须逐一对齐。
+    """
+    import inspect
+
+    from hunter1.application.ports import ReleaseSource
+    from hunter1.infrastructure.update import ReleaseClient
+
+    for method in ("fetch_manifest", "download_asset"):
+        port_signature = inspect.signature(getattr(ReleaseSource, method))
+        impl_signature = inspect.signature(getattr(ReleaseClient, method))
+        port_params = list(port_signature.parameters)
+        impl_params = list(impl_signature.parameters)
+        assert port_params == impl_params, (
+            f"{method} 参数集不一致：端口 {port_params} vs 实现 {impl_params}"
+        )

@@ -30,6 +30,7 @@ class SiteProgress:
     """一个站点在这一轮里的进度。"""
 
     label: str
+    key: str = ""  # 站点唯一标识（进度关联用）；label 只用于显示
     status: str = "pending"  # pending | running | ok | failed
     fetched: int = 0
     created: int = 0
@@ -136,7 +137,8 @@ class CrawlRunner:
             crawlers = list(self._crawler_factory())
             with self._lock:
                 self._state.sites = [
-                    SiteProgress(label=crawler.company, status="running") for crawler in crawlers
+                    SiteProgress(label=crawler.company, key=crawler.key, status="running")
+                    for crawler in crawlers
                 ]
             crawl_all(crawlers, jobs=self._jobs, now=self._clock(), on_result=self._record)
         except Exception as exc:
@@ -150,7 +152,9 @@ class CrawlRunner:
     def _record(self, result: CrawlResult) -> None:
         with self._lock:
             for site in self._state.sites:
-                if site.label != result.company:
+                # 按 key 关联而不是显示名：两个站点恰好同名时，按名字匹配会把
+                # 第二个站点的结果记到第一行，第二行永远停在 running。
+                if site.key != result.site_key:
                     continue
                 site.status = "ok" if result.ok else "failed"
                 site.fetched = result.fetched

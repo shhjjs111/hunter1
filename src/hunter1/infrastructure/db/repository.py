@@ -107,6 +107,24 @@ class SqliteJobRepository:
             row = session.get(JobRow, job_id)
             return _to_job(row) if row is not None else None
 
+    def get_by_prefix(self, prefix: str) -> list[Job]:
+        """按 id 前缀查找（助手常只看到前 8 位 id）。
+
+        下推到 SQL 的前缀匹配 —— 不在内存里扫「最近 N 条」碰运气：
+        那种做法既随库增长变慢，也会漏掉窗口之外的真实匹配。
+        空前缀返回空：全表不是「一个前缀」。
+        """
+        if not prefix:
+            return []
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._db.session() as session:
+            statement = (
+                select(JobRow)
+                .where(JobRow.id.like(f"{escaped}%", escape="\\"))
+                .order_by(JobRow.last_seen_at.desc())
+            )
+            return [_to_job(row) for row in session.scalars(statement)]
+
     def count(self, *, company_id: str | None = None, keyword: str | None = None) -> int:
         """计数。`keyword` 与 `search` 用同一套归一化匹配，保证「共 N 条」不虚报。"""
         with self._db.session() as session:

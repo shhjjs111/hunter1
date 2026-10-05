@@ -15,17 +15,15 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 from pydantic import ValidationError
 
+from hunter1.application.ports import ProgressCallback
 from hunter1.domain.update import ReleaseAsset, ReleaseManifest
 
 _CHUNK = 1024 * 1024
-
-ProgressCallback = Callable[[int, int | None], None]
 
 
 class DownloadError(RuntimeError):

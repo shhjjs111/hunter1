@@ -58,6 +58,10 @@ STAGE_LABELS: dict[str, str] = {
 
 _FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
 
+# 页码上限：只设下界时 page=999999 会变成天量 OFFSET（SQLite 要扫描并丢弃
+# 前面所有行才能定位）。真实使用没人会翻到第 10000 页，但「无限」由此变「有界」。
+_MAX_PAGE = 10_000
+
 
 def create_app(context: AppContext) -> FastAPI:
     app = FastAPI(title="Hunter1", docs_url=None, redoc_url=None)
@@ -87,7 +91,7 @@ def create_app(context: AppContext) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def jobs_page(request: Request, q: str = "", page: int = 1) -> HTMLResponse:
         size = max(1, context.page_size)
-        page = max(1, page)
+        page = min(max(1, page), _MAX_PAGE)
         repo = context.db.jobs()
         keyword = q.strip()
         offset = (page - 1) * size

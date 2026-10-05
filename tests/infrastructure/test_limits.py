@@ -138,3 +138,26 @@ class TestCooldown:
         limiter = _limiter(clock, per_host=2, base=1.0, cap=60.0)
         limiter.record("https://a.com/x", status=429, retry_after="not-a-number")
         assert limiter.cooldown_remaining("a.com") <= 60.0
+
+
+class TestMalformedUrls:
+    """解析不出主机的 URL 必须被拒绝 —— 不能塞进共享的 "unknown" 桶。
+
+    否则一个坏 URL 的失败会连带所有「无主机」请求一起冷却（per_host=2 的
+    共享槽位），一处畸形值拖累整轮抓取。
+    """
+
+    def test_malformed_url_is_rejected(self, clock: FakeClock) -> None:
+        limiter = _limiter(clock, per_host=2)
+        with pytest.raises(ValueError):
+            limiter.acquire("not a url", timeout=0.5)
+        with pytest.raises(ValueError):
+            limiter.record("not a url", status=503)
+
+    def test_malformed_url_does_not_inflict_real_hosts(self, clock: FakeClock) -> None:
+        """一个坏 URL 的失败不能牵连真实主机的配额/冷却。"""
+        limiter = _limiter(clock, per_host=2)
+        with pytest.raises(ValueError):
+            limiter.record("https://", status=503)  # netloc 为空
+        lease = limiter.acquire("https://a.com/x", timeout=1)
+        lease.release()

@@ -13,7 +13,17 @@ from hunter1.domain.crawl import RawJob
 class BaseCrawler:
     """所有站点适配器的基类。"""
 
-    def __init__(self, *, company: str, careers_url: str, fetcher: TextFetcher) -> None:
+    def __init__(
+        self,
+        *,
+        key: str = "",
+        company: str,
+        careers_url: str,
+        fetcher: TextFetcher,
+    ) -> None:
+        # key 缺省回退到 company：站点注册表总会给显式 key；手写适配器不传时
+        # 保持与旧行为一致（按显示名关联）。两个站点同名时用显式 key 区分。
+        self.key = key or company
         self.company = company
         self.careers_url = careers_url
         self.fetcher = fetcher

@@ -23,6 +23,7 @@ class CrawlResult:
     """一次公司抓取的汇总结果。"""
 
     company: str
+    site_key: str = ""
     fetched: int = 0
     created: int = 0
     updated: int = 0
@@ -73,7 +74,7 @@ def crawl_company(
     - `last_seen_at` 每次成功抓到都前进；
     - 已有的 `match_score` / `jd_raw` 不被空值覆盖。
     """
-    result = CrawlResult(company=crawler.company)
+    result = CrawlResult(company=crawler.company, site_key=crawler.key)
     timestamp = now or datetime.now(UTC)
 
     try:
@@ -113,9 +114,16 @@ def _new_job(job_id: str, raw: RawJob, timestamp: datetime) -> Job:
 
 
 def _merge(existing: Job, raw: RawJob, timestamp: datetime) -> Job:
-    """把新抓到的事实合并进已有记录，**不覆盖已有成果**。"""
-    return existing.model_copy(
-        update={
+    """把新抓到的事实合并进已有记录，**不覆盖已有成果**。
+
+    刻意不走 `model_copy(update=...)`：pydantic v2 的 `model_copy` 不重跑
+    校验器，「last_seen 被改到 first_seen 之前」这种非法状态会被静默造出来
+    并直接写库（读回来才炸）。与 `applications.change_stage` 同一约定：
+    合并走一次 `model_validate`，让领域不变量兜底。
+    """
+    payload = existing.model_dump(exclude_computed_fields=True)
+    payload.update(
+        {
             "title": raw.title,
             "detail_url": raw.detail_url,
             "city": raw.city or existing.city,
@@ -123,15 +131,32 @@ def _merge(existing: Job, raw: RawJob, timestamp: datetime) -> Job:
             "company_name": raw.company or existing.company_name,
             # 已有 JD 正文不被空值抹掉
             "jd_raw": raw.jd_raw or existing.jd_raw,
-            "last_seen_at": timestamp,
+            # last_seen 只前进不倒退：时间源异常（时钟回拨/旧数据）时保持原值，
+            # 也保证 first_seen <= last_seen 的不变量在正常路径上不被破坏
+            "last_seen_at": _later(existing.last_seen_at, timestamp),
             "capture_status": existing.capture_status,
             "match_score": existing.match_score,
         }
     )
+    return Job.model_validate(payload)
+
+
+def _later(moment: datetime | None, other: datetime | None) -> datetime | None:
+    """两个时刻中较晚的一个（None 视为「没有」）。"""
+    if moment is None:
+        return other
+    if other is None:
+        return moment
+    return max(moment, other)
 
 
 def _company_id(raw: RawJob) -> str:
-    """公司 id：优先用调用方给的 source_ref，否则用公司名的稳定哈希。"""
+    """公司 id：公司名的稳定哈希（sha256 前 128 位）。
+
+    公司身份一律由公司名推导 —— `RawJob` 里没有 source_ref 字段，抓取层
+    不产它。basis 格式（`ct:<公司名>:__company__`）是身份契约的一部分：
+    改动它会让全库公司关联断裂且无法自动修复（有测试锁定，见 test_crawl）。
+    """
     return job_identity(detail_url="", company=raw.company, title="__company__")[:32]
 
 
