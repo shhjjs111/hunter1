@@ -16,7 +16,7 @@
 | M3 评分 + 统一 provider 层 | ✅ | 任意 OpenAI 兼容端点，结构化输出分级降级 |
 | M4 求职助手 | ✅ | 自研 agent 循环 + 工具注册表 + 会话持久化 + **流式输出** |
 | M5 Web UI | ✅ | 岗位库 / 配置 / 投递 / 抓取进度 / 助手对话（逐字流式） |
-| M6 打包分发 | ⬜ | 未开始 |
+| M6 打包分发 | ✅ | PyInstaller 单目录产物 42MB，解压即用；`hunter1 update` 检查并下载更新 |
 
 ## 快速开始
 
@@ -30,6 +30,37 @@ hunter1 serve --db .data/hunter1.db      # 打开 http://127.0.0.1:8000
 
 > 本机开发（项目自带 Python embeddable 版，忽略 `PYTHONPATH`、装不了 editable）：
 > `./.tools/python/python.exe scripts/serve.py --db .data/hunter1.db`
+
+## 打包分发
+
+```bash
+./.tools/python/python.exe scripts/build.py --zip
+```
+
+产出 `dist/hunter1/`（`hunter1.exe` + `_internal/`，约 **42MB**）与
+`dist/hunter1-win32.zip`（约 24MB）。解压后直接运行，数据自动放在程序旁的 `data/`：
+
+```
+hunter1/hunter1.exe
+hunter1/_internal/
+hunter1/data/          ← 首次运行自动创建
+```
+
+构建脚本会做硬校验：**模板没打进去就判不合格** —— 那种包能启动，但每个页面都 500。
+
+### 更新
+
+```bash
+hunter1 update --source <版本清单 URL>              # 只看有没有新版
+hunter1 update --source <版本清单 URL> --download   # 下到 data/updates/<版本>/
+```
+
+清单里每个产物都带 `sha256`，**校验不过就什么都不留**（半个坏包比没有包更危险）。
+更新**不会自动覆盖正在运行的程序**：Windows 上运行中的 exe 覆盖不了自己，
+绕开它要引入辅助进程那一套；便携工具的自然做法就是「下好 → 关掉 → 覆盖」。
+
+> 项目目前还没有发布渠道，所以没有内建默认更新源 —— 不配 `--source` 时
+> 它明说「未配置」，而不是去请求一个占位地址。
 
 ## 务实说明
 

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from hunter1.domain.assistant import Message
@@ -15,6 +16,7 @@ from hunter1.domain.crawl import RawJob
 from hunter1.domain.llm import LLMResponse, StreamComplete, TextDelta
 from hunter1.domain.models import Application, Company, Job
 from hunter1.domain.settings import LLMSettings
+from hunter1.domain.update import ReleaseAsset, ReleaseManifest
 
 
 @runtime_checkable
@@ -67,6 +69,19 @@ class SettingsRepository(Protocol):
     def get_llm(self) -> LLMSettings | None: ...
 
     def save_llm(self, settings: LLMSettings) -> None: ...
+
+
+@runtime_checkable
+class ReleaseSource(Protocol):
+    """版本清单与发布产物的来源（自更新用）。
+
+    应用层只依赖这两个方法，所以「检查更新」的决策逻辑可以完全离线测试；
+    真实实现见 `infrastructure.update.ReleaseClient`。
+    """
+
+    def fetch_manifest(self, url: str) -> ReleaseManifest: ...
+
+    def download_asset(self, asset: ReleaseAsset, dest: Path) -> Path: ...
 
 
 @runtime_checkable
@@ -145,6 +160,7 @@ __all__ = [
     "Crawler",
     "JobRepository",
     "LLMProvider",
+    "ReleaseSource",
     "SettingsRepository",
     "TextFetcher",
 ]
