@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<body>
+<div class="column-wrapper">
+
+
+
+
+
+<!--<style>-->
+<!--    html {-->
+<!--        -webkit-filter: grayscale(100%);-->
+<!--        -moz-filter: grayscale(100%);-->
+<!--        -ms-filter: grayscale(100%);-->
+<!--        -o-filter: grayscale(100%);-->
+<!--        filter: grayscale(1);-->
+<!--    }-->
+<!--</style>-->
+
+
+<!--<script src="/static/js/index.js?v=0.5"></script>-->
+
+<div class="main">
+
+
+
+ 
+   
+
+
+
+   
+<div class="part flex">
+
+<div class="job-container flex w">
+
+<div class="right-content job">
+
+<div class="tab-con tab">
+
+<div class="con">
+
+<div class="job-board">
+<div class="list">
+<ul>
+<li>
+<a href="/job/detail/2346300.html" target="_blank" title="辅导员">
+<div class="position">
+<h6 title="辅导员">辅导员</h6>
+<span class="money">面议</span>
+</div>
+<div class="requirement">
+<span>本科</span> <span>若干人</span> </div>
+<div class="region">
+<span class="school">武汉科技职业学院</span>
+<span class="city-place">
+<span class="city">武汉</span>
+</span>
+</div>
+</a>
+</li>
+<li>
+<a href="/job/detail/2344000.html" target="_blank" title="辅导员">
+<div class="position">
+<h6 title="辅导员">辅导员</h6>
+<span class="money">面议</span>
+</div>
+<div class="requirement">
+<span>本科</span> <span>若干人</span> </div>
+<div class="region">
+<span class="school">广州华商职业学院</span>
+<span class="city-place">
+<span class="city">广州</span>
+</span>
+</div>
+</a>
+</li>
+<li>
+<a href="/job/detail/2344001.html" target="_blank" title="行政管理人员">
+<div class="position">
+<h6 title="行政管理人员">行政管理人员</h6>
+<span class="money">面议</span>
+</div>
+<div class="requirement">
+<span>本科</span> <span>若干人</span> </div>
+<div class="region">
+<span class="school">广州华商职业学院</span>
+<span class="city-place">
+<span class="city">广州</span>
+</span>
+</div>
+</a>
+</li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</ul>
+</div>
+
+
+
+
+</div>
+</div>
+
+</div>
+<!--加载vue和jquery-->
+<!--<script src="//img.gaoxiaojob.com/uploads/static/lib/jquery/jquery.min.js"></script>-->
+<!--<script src="//img.gaoxiaojob.com/uploads/static/lib/vue/vue.min.js"></script>-->
+<!--<script src="//img.gaoxiaojob.com/uploads/static/lib/element-plus/index.min.js?v=0.1"></script>-->
+<!--<script src="/static/js/index.js?v=0.5"></script>-->
+
+
+</div>
+</div>
+</div>
+
+
+
+
+
+<!--下面总是报错没有$所以特地在这里多加一个jquery的引入-->
+<!-- 弹窗登录 start -->
+
+
+
+
+<!-- 弹窗登录 end -->
+
+
+
+
+
+
+
+
+
+<!--<div id="applyActivityDialogTemplate" class="apply-dialog-template" v-cloak>-->
+<!--    <el-dialog v-model="dialogVisible" title="立即报名" :center="true">-->
+<!--        <el-form :model="resumeFormData" label-width="100px">-->
+<!--            <div class="education-tips" v-if="checkTextOne">{{checkTextOne}}</div>-->
+<!--            <el-form-item label="报名场次" v-if="isAnnouncement">-->
+<!--                <el-select v-model="resumeFormData.jobId" placeholder="选择场次" @change="changeJob">-->
+<!--                    <el-option v-for="{id, name} in announcementJobList" :key="id" :label="name" :value="id">-->
+<!--                    </el-option>-->
+<!--                </el-select>-->
+<!--            </el-form-item>-->
+<!--        </el-form>-->
+<!--        <template #footer>-->
+<!--            <div class="dialog-footer">-->
+<!--                <el-button  @click="close">取消</el-button>-->
+<!--                <el-button type="primary" :loading="confirmLoading" @click="handleDeliver" :disabled="!isDelivery">-->
+<!--                    确定-->
+<!--                </el-button>-->
+<!--            </div>-->
+<!--            <div class="dialog-tips" v-if="checkTextFive">-->
+<!--                {{checkTextFive}}-->
+<!--            </div>-->
+<!--        </template>-->
+<!--    </el-dialog>-->
+<!--</div>-->
+<!--<script defer>-->
+<!--    readyRun(function () {-->
+<!--            const applyDialogOptions = {-->
+<!--                data() {-->
+<!--                    return {-->
+<!--                        isAnnouncement: false,-->
+<!--                        dialogVisible: false,-->
+<!--                        resumePercent: 0,-->
+<!--                        limit: 5,-->
+<!--                        jobListApi: '/api/person/announcement/job-list',-->
+<!--                        beforeApi: '/api/person/member/check-user-apply-status',-->
+<!--                        applyApi: '/api/person/job/apply',-->
+<!--                        resumeUploadUrl: '/api/person/resume/upload',-->
+<!--                        attachmentUploadUrl: '/api/upload/resume-attachment',-->
+<!--                        resumeOptions: [],-->
+<!--                        announcementJobList: [],-->
+<!--                        resumeFormData: {-->
+<!--                            jobId: '',-->
+<!--                            token: '',-->
+<!--                            isDefault: '2',-->
+<!--                            stuffFileId: []-->
+<!--                        },-->
+<!--                        successCallback: null,-->
+<!--                        toastType: null,-->
+<!--                        checkTextOne: '',-->
+<!--                        checkTextTwo: '',-->
+<!--                        checkTextThree: '',-->
+<!--                        checkTextFour: '',-->
+<!--                        checkTextFive: '',-->
+<!--                        applyButtonStatus: null,-->
+<!--                        onLink: '',-->
+<!--                        isDelivery: false-->
+<!--                    }-->
+<!--                },-->
+<!--                methods: {-->
+<!--                    async getJobList(announcementId) {-->
+<!--                        const res = await httpGet(this.jobListApi, { announcementId })-->
+<!--                        this.announcementJobList = res-->
+<!--                        const jobId = this.announcementJobList?.map((item) => item.id)[0]-->
+<!--                        if (!jobId) {-->
+<!--                            this.$message.error('暂无职位可投递，敬请期待')-->
+<!--                        } else {-->
+<!--                            this.showApplyDialog(jobId)-->
+<!--                        }-->
+<!--                    },-->
+<!--                    // 页面调用申请之前-->
+<!--                    beforeApply(id, callback = () => { }) {-->
+<!--                        this.isAnnouncement = false-->
+<!--                        this.showApplyDialog(id, callback)-->
+<!--                    },-->
+<!--                    async showApplyDialog(id, callback = () => { }) {-->
+<!--                        const { toastType, checkTextOne, checkTextTwo, checkTextThree, checkTextFour, checkTextFive, defaultResumeAttachment, applyButtonStatus, resumeAttachmentList, onLink,isDelivery } = await httpPost(this.beforeApi, { jobId: id })-->
+<!--                        this.resumeOptions = resumeAttachmentList-->
+<!--                        this.resumeFormData.jobId = id-->
+<!--                        this.resumeFormData.token = defaultResumeAttachment-->
+<!--                        this.toastType = toastType-->
+<!--                        this.checkTextOne = checkTextOne-->
+<!--                        this.checkTextTwo = checkTextTwo-->
+<!--                        this.checkTextThree = checkTextThree-->
+<!--                        this.checkTextFour = checkTextFour-->
+<!--                        this.checkTextFive = checkTextFive-->
+<!--                        this.isDelivery=isDelivery-->
+<!--                        this.onLink = onLink-->
+<!--                        this.successCallback = callback-->
+<!--                        this.handleJobApply()-->
+<!--                    },-->
+<!--                    async announcementApply(id) {-->
+<!--                        this.isAnnouncement = true-->
+<!--                        this.getJobList(id)-->
+<!--                    },-->
+<!--                    handleJobApply() {-->
+<!--                        const { resumeFormData, successCallback, toastType, checkTextOne, checkTextTwo, checkTextThree, checkTextFour, checkTextFive, onLink } = this-->
+<!--                        if (this.isAnnouncement) {-->
+<!--                            if (toastType === 2 && onLink) {-->
+<!--                                this.checkTextFive = checkTextOne-->
+<!--                                this.checkTextOne = ''-->
+<!--                            }-->
+<!--                            this.dialogVisible = true-->
+<!--                        } else {-->
+<!--                            if (toastType === 1) {-->
+<!--                                this.dialogVisible = true-->
+<!--                            } else {-->
+<!--                                this.$confirm(checkTextOne, '简历投递', {-->
+<!--                                    cancelButtonText: '取消',-->
+<!--                                    confirmButtonText: '去投递',-->
+<!--                                    buttonSize: 'large'-->
+<!--                                }).then(async () => {-->
+<!--                                    await httpPost(this.applyApi, resumeFormData)-->
+<!--                                    successCallback()-->
+<!--                                    if (onLink) {-->
+<!--                                        window.open(onLink)-->
+<!--                                    }-->
+<!--                                }).catch(() => { })-->
+<!--                            }-->
+<!--                        }-->
+<!--                    },-->
+<!--                    handleDeliver() {-->
+<!--                        if (this.isAnnouncement && this.onLink) {-->
+<!--                            window.open(this.onLink)-->
+<!--                            this.dialogVisible = false-->
+<!--                            return-->
+<!--                        }-->
+<!--                        this.confirmLoading = true-->
+<!--                        const { resumeFormData: { stuffFileId, ...data } } = this-->
+<!--                        const postData = { ...data, stuffFileId: '' }-->
+<!--                        if (stuffFileId.length) {-->
+<!--                            const result = stuffFileId.reduce((previous, current) => {-->
+<!--                                previous.push(current.response.data.id)-->
+<!--                                return previous-->
+<!--                            }, [])-->
+<!--                            postData.stuffFileId = result.join()-->
+<!--                        }-->
+<!--                        httpPost(this.applyApi, postData).then(() => {-->
+<!--                            this.resumeFormData.stuffFileId = []-->
+<!--                            this.dialogVisible = false-->
+<!--                            if (!this.isAnnouncement) {-->
+<!--                                this.successCallback()-->
+<!--                            }-->
+<!--                            if (this.dialogTipsVisible) {-->
+<!--                                this.$alert(`已自动帮您添加该职位至“投递”&#45;&#45;“站外应聘”菜单，请稍后查看。`, '职位投递成功', {-->
+<!--                                    confirmButtonText: '我知道了',-->
+<!--                                    buttonSize: 'large'-->
+<!--                                })-->
+<!--                            } else {-->
+<!--                                this.$alert(``, '职位投递成功', {-->
+<!--                                    confirmButtonText: '我知道了',-->
+<!--                                    buttonSize: 'large'-->
+<!--                                })-->
+<!--                            }-->
+<!--                        }).catch(error => {-->
+<!--                            // this.$message.error(error)-->
+<!--                        })-->
+<!--                        this.confirmLoading = false-->
+<!--                    },-->
+<!--                    uploadResumeSuccess(response, file, fileList) {-->
+<!--                        const { data, msg, result } = response-->
+<!--                        if (result === 1) {-->
+<!--                            const { resumeOptions } = this-->
+<!--                            const { name, token } = data-->
+<!--                            this.resumeOptions = [...resumeOptions, { label: name ? name : file.name, value: token }]-->
+<!--                            this.resumeFormData.token = token-->
+<!--                            this.resumeFormData.isDefault = '1'-->
+<!--                        } else {-->
+<!--                            this.$message.error(msg)-->
+<!--                        }-->
+<!--                    },-->
+<!--                    changeJob(id) {-->
+<!--                        this.showApplyDialog(id)-->
+<!--                    },-->
+<!--                    uploadAttachSuccess(response, file, fileList) {-->
+<!--                        this.resumeFormData.stuffFileId = fileList-->
+<!--                    },-->
+<!--                    uploadAttachError(error, file, fileList) {-->
+<!--                        const { msg } = JSON.parse(error.message)-->
+<!--                        this.$message.error(msg)-->
+<!--                    },-->
+<!--                    uploadAttachRemove(file, fileList) {-->
+<!--                        this.resumeFormData.stuffFileId = fileList-->
+<!--                    },-->
+<!--                    uploadAttachExceed(files, uploadFiles) {-->
+<!--                        this.$message.warning(`目前只允许上传${this.limit}个应聘材料`)-->
+<!--                    },-->
+<!--                    beforeFileUpload(rawFile) {-->
+<!--                        if (rawFile.size / 1024 / 1024 > 20) {-->
+<!--                            this.$message.error('附件大小不能超过20M')-->
+<!--                            return false-->
+<!--                        }-->
+<!--                    },-->
+<!--                    close() {-->
+<!--                        this.dialogVisible = false-->
+<!--                    }-->
+<!--                }-->
+<!--            }-->
+<!--            const activeApplyDialogComponent = Vue.createApp(applyDialogOptions).use(ElementPlus).mount('#applyActivityDialogTemplate')-->
+<!--            window.globalComponents = { ...window.globalComponents, activeApplyDialogComponent }-->
+<!--    })-->
+<!--</script>-->
+
+
+
+
+<!--<div id="successDialogAlert" class="success-dialog-alert-template" v-cloak>-->
+<!--    <el-dialog v-model="wechatVisible" @close="handelWxClose">-->
+<!--        <div class="wechat-container" v-if="showWechatCode">-->
+<!--            <div class="tips">-->
+<!--                <strong>职位投递成功</strong>-->
+<!--            </div>-->
+<!--            <div class="qr-code" v-loading="loading">-->
+<!--                <img :src="urCodeUrl" alt="" />-->
+<!--                <img class="logo" src="https://img.gaoxiaojob.com/uploads/static/image/logo/logo_square.png" alt="" />-->
+<!--            </div>-->
+<!--            <div class="wechat-footer ft14 color-basic">-->
+<!--                <div class="tips">-->
+<!--                    <span>{{ applySuccessMsg }}</span>-->
+<!--                </div>-->
+<!--            </div>-->
+<!--        </div>-->
+<!--        <div class="wechat-container" v-else>-->
+<!--            <div class="tips">-->
+<!--                <strong>职位投递成功</strong>-->
+<!--            </div>-->
+<!--            <div class="relogin-content">-->
+<!--                <p class="write">{{ applySuccessMsg }}</p>-->
+<!--                <el-button type="primary" @click="removeWechat"> 我知道了 </el-button>-->
+<!--            </div>-->
+<!--        </div>-->
+<!--    </el-dialog>-->
+<!--</div>-->
+
+
+<!-- 返回顶部 start -->
+
+
+
+<!-- 返回顶部 end -->
+
+
+
+<!--    <script src="/static/js/growingIO.js"></script>-->
+
+<!-- todo 判断是否显示登录引导弹窗 -->
+<!--时间因子-->
+</div>
+ </div></body>
+</html>

@@ -9,7 +9,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from hunter1.application.ports import Crawler, JobRepository
@@ -30,6 +31,33 @@ class CrawlResult:
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+@dataclass
+class BatchCrawlResult:
+    """一轮多站点抓取的汇总。"""
+
+    results: list[CrawlResult] = field(default_factory=list)
+
+    @property
+    def fetched(self) -> int:
+        return sum(r.fetched for r in self.results)
+
+    @property
+    def created(self) -> int:
+        return sum(r.created for r in self.results)
+
+    @property
+    def updated(self) -> int:
+        return sum(r.updated for r in self.results)
+
+    @property
+    def failures(self) -> list[CrawlResult]:
+        return [r for r in self.results if not r.ok]
+
+    @property
+    def ok(self) -> bool:
+        return not self.failures
 
 
 def crawl_company(
@@ -104,4 +132,25 @@ def _company_id(raw: RawJob) -> str:
     return job_identity(detail_url="", company=raw.company, title="__company__")[:32]
 
 
-__all__ = ["CrawlResult", "crawl_company"]
+def crawl_all(
+    crawlers: Iterable[Crawler],
+    *,
+    jobs: JobRepository,
+    now: datetime | None = None,
+) -> BatchCrawlResult:
+    """跑一批适配器，逐个 upsert。
+
+    单站失败**不中断**整轮（`crawl_company` 已把异常收进 `CrawlResult.error`），
+    失败站点会出现在 `BatchCrawlResult.failures` 里 —— 不静默。
+
+    整批共用同一个 `timestamp`：这样同一轮抓到的新岗位，`first_seen_at` 完全
+    一致，事后能按「批次」还原「这一轮发生了什么」，而不是每个站点各自为政。
+    """
+    timestamp = now or datetime.now(UTC)
+    batch = BatchCrawlResult()
+    for crawler in crawlers:
+        batch.results.append(crawl_company(crawler, jobs=jobs, now=timestamp))
+    return batch
+
+
+__all__ = ["BatchCrawlResult", "CrawlResult", "crawl_all", "crawl_company"]

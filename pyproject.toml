@@ -33,6 +33,9 @@ packages = ["src/hunter1"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# `.rivet/` 是协作框架的本地工作区（会话备份、临时探针），不是项目源码；
+# 它的内容会随会话变动，扫进来只会制造噪音。
+extend-exclude = [".rivet"]
 
 [tool.ruff.lint]
 # 基础规则集：错误/未用导入/导入排序/命名/现代语法/bugbear/简化/Ruff 专有

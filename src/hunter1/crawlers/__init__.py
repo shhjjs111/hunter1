@@ -1,11 +1,39 @@
-"""站点抓取适配器：一个招聘站点一个模块。
+"""站点抓取适配器。
 
-每个适配器实现统一的 `Crawler` 协议（见 domain/ports），由 `infrastructure/crawler`
-统一调度、限流与资源治理。新增站点 = 新增一个文件 + 注册一行，不改核心代码。
+- `hunter1.crawlers.base` —— 适配器基类
+- `hunter1.crawlers.static_html` —— 通用静态列表页适配器（声明式规格）
+- `hunter1.crawlers.guards` —— 拦截/挑战页识别（不静默失败）
+- `hunter1.crawlers.registry` —— 已注册站点表 + 构造入口
 
-本目录在 M2 阶段开始填充（迁移旧系统的 64 个适配器）。
+新增站点：见 `registry.SITES`。
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from hunter1.crawlers.base import BaseCrawler
+from hunter1.crawlers.guards import CrawlBlockedError, detect_blocking, ensure_not_blocked
+from hunter1.crawlers.registry import (
+    SITES,
+    SiteDefinition,
+    available_sites,
+    build_all,
+    build_site,
+    get_site,
+)
+from hunter1.crawlers.static_html import ListPageSpec, StaticHtmlCrawler, parse_list_page
+
+__all__ = [
+    "SITES",
+    "BaseCrawler",
+    "CrawlBlockedError",
+    "ListPageSpec",
+    "SiteDefinition",
+    "StaticHtmlCrawler",
+    "available_sites",
+    "build_all",
+    "build_site",
+    "detect_blocking",
+    "ensure_not_blocked",
+    "get_site",
+    "parse_list_page",
+]

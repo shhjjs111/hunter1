@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from hunter1.application.crawl import CrawlResult, crawl_company
+from hunter1.application.crawl import BatchCrawlResult, CrawlResult, crawl_all, crawl_company
+from hunter1.crawlers.static_html import ListPageSpec, StaticHtmlCrawler
 from hunter1.domain.crawl import RawJob, job_identity
 from hunter1.domain.models import Job
 from hunter1.infrastructure.db import Database
@@ -141,3 +142,95 @@ def test_job_model_matches_identity_helper() -> None:
     """身份计算的两种路径（URL / 公司+标题）都不该抛错。"""
     assert job_identity(detail_url="", company="C", title="T")
     assert isinstance(Job, type)
+
+
+class TestCrawlAll:
+    """批量抓取：日更要跑几十个站点，单个失败不该中断整轮。"""
+
+    def test_aggregates_counts_across_crawlers(self, db: Database) -> None:
+        crawlers = [
+            FakeCrawler("甲", [_raw("A岗", "https://a.com/1"), _raw("B岗", "https://a.com/2")]),
+            FakeCrawler("乙", [_raw("C岗", "https://b.com/1")]),
+        ]
+        batch = crawl_all(crawlers, jobs=db.jobs())
+        assert batch.fetched == 3
+        assert batch.created == 3
+        assert batch.updated == 0
+        assert db.jobs().count() == 3
+        assert [r.company for r in batch.results] == ["甲", "乙"]
+
+    def test_one_failure_does_not_stop_others(self, db: Database) -> None:
+        crawlers = [
+            FakeCrawler("甲", [], boom=True),
+            FakeCrawler("乙", [_raw("C岗", "https://b.com/1")]),
+        ]
+        batch = crawl_all(crawlers, jobs=db.jobs())
+        assert batch.fetched == 1  # 乙照常抓到
+        assert db.jobs().count() == 1
+        assert [r.company for r in batch.failures] == ["甲"]
+        assert len(batch.results) == 2
+        assert batch.ok is False
+
+    def test_all_ok_flag(self, db: Database) -> None:
+        batch = crawl_all([FakeCrawler("甲", [_raw("A岗", "https://a.com/1")])], jobs=db.jobs())
+        assert batch.ok is True
+        assert batch.failures == []
+
+    def test_empty_batch_is_ok(self, db: Database) -> None:
+        batch = crawl_all([], jobs=db.jobs())
+        assert isinstance(batch, BatchCrawlResult)
+        assert batch.results == []
+        assert batch.fetched == 0
+        assert batch.ok is True
+
+    def test_second_run_updates_instead_of_duplicating(self, db: Database) -> None:
+        crawlers = [FakeCrawler("甲", [_raw("A岗", "https://a.com/1")])]
+        crawl_all(crawlers, jobs=db.jobs())
+        batch = crawl_all(crawlers, jobs=db.jobs())
+        assert batch.created == 0
+        assert batch.updated == 1
+        assert db.jobs().count() == 1
+
+    def test_batch_shares_one_timestamp(self, db: Database) -> None:
+        """同一批次里两个站点的 first_seen 应完全相同 —— 用同一个批次时刻。"""
+        crawlers = [
+            FakeCrawler("甲", [_raw("A岗", "https://a.com/1")]),
+            FakeCrawler("乙", [_raw("C岗", "https://b.com/1")]),
+        ]
+        crawl_all(crawlers, jobs=db.jobs())
+        first = db.jobs().get(job_identity(detail_url="https://a.com/1"))
+        second = db.jobs().get(job_identity(detail_url="https://b.com/1"))
+        assert first is not None and second is not None
+        assert first.first_seen_at == second.first_seen_at
+
+
+class _FixedFetcher:
+    def __init__(self, html: str) -> None:
+        self.html = html
+
+    def get_text(self, url: str, **_kw: object) -> str:
+        return self.html
+
+
+CHALLENGE_PAGE = (
+    '<html><head><title id="pageTitle">安全验证 - BOSS直聘</title></head>'
+    '<body><div class="verify-row-code">请完成安全验证</div></body></html>'
+)
+
+
+def test_blocked_page_is_reported_as_error_not_empty_result(db: Database) -> None:
+    """被风控拦下时必须报错 —— 「被拦截」和「今天没岗位」不能长得一样。"""
+    crawler = StaticHtmlCrawler(
+        company="某站",
+        careers_url="https://site.com/jobs",
+        spec=ListPageSpec(
+            url_template="https://site.com/jobs",
+            item_selector="li.job",
+            title_selector="a.t",
+        ),
+        fetcher=_FixedFetcher(CHALLENGE_PAGE),
+    )
+    result = crawl_company(crawler, jobs=db.jobs())
+    assert result.error is not None
+    assert "blocked" in result.error
+    assert result.fetched == 0
