@@ -1,0 +1,201 @@
+"""组装处集成测试 —— 切片 API 在真实 app 里端到端可达。
+
+与各切片自己的 router 测试的区别：那些测「切片作为独立单元」，
+这里测**组装后的整体** —— 路由挂载、前缀、依赖装配、与旧 SSR 页面共存。
+
+不 mock 中间层：真 SQLite、真路由表、真依赖装配；只有外部世界（模型、站点）
+用替身。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from hunter1.domain.crawl import RawJob
+from hunter1.domain.llm import LLMResponse
+from hunter1.domain.models import Job
+from hunter1.platform.db import Database
+from hunter1.slices.scoring.models import CandidateProfile
+from hunter1.web.app import create_app
+from hunter1.web.context import AppContext
+
+NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+JOB_ID = "i" * 32
+
+
+class _FakeFetcher:
+    def get_text(self, url: str, **_kw: object) -> str:
+        return "<html></html>"
+
+
+class _FakeCrawler:
+    """一个能产出岗位的假抓取器（真链路：走 crawl 用例落库）。"""
+
+    key = "fake_site"
+    company = "假站点"
+    careers_url = "https://fake.example.com/jobs"
+
+    def fetch(self) -> list[RawJob]:
+        return [RawJob(company="假公司", title="假岗位", detail_url="https://fake.example.com/j/1")]
+
+
+class _FakeLLM:
+    def complete_structured(self, **_kw: Any) -> LLMResponse:
+        return LLMResponse(content='{"score": 66, "summary": "还行"}', model="fake")
+
+    def complete_with_tools(self, **_kw: Any) -> LLMResponse:
+        return LLMResponse(content="助手回复", model="fake")
+
+    def stream_with_tools(self, **_kw: Any) -> Iterator[Any]:
+        from hunter1.domain.llm import StreamComplete, TextDelta
+
+        yield TextDelta("助手")
+        yield TextDelta("回复")
+        yield StreamComplete(content="助手回复", model="fake")
+
+
+@pytest.fixture()
+def client(tmp_path: Path) -> Iterator[tuple[TestClient, Database]]:
+    db = Database(tmp_path / "integration.db")
+    db.initialize()
+    db.jobs().upsert(
+        Job(
+            id=JOB_ID,
+            company_id="c1",
+            title="集成测试岗",
+            detail_url="https://x/1",
+            source="实习僧",
+            company_name="集成公司",
+            last_seen_at=NOW,
+        )
+    )
+    context = AppContext(
+        db=db,
+        fetcher=_FakeFetcher(),
+        llm_factory=lambda _settings: _FakeLLM(),  # type: ignore[arg-type,return-value]
+        clock=lambda: NOW,
+        candidate_profile=CandidateProfile(keywords=["集成"], summary="集成测试画像"),
+    )
+    # 让评分端点有可用的「模型配置」（否则 _slice_llm 会抛「模型未配置」）
+    from hunter1.domain.settings import LLMSettings
+
+    db.settings().save_llm(
+        LLMSettings(base_url="https://api.example.com/v1", model="m", api_key="sk-x")
+    )
+
+    app = create_app(context)
+    # 抓取 runner 的工厂指向假抓取器（真链路，只换站点）
+    app.state.runner._crawler_factory = lambda: [_FakeCrawler()]  # type: ignore[attr-defined]
+    with TestClient(app) as test_client:
+        yield test_client, db
+
+
+class TestSliceApisAreMounted:
+    """五个切片的路由都要在组装后可达 —— 缺一个就是「接了一半」。"""
+
+    def test_jobs_list(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        response = test_client.get("/api/jobs")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["items"][0]["company"] == "集成公司"
+
+    def test_job_detail_and_apply(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, db = client
+        assert test_client.get(f"/api/jobs/{JOB_ID}").status_code == 200
+        assert test_client.post(f"/api/jobs/{JOB_ID}/apply").status_code == 201
+        assert db.applications().count() == 1
+
+    def test_applications_list(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        test_client.post(f"/api/jobs/{JOB_ID}/apply")
+        payload = test_client.get("/api/applications").json()
+        assert len(payload["items"]) == 1
+        assert payload["items"][0]["company"] == "集成公司"
+
+    def test_application_stage_flow(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        application_id = test_client.post(f"/api/jobs/{JOB_ID}/apply").json()["application_id"]
+        response = test_client.post(
+            f"/api/applications/{application_id}/stage",
+            json={"stage": "interview", "note": "一面"},
+        )
+        assert response.status_code == 200
+        assert response.json()["stage"] == "interview"
+
+    def test_scoring_endpoint(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, db = client
+        response = test_client.post(f"/api/scoring/{JOB_ID}")
+        assert response.status_code == 200
+        assert response.json()["score"] == 66
+        reloaded = db.jobs().get(JOB_ID)
+        assert reloaded is not None and reloaded.match_score == 66
+
+    def test_crawl_status(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        payload = test_client.get("/api/crawl/status").json()
+        assert payload["running"] is False
+
+    def test_assistant_conversations(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        assert test_client.get("/api/assistant/conversations").json() == []
+
+
+class TestRealCrawlThroughApi:
+    """抓取端点跑的是**真链路**：runner → crawl 用例 → SQLite。"""
+
+    def test_crawl_lands_jobs_in_db(self, client) -> None:  # type: ignore[no-untyped-def]
+        import time
+
+        test_client, db = client
+        assert test_client.post("/api/crawl").json()["started"] is True
+
+        deadline = time.monotonic() + 10
+        while (
+            test_client.get("/api/crawl/status").json()["running"] and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+
+        # 库里多了假站点抓到的那条岗位
+        assert db.jobs().count() == 2
+        payload = test_client.get("/api/jobs", params={"q": "假岗位"}).json()
+        assert payload["total"] == 1
+
+
+class TestAssistantStreamThroughApi:
+    def test_sse_stream_completes_and_persists(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, db = client
+        response = test_client.post("/api/assistant/stream", json={"message": "你好"})
+        assert response.status_code == 200
+        assert "助手回复" in response.text
+        assert '"type": "done"' in response.text
+        assert len(db.conversations().list()) == 1
+
+
+class TestTransitionCoexistence:
+    """过渡期：切片 API 与旧 SSR 页面共存于同一 app（Wave 6 删旧页面前的状态）。"""
+
+    def test_legacy_pages_still_render(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        for path, needle in (
+            ("/", "岗位库"),
+            ("/crawl", "开始抓取"),
+            ("/applications", "投递记录"),
+        ):
+            response = test_client.get(path)
+            assert response.status_code == 200, f"{path} 挂了"
+            assert needle in response.text, f"{path} 内容不含「{needle}」"
+
+    def test_api_and_legacy_share_one_database(self, client) -> None:  # type: ignore[no-untyped-def]
+        """两条路径读的是同一个库 —— 否则接口与页面会各说各话。"""
+        test_client, _db = client
+        test_client.post(f"/api/jobs/{JOB_ID}/apply")
+        # 旧投递页面应看到 API 写入的这条记录
+        assert "集成公司" in test_client.get("/applications").text

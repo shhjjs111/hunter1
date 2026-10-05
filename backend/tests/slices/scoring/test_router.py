@@ -59,7 +59,10 @@ def db(tmp_path: Path) -> Database:
 
 def _client(db: Database, llm: FakeLLM) -> Iterator[TestClient]:
     app = FastAPI()
-    app.include_router(build_router(store=ScoreStore(db), llm=llm, profile=PROFILE), prefix="/api")
+    app.include_router(
+        build_router(store=ScoreStore(db), llm_factory=lambda: llm, profile=PROFILE),
+        prefix="/api",
+    )
     with TestClient(app) as test_client:
         yield test_client
 
@@ -119,7 +122,8 @@ class TestUnexpectedFailure:
 
         app = FastAPI()
         app.include_router(
-            build_router(store=ScoreStore(db), llm=BrokenLLM(), profile=PROFILE), prefix="/api"
+            build_router(store=ScoreStore(db), llm_factory=BrokenLLM, profile=PROFILE),
+            prefix="/api",
         )
         with TestClient(app, raise_server_exceptions=False) as client:
             assert client.post(f"/api/scoring/{JOB_ID}").status_code == 500

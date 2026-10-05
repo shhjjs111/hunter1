@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, HTTPException
 
 from hunter1.application.ports import LLMProvider
@@ -16,8 +18,17 @@ from hunter1.slices.scoring.service import score_job
 from hunter1.slices.scoring.store import ScoreStore
 
 
-def build_router(*, store: ScoreStore, llm: LLMProvider, profile: CandidateProfile) -> APIRouter:
-    """构造 scoring 的 APIRouter（依赖由组装处注入）。"""
+def build_router(
+    *,
+    store: ScoreStore,
+    llm_factory: Callable[[], LLMProvider],
+    profile: CandidateProfile,
+) -> APIRouter:
+    """构造 scoring 的 APIRouter（依赖由组装处注入）。
+
+    `llm_factory` 而不是 llm 实例：模型配置是**运行时可变的**（用户在设置页改
+    API Key / 换模型），每次请求取当前配置构造客户端，改了立刻生效。
+    """
     router = APIRouter()
 
     @router.post("/scoring/{job_id}", summary="给一个岗位评分并写回")
@@ -26,7 +37,7 @@ def build_router(*, store: ScoreStore, llm: LLMProvider, profile: CandidateProfi
         if job is None:
             raise HTTPException(status_code=404, detail=f"岗位不存在：{job_id}")
         try:
-            card = score_job(job=job, profile=profile, llm=llm)
+            card = score_job(job=job, profile=profile, llm=llm_factory())
         except ScoringError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         store.save_score(job_id, card.score)

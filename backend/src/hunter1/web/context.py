@@ -17,6 +17,7 @@ from hunter1.application.ports import Crawler, LLMProvider, TextFetcher
 from hunter1.crawlers.registry import build_all
 from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db import Database
+from hunter1.slices.scoring.models import CandidateProfile
 
 
 def _now() -> datetime:
@@ -49,6 +50,11 @@ class AppContext:
     site_keys: list[str] | None = None
     assistant_history_limit: int = 20
     page_size: int = 20
+    # 候选画像：评分的输入。为 None 时 scoring 切片的端点不挂载
+    # （「没接线」表现为「端点不存在」，而不是「端点存在但总是报错」——
+    #   与 job_tools 里 applications 工具的处理同一原则）。
+    # 画像的持久化与编辑界面尚未实现，见 slices/scoring/SLICE.md 的迁移注。
+    candidate_profile: CandidateProfile | None = None
 
     def crawler_factory(self) -> list[Crawler]:
         """构造本轮要跑的抓取器（默认全部注册站点）。"""
@@ -61,6 +67,7 @@ class AppContext:
         db_path: str | Path,
         site_keys: list[str] | None = None,
         fetcher: TextFetcher | None = None,
+        candidate_profile: CandidateProfile | None = None,
     ) -> AppContext:
         """按本机默认配置装配（真实 SQLite + 真实 HTTP 抓取器）。"""
         database = Database(db_path)
@@ -69,7 +76,12 @@ class AppContext:
             from hunter1.platform.fetch.http import HttpFetcher
 
             fetcher = HttpFetcher(timeout=20, retries=2)
-        return cls(db=database, fetcher=fetcher, site_keys=site_keys)
+        return cls(
+            db=database,
+            fetcher=fetcher,
+            site_keys=site_keys,
+            candidate_profile=candidate_profile,
+        )
 
 
 __all__ = ["AppContext"]

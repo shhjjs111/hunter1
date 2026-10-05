@@ -30,22 +30,29 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from hunter1.application.applications import change_stage, new_application
-from hunter1.application.assistant import (
+from hunter1.domain.assistant import Message, Role
+from hunter1.domain.llm import TextDelta
+from hunter1.domain.models import ApplicationStage, Job
+from hunter1.domain.settings import LLMSettings
+from hunter1.slices.applications.router import build_router as build_applications_router
+from hunter1.slices.applications.store import ApplicationStore
+from hunter1.slices.assistant.job_tools import build_tools
+from hunter1.slices.assistant.router import build_router as build_assistant_router
+from hunter1.slices.assistant.service import (
     ToolFinished,
     ToolStarted,
     TurnDone,
     run_turn,
     run_turn_stream,
 )
-from hunter1.application.job_tools import build_tools
-from hunter1.domain.assistant import Message, Role
-from hunter1.domain.llm import TextDelta
-from hunter1.domain.models import ApplicationStage, Job
-from hunter1.domain.settings import LLMSettings
+from hunter1.slices.assistant.store import ConversationStore
+from hunter1.slices.crawl.router import build_router as build_crawl_router
+from hunter1.slices.crawl.runner import CrawlRunner
 from hunter1.slices.jobs.router import build_router as build_jobs_router
 from hunter1.slices.jobs.store import JobStore
+from hunter1.slices.scoring.router import build_router as build_scoring_router
+from hunter1.slices.scoring.store import ScoreStore
 from hunter1.web.context import AppContext
-from hunter1.web.crawl_runner import CrawlRunner
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -76,12 +83,51 @@ def create_app(context: AppContext) -> FastAPI:
     app.state.context = context
     app.state.runner = runner
 
-    # ---- 切片 API（JSON）—— 过渡期与旧 SSR 页面共存于同一 app ----
+    # ---- 切片 API（JSON / SSE）—— 过渡期与旧 SSR 页面共存于同一 app ----
     # 组装处注入依赖：切片不 import web（依赖方向 web → slices）。
+    def _slice_llm() -> object:
+        """取当前模型配置构造客户端。
+
+        运行时可变的配置（用户在设置页换 key / 换模型）必须**每次请求重读** ——
+        启动时缓存一个客户端会让改配置要重启才生效。
+        """
+        settings = context.db.settings().get_llm()
+        if settings is None or not settings.is_configured:
+            raise RuntimeError("模型未配置：请先在「配置」页填好 base_url / 模型 / API Key")
+        return context.llm_factory(settings)
+
     app.include_router(
         build_jobs_router(store=JobStore(context.db), clock=context.clock),
         prefix="/api",
     )
+    app.include_router(
+        build_crawl_router(runner=runner),
+        prefix="/api",
+    )
+    app.include_router(
+        build_applications_router(store=ApplicationStore(context.db), clock=context.clock),
+        prefix="/api",
+    )
+    app.include_router(
+        build_assistant_router(
+            store=ConversationStore(context.db),
+            llm_factory=_slice_llm,  # type: ignore[arg-type]
+            tools=build_tools(jobs=context.db.jobs(), applications=context.db.applications()),
+            history_limit=context.assistant_history_limit,
+        ),
+        prefix="/api",
+    )
+    # 画像未配置时不挂评分端点：「没接线」表现为「端点不存在」，
+    # 而不是「端点存在但总是报错」（与 job_tools 里 applications 工具同一原则）。
+    if context.candidate_profile is not None:
+        app.include_router(
+            build_scoring_router(
+                store=ScoreStore(context.db),
+                llm_factory=_slice_llm,  # type: ignore[arg-type]
+                profile=context.candidate_profile,
+            ),
+            prefix="/api",
+        )
 
     def render(request: Request, name: str, **extra: object) -> HTMLResponse:
         return templates.TemplateResponse(
