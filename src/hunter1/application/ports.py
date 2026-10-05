@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from hunter1.domain.assistant import Message
 from hunter1.domain.crawl import RawJob
 from hunter1.domain.llm import LLMResponse
 from hunter1.domain.models import Company, Job
@@ -67,7 +68,7 @@ class Crawler(Protocol):
 class LLMProvider(Protocol):
     """大模型能力的最小契约。
 
-    应用层只依赖这两个方法，因此换厂商（OpenAI / DeepSeek / 通义 / 智谱 / 自建网关…）
+    应用层只依赖这几个方法，因此换厂商（OpenAI / DeepSeek / 通义 / 智谱 / 自建网关…）
     不需要改任何用例代码；测试可注入假实现，完全离线。
     """
 
@@ -85,6 +86,14 @@ class LLMProvider(Protocol):
         system_prompt: str,
         user_prompt: str,
         schema: dict[str, Any],
+        max_tokens: int | None = None,
+    ) -> LLMResponse: ...
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
         max_tokens: int | None = None,
     ) -> LLMResponse: ...
 

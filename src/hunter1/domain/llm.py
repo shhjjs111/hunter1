@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from hunter1.domain.assistant import ToolCall
 
 
 class LLMError(RuntimeError):
@@ -20,13 +22,22 @@ class LLMError(RuntimeError):
 
 @dataclass
 class LLMResponse:
-    """一次模型调用的结果。"""
+    """一次模型调用的结果。
+
+    `content` 与 `tool_calls` 可以同时存在（有些模型会先说话再调工具），
+    也可能只有其一（纯回答 / 纯工具调用）。
+    """
 
     content: str
     model: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
     input_tokens: int | None = None
     output_tokens: int | None = None
     structured_mode: str | None = None
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
 
 
 __all__ = ["LLMError", "LLMResponse"]

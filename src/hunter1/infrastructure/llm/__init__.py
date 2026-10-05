@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from hunter1.domain.assistant import Message, ToolCall, parse_tool_calls, to_openai_messages
 from hunter1.domain.llm import LLMError, LLMResponse
 
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
@@ -119,6 +120,37 @@ class OpenAICompatibleClient:
         return LLMResponse(
             content=_extract_content(data),
             model=str(data.get("model") or self.model),
+            tool_calls=_extract_tool_calls(data),
+            input_tokens=_usage(data, "prompt_tokens"),
+            output_tokens=_usage(data, "completion_tokens"),
+        )
+
+    # ---- 带工具（function calling）----
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """带工具定义的调用。工具调用与文本回复都可能出现在响应里。"""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": to_openai_messages(messages),
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        data = self._post(payload)
+        return LLMResponse(
+            content=_extract_content_lenient(data),
+            model=str(data.get("model") or self.model),
+            tool_calls=_extract_tool_calls(data),
             input_tokens=_usage(data, "prompt_tokens"),
             output_tokens=_usage(data, "completion_tokens"),
         )
@@ -274,6 +306,19 @@ def _prompt_only_instruction(user_prompt: str, schema: dict[str, Any]) -> str:
 
 
 def _extract_content(data: dict[str, Any]) -> str:
+    """纯文本调用：内容为空视为失败。"""
+    content = _raw_message_content(data)
+    if not content.strip():
+        raise LLMError("response_empty")
+    return content
+
+
+def _extract_content_lenient(data: dict[str, Any]) -> str:
+    """带工具的调用：内容可以为空（模型只调工具、不说话）。"""
+    return _raw_message_content(data)
+
+
+def _raw_message_content(data: dict[str, Any]) -> str:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise LLMError("response_invalid")
@@ -284,9 +329,28 @@ def _extract_content(data: dict[str, Any]) -> str:
     if not isinstance(message, dict):
         raise LLMError("response_invalid")
     content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise LLMError("response_empty")
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        raise LLMError("response_invalid")
     return content
+
+
+def _extract_tool_calls(data: dict[str, Any]) -> list[ToolCall]:
+    """从响应里解析工具调用；没有则返回空列表。"""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    first = choices[0]
+    if not isinstance(first, dict):
+        return []
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return []
+    raw = message.get("tool_calls")
+    if not isinstance(raw, list):
+        return []
+    return parse_tool_calls(raw)
 
 
 def _parse_json_payload(content: str) -> Any:
