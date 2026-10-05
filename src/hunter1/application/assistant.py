@@ -11,15 +11,21 @@
 - **工具失败不中断对话**：错误作为工具结果回灌，让模型自己纠正。
 - **有刹车**：模型若陷入无限工具调用，达到 `max_iterations` 即停并给兜底回复。
 - **换厂商不用改代码**：只依赖 `LLMProvider` 端口。
+- **两种交付方式共用同一套语义**：`run_turn` 一次性给结果（无 JS 时的回退路径），
+  `run_turn_stream` 边发生边给（界面的逐字输出）。事件序列的形状是固定的：
+  若干 `TextDelta` / `ToolStarted` / `ToolFinished`，最后一个 `TurnDone`。
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 from hunter1.application.ports import LLMProvider
 from hunter1.application.tools import ToolRegistry
 from hunter1.domain.assistant import Message, Role, ToolResult
+from hunter1.domain.llm import LLMError, StreamComplete, TextDelta
 
 DEFAULT_SYSTEM_PROMPT = """你是 Hunter1 的求职助手，帮用户管理秋招投递。
 
@@ -45,6 +51,45 @@ class AssistantResult:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+@dataclass
+class ToolStarted:
+    """模型决定调用一个工具（还没执行完）。
+
+    把它和 `ToolFinished` 分开，是为了让界面能显示「正在查询岗位库…」——
+    否则工具耗时的那几秒里用户只看到一片空白。
+    """
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolFinished:
+    """一个工具执行完毕。失败原因在 `error` 里，不混进 `content`。"""
+
+    name: str
+    ok: bool
+    content: str = ""
+    error: str | None = None
+
+
+@dataclass
+class TurnDone:
+    """一轮对话结束（始终是事件流的最后一个）。"""
+
+    reply: str
+    tool_results: list[ToolResult] = field(default_factory=list)
+    truncated: bool = False
+    model: str | None = None
+    degraded: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+# 一轮对话按序产出的事件。
+AssistantEvent = TextDelta | ToolStarted | ToolFinished | TurnDone
 
 
 def run_turn(
@@ -109,9 +154,101 @@ def run_turn(
     )
 
 
+def run_turn_stream(
+    *,
+    llm: LLMProvider,
+    registry: ToolRegistry,
+    messages: list[Message],
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+) -> Iterator[AssistantEvent]:
+    """跑一轮助手对话，把过程**边发生边交出来**。
+
+    与 `run_turn` 的差别只在交付方式，不在语义：文本增量一到就吐，工具执行
+    前后各吐一个事件，最后吐 `TurnDone`。界面因此可以逐字显示，并在工具
+    耗时的空档里显示「正在查询…」，而不是干等整轮结束。
+
+    这是生成器：真正的工作在迭代时发生。因此调用方要负责把异常接住 ——
+    流式端点的异常发生在响应已经开始之后，没法再走「重定向 + 错误横幅」。
+    """
+    if not messages:
+        raise ValueError("assistant turn requires at least one message")
+
+    conversation: list[Message] = [Message(role=Role.SYSTEM, content=system_prompt), *messages]
+    tools = registry.openai_tools()
+    tool_results: list[ToolResult] = []
+    model: str | None = None
+    input_tokens = 0
+    output_tokens = 0
+    degraded = False
+
+    for iteration in range(1, max_iterations + 1):
+        spoken = ""
+        completion: StreamComplete | None = None
+
+        for event in llm.stream_with_tools(messages=conversation, tools=tools):
+            if isinstance(event, TextDelta):
+                spoken += event.text
+                yield event
+            else:
+                completion = event
+
+        if completion is None:
+            # 端口契约：一次流式调用必须以 StreamComplete 收尾。
+            # 拿不到就说明实现坏了，宁可报错也不要静默用半截内容继续。
+            raise LLMError("stream_incomplete", "provider ended the stream without a completion")
+
+        model = completion.model or model
+        input_tokens += completion.input_tokens or 0
+        output_tokens += completion.output_tokens or 0
+        degraded = degraded or completion.degraded
+
+        if not completion.has_tool_calls:
+            yield TurnDone(
+                reply=spoken or completion.content,
+                tool_results=tool_results,
+                model=model,
+                degraded=degraded,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            return
+
+        conversation.append(
+            Message(role=Role.ASSISTANT, content=spoken, tool_calls=completion.tool_calls)
+        )
+
+        for call in completion.tool_calls:
+            yield ToolStarted(name=call.name, arguments=call.arguments)
+            result = registry.invoke(call.name, call.arguments, call_id=call.id)
+            tool_results.append(result)
+            yield ToolFinished(
+                name=result.name, ok=result.ok, content=result.content, error=result.error
+            )
+            conversation.append(result.as_message())
+
+        if iteration == max_iterations:
+            break
+
+    yield TurnDone(
+        reply=_TRUNCATED_REPLY,
+        tool_results=tool_results,
+        truncated=True,
+        model=model,
+        degraded=degraded,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
 __all__ = [
     "DEFAULT_MAX_ITERATIONS",
     "DEFAULT_SYSTEM_PROMPT",
+    "AssistantEvent",
     "AssistantResult",
+    "ToolFinished",
+    "ToolStarted",
+    "TurnDone",
     "run_turn",
+    "run_turn_stream",
 ]

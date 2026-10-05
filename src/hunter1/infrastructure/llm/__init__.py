@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -22,7 +22,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from hunter1.domain.assistant import Message, ToolCall, parse_tool_calls, to_openai_messages
-from hunter1.domain.llm import LLMError, LLMResponse
+from hunter1.domain.llm import LLMError, LLMResponse, StreamComplete, TextDelta
+from hunter1.infrastructure.llm.streaming import parse_sse_lines
 
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 STRUCTURED_MODES = ("json_schema", "json_object", "none")
@@ -153,6 +154,118 @@ class OpenAICompatibleClient:
             tool_calls=_extract_tool_calls(data),
             input_tokens=_usage(data, "prompt_tokens"),
             output_tokens=_usage(data, "completion_tokens"),
+        )
+
+    # ---- 带工具的流式（不支持时自动降级）----
+
+    def stream_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        max_tokens: int | None = None,
+    ) -> Iterator[TextDelta | StreamComplete]:
+        """带工具的流式调用：先吐增量文本，最后吐一个完整结果。
+
+        契约是**这个方法永远可用**：厂商不支持 streaming 时（400）、网关把
+        streaming 剥掉了、或连接建不起来，它会退化为一次非流式调用，把结果
+        作为「一个 TextDelta + StreamComplete(degraded=True)」交出来。
+        调用方因此不必自己判断「这家厂商支不支持流式」。
+
+        与 `complete_with_tools` 的差别只在**怎么拿到结果**，不在**拿到什么**：
+        降级路径同样保留工具调用 —— 否则助手会悄悄退化成「只会聊天」。
+
+        刻意不做重试：流已经吐了一部分再重试会重复输出。连接建立阶段的失败
+        改走非流式降级路径，那边自带重试，足以覆盖「代理不支持流式」这类故障。
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": to_openai_messages(messages),
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
+        try:
+            with self._client.stream("POST", url, headers=headers, json=payload) as response:
+                if response.status_code >= 400:
+                    response.read()  # 先读完，连接才能复用
+                    if response.status_code == 400 or response.status_code in TRANSIENT_STATUS:
+                        # 400：多半是这家不接受 stream；429/5xx：暂时性故障，
+                        # 交给非流式路径重试。两者都走降级。
+                        yield from self._degraded_stream(
+                            messages=messages, tools=tools, max_tokens=max_tokens
+                        )
+                        return
+                    raise LLMError(f"http_{response.status_code}", _short(response.text))
+
+                content_type = response.headers.get("content-type", "")
+                if "event-stream" in content_type.lower():
+                    yield from parse_sse_lines(response.iter_lines(), default_model=self.model)
+                    return
+                body = response.read()
+        except httpx.HTTPError:
+            yield from self._degraded_stream(messages=messages, tools=tools, max_tokens=max_tokens)
+            return
+
+        yield from self._stream_from_body(body)
+
+    def _stream_from_body(self, body: bytes) -> Iterator[TextDelta | StreamComplete]:
+        """响应体不是 SSE 分支时的处理。
+
+        两种真实情况：网关忽略了 `stream: true` 直接回 JSON；或代理没带
+        `content-type` 但正文其实是 SSE。先按 JSON 试，失败再按 SSE 试。
+        """
+        try:
+            data = json.loads(body)
+        except ValueError:
+            yield from parse_sse_lines(
+                body.decode("utf-8", "replace").splitlines(), default_model=self.model
+            )
+            return
+
+        if not isinstance(data, dict):
+            raise LLMError("response_invalid")
+        content = _extract_content_lenient(data)
+        if content:
+            yield TextDelta(content)
+        yield StreamComplete(
+            content=content,
+            model=str(data.get("model") or self.model),
+            tool_calls=_extract_tool_calls(data),
+            input_tokens=_usage(data, "prompt_tokens"),
+            output_tokens=_usage(data, "completion_tokens"),
+            degraded=True,
+        )
+
+    def _degraded_stream(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        max_tokens: int | None,
+    ) -> Iterator[TextDelta | StreamComplete]:
+        """非流式兜底：把一次性结果包成同形状的事件流。"""
+        response = self.complete_with_tools(messages=messages, tools=tools, max_tokens=max_tokens)
+        if response.content:
+            yield TextDelta(response.content)
+        yield StreamComplete(
+            content=response.content,
+            model=response.model,
+            tool_calls=response.tool_calls,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            degraded=True,
         )
 
     # ---- 结构化输出（带降级链）----

@@ -7,11 +7,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, Protocol, runtime_checkable
 
 from hunter1.domain.assistant import Message
 from hunter1.domain.crawl import RawJob
-from hunter1.domain.llm import LLMResponse
+from hunter1.domain.llm import LLMResponse, StreamComplete, TextDelta
 from hunter1.domain.models import Application, Company, Job
 from hunter1.domain.settings import LLMSettings
 
@@ -99,6 +100,9 @@ class LLMProvider(Protocol):
 
     应用层只依赖这几个方法，因此换厂商（OpenAI / DeepSeek / 通义 / 智谱 / 自建网关…）
     不需要改任何用例代码；测试可注入假实现，完全离线。
+
+    `stream_with_tools` 的承诺是**始终可用**：厂商不支持流式时由实现自行退化
+    （见 `infrastructure.llm`），调用方不必判断「这家支不支持流式」。
     """
 
     def complete(
@@ -125,6 +129,14 @@ class LLMProvider(Protocol):
         tools: list[dict[str, Any]],
         max_tokens: int | None = None,
     ) -> LLMResponse: ...
+
+    def stream_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        max_tokens: int | None = None,
+    ) -> Iterator[TextDelta | StreamComplete]: ...
 
 
 __all__ = [

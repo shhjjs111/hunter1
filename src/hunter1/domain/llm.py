@@ -40,4 +40,43 @@ class LLMResponse:
         return bool(self.tool_calls)
 
 
-__all__ = ["LLMError", "LLMResponse"]
+@dataclass
+class TextDelta:
+    """模型输出的一段增量文本。"""
+
+    text: str
+
+
+@dataclass
+class StreamComplete:
+    """流结束时给出的完整结果。
+
+    `degraded=True` 表示**这家厂商没能真正流式输出**（不支持、网关剥离了
+    streaming、或连接建不起来），内容是一次性拿到的。规划 §6.1 要求
+    「降级要如实告知用户」，所以这是一个对外可观察的事实，而不是内部细节 ——
+    界面据此决定要不要提示「本次回答不是逐字出现的」。
+    """
+
+    content: str
+    model: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    degraded: bool = False
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
+
+
+# 一次流式调用会按序产出：若干 TextDelta，最后一个 StreamComplete。
+LLMStreamEvent = TextDelta | StreamComplete
+
+
+__all__ = [
+    "LLMError",
+    "LLMResponse",
+    "LLMStreamEvent",
+    "StreamComplete",
+    "TextDelta",
+]
