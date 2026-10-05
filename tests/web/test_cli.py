@@ -120,6 +120,62 @@ class TestBrowserTimer:
             timer.cancel()
 
 
+class TestServeReleasesDatabase:
+    """`_serve` 必须和 `_crawl` 一样释放数据库连接。
+
+    不释放的代价是可观测的：SQLite 的 WAL 模式下，连接没关就留下
+    `-wal` / `-shm` 两个文件（实测：dispose 后只剩 `.db`，不 dispose 则三个都在）。
+    这对「删目录即卸载」的便携定位是个瑕疵。
+
+    更关键的是**执行路径**：`uvicorn.run()` 是常驻的，用户按 Ctrl+C 时抛的是
+    `KeyboardInterrupt`，正常返回路径根本走不到 —— 所以清理必须放在 `finally`。
+    """
+
+    def _served(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: BaseException):
+        import uvicorn
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise exc
+
+        monkeypatch.setattr(uvicorn, "run", boom)
+        db_file = tmp_path / "data" / "h.db"
+        return db_file, lambda: main(["serve", "--db", str(db_file), "--no-browser", "--port", "1"])
+
+    def test_interrupt_still_releases_the_database(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_file, run = self._served(tmp_path, monkeypatch, KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            run()
+        leftovers = sorted(p.name for p in db_file.parent.glob("h.db*"))
+        assert leftovers == ["h.db"], f"连接没释放，残留 {leftovers}"
+
+    def test_normal_exit_releases_the_database(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_file, run = self._served(tmp_path, monkeypatch, SystemExit(0))
+        with pytest.raises(SystemExit):
+            run()
+        leftovers = sorted(p.name for p in db_file.parent.glob("h.db*"))
+        assert leftovers == ["h.db"]
+
+    def test_unusable_database_location_reports_readably(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """路径不可用时要给一句人话，而不是裸 traceback 砸到用户脸上。
+
+        与项目里「不静默失败、错误要让人看懂」的取向一致 —— 启动阶段崩栈
+        是这同一条要求上的破例。
+        """
+        blocker = tmp_path / "blocker"
+        blocker.write_text("我是个文件，不是目录", encoding="utf-8")
+        code = main(["serve", "--db", str(blocker / "sub" / "x.db"), "--no-browser"])
+        assert code == 2
+        out = capsys.readouterr().out
+        assert "数据库" in out and "x.db" in out
+        assert "Traceback" not in out
+
+
 class TestUtf8Console:
     """控制台编码那条路径不能把程序搞挂 —— 显示不好是小事，起不来是大事。"""
 

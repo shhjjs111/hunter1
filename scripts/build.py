@@ -4,8 +4,8 @@
     ./.tools/python/python.exe scripts/build.py --zip    # 再打一个 zip
 
 **构建之后一定要校验**：exe 存在不代表能跑。最常见的事故是模板没打进去 ——
-产物能启动，但每个页面都 500。所以这里把「模板在不在」当成硬门禁，
-不合格就非零退出，别让一个坏包流出去。
+产物能启动、`--help` 也正常，但每个页面都 500。所以门禁分两层：静态看布局，
+再**真起一次服务请求各页面**。任一层不合格就非零退出，别让一个坏包流出去。
 
 不做的事：不签名、不上传。分发渠道是另一回事（见 DEVELOPMENT-PLAN §6.4）。
 """
@@ -13,12 +13,18 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 import zipfile
 from pathlib import Path
+
+import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
@@ -30,11 +36,27 @@ TEMPLATE_SUBDIRS = (
     Path("hunter1") / "web" / "templates",
 )
 
-# 规划 §3.4 给的分发体积上限
-SIZE_BUDGET_MB = 200
+# 体积硬上限。实测约 42MB，给它约 2x 余量：
+# 原先写 200MB —— 那不是门禁，是摆设（实际值的近 5 倍，永远不会触发）。
+# 收到 80MB 才有区分度：真把不该带的东西打进去了（多带一个运行时、
+# 依赖膨胀、误打包数据目录），它会红。
+SIZE_BUDGET_MB = 80
 
-# 冒烟运行产物的超时：打包产物冷启动要解开归档，比源码运行慢
-SMOKE_TIMEOUT_SECONDS = 90
+# 冒烟超时。产物冷启动要解归档，比源码运行慢，所以给得比直觉宽。
+SMOKE_HELP_TIMEOUT_SECONDS = 90
+SMOKE_SERVE_TIMEOUT_SECONDS = 90
+SMOKE_PAGE_TIMEOUT_SECONDS = 20.0
+
+# 冒烟要请求的页面，以及每个页面必须出现的**特征词**。
+# 这些词都取自各自模板里的可见文案：页面渲染出来就一定在。
+# 覆盖的是实际渲染 Jinja 模板的页面 —— 模板类事故正是在这些页面上暴露。
+SMOKE_PAGES: tuple[tuple[str, str], ...] = (
+    ("/", "岗位库"),
+    ("/settings", "Base URL"),
+    ("/assistant", "求职助手"),
+    ("/crawl", "开始抓取"),
+    ("/applications", "投递记录"),
+)
 
 
 def _exe_name() -> str:
@@ -114,22 +136,26 @@ def looks_like_help(stdout: str) -> bool:
     return "hunter1" in text or "usage" in text
 
 
-def smoke_run(exe: Path) -> str | None:
-    """真跑一次产物（`--help`）。合格返回 None，否则返回问题描述。
+def smoke_help(exe: Path) -> str | None:
+    """最快的一层：跑一次 `--help`。合格返回 None。
 
-    存在的理由：文件在、体积对、模板在，**都不代表它能跑**。缺 DLL、
-    C 扩展没打进去、import 链断裂 —— 这些只有执行起来才知道，而且要等到
-    用户双击的那一刻才暴露。跑一次 `--help` 是最便宜的兜底。
+    能抓到「根本起不来」这类问题（缺 DLL、C 扩展没打进去、import 链断裂）——
+    实测：把 exe 单独拿出来（缺 `_internal/`）会 exit 127 并报
+    `Failed to load Python DLL`。
+
+    **但抓不到模板类事故**：`--help` 走 argparse，早于模板加载。模板缺失或
+    路径错位时它照样 exit 0，而实际起服务后每个页面都 500。那一层归
+    `smoke_serve()`。
     """
     try:
         result = subprocess.run(
             [str(exe), "--help"],
             capture_output=True,
-            timeout=SMOKE_TIMEOUT_SECONDS,
+            timeout=SMOKE_HELP_TIMEOUT_SECONDS,
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return f"产物运行超时（>{SMOKE_TIMEOUT_SECONDS}s）：{exe.name}"
+        return f"产物运行超时（>{SMOKE_HELP_TIMEOUT_SECONDS}s）：{exe.name}"
     except OSError as exc:
         return f"产物无法执行：{exe.name}（{exc}）"
 
@@ -140,6 +166,142 @@ def smoke_run(exe: Path) -> str | None:
     if not looks_like_help(result.stdout.decode("utf-8", "replace")):
         return "产物能跑但没打印出预期的帮助信息 —— 可能入口不对"
     return None
+
+
+def free_port() -> int:
+    """要一个（此刻）空闲的本地端口。
+
+    绑 0 让内核分配、拿到号之后立刻释放 —— 中间有一个极小的窗口会被别人抢走。
+    可以接受：真被抢了会表现为「启动超时」，报错信息也指向同一条排查路径。
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def check_pages(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -> list[str]:
+    """请求每个页面，返回问题列表（空 = 全好）。
+
+    这是唯一能兑现「产物能跑」这句承诺的做法：文件在、体积对、模板目录存在，
+    都不代表页面渲染得出来。只有真的请求一次才知道 —— 模板路径错位时，
+    目录存在、`--help` 正常、但每个页面 500。
+    """
+    problems: list[str] = []
+    with httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
+        for path, needle in SMOKE_PAGES:
+            try:
+                response = client.get(path)
+            except httpx.HTTPError as exc:
+                problems.append(f"{path} 请求失败：{type(exc).__name__}")
+                continue
+            if response.status_code != 200:
+                problems.append(f"{path} 返回 {response.status_code}（期望 200）")
+                continue
+            if needle not in response.text:
+                problems.append(f"{path} 内容不含「{needle}」——模板可能没渲染出来")
+    return problems
+
+
+def wait_for_http(base_url: str, process: subprocess.Popen[bytes], *, timeout: float) -> bool:
+    """等产物把服务起起来。进程提前退出就立即返回 False（别干等超时）。
+
+    判据是「**拿到了任何 HTTP 响应**」，而不是「返回 200」。
+    收到 500 同样说明服务已经就绪 —— 只是内容有问题，那正是 `check_pages`
+    要报的事。若把 200 当就绪判据，一个「页面全 500」的产物会一直等到超时，
+    最后报一句含糊的「未能就绪」，把真正的线索（500 / TemplateNotFound）
+    埋掉。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False  # 已经死了，再等没意义
+        try:
+            with httpx.Client(timeout=3.0) as client:
+                client.get(f"{base_url}/")
+            return True  # 有响应（哪怕是 500）＝ 服务起来了
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.4)
+    return False
+
+
+def _stop(process: subprocess.Popen[bytes]) -> None:
+    """收掉冒烟进程。先请它退（给 10s 收尾），不行再强杀。"""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def _read_tail(path: Path, limit: int = 600) -> str:
+    """读日志尾部，用于报错时给人看真正的线索。"""
+    with contextlib.suppress(OSError):
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+        return text[-limit:] if text else "(无输出)"
+    return "(读不到日志)"
+
+
+def smoke_serve(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECONDS) -> str | None:
+    """最深的一层：真起一次服务、请求各页面。合格返回 None。
+
+    用临时库、临时端口，不碰用户数据、不占固定端口。跑完一定收进程 ——
+    哪怕中途返回。
+
+    日志**写文件而不是管道**：产物出错时会刷大量 traceback，管道缓冲区写满后
+    子进程会阻塞在写日志上、不再响应请求，表现为诡异的 ReadTimeout。
+    （这个坑只有在「真跑一次」时才暴露，也正是服务冒烟的价值所在。）
+    """
+    port = free_port()
+    base_url = f"http://127.0.0.1:{port}"
+
+    with tempfile.TemporaryDirectory(prefix="hunter1-smoke-") as workspace:
+        workspace_path = Path(workspace)
+        db_path = workspace_path / "smoke.db"
+        log_path = workspace_path / "serve.log"
+        command = [
+            str(exe),
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--no-browser",
+            "--db",
+            str(db_path),
+        ]
+        with log_path.open("wb") as log:
+            process = subprocess.Popen(
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+            )
+            try:
+                if not wait_for_http(base_url, process, timeout=timeout):
+                    _stop(process)
+                    return (
+                        f"产物起服务后 {timeout:.0f}s 内未能就绪；日志尾部：{_read_tail(log_path)}"
+                    )
+                problems = check_pages(base_url)
+            finally:
+                _stop(process)
+
+        if problems:
+            return f"{'；'.join(problems)}｜日志尾部：{_read_tail(log_path, 300)}"
+    return None
+
+
+def smoke_run(exe: Path) -> str | None:
+    """完整冒烟：先快后深。任一层不合格就返回问题描述。
+
+    分两层是因为它们能抓到的问题不同，且代价差一个数量级：
+    `--help` 大约零点几秒，起服务要几秒。先跑快的，能快速失败。
+    """
+    return smoke_help(exe) or smoke_serve(exe)
 
 
 def verify(dist_dir: Path) -> list[str]:

@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import socket
 import sys
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
 
@@ -87,27 +91,52 @@ class TestLayoutProblems:
         assert build.layout_problems(dist) == []  # 那个 exe 只是个字节桩
 
 
-class TestSmokeRun:
+class TestSmokeHelp:
+    """第一层（快）：`--help`。只负责抓「根本起不来」。"""
+
     def test_real_executable_passes(self) -> None:
-        """拿一个确定能跑的 exe 验证冒烟逻辑本身。"""
-        assert build.smoke_run(Path(sys.executable)) is None
+        """拿一个确定能跑的可执行文件验证判据本身（解释器的 --help 也打印 usage）。"""
+        assert build.smoke_help(Path(sys.executable)) is None
 
     def test_reports_non_executable_file(self, tmp_path: Path) -> None:
         fake = tmp_path / EXE_NAME
         fake.write_bytes(b"this is not a program")
-        problem = build.smoke_run(fake)
+        problem = build.smoke_help(fake)
         assert problem is not None
         assert "无法执行" in problem or "运行失败" in problem
 
     def test_reports_missing_file(self, tmp_path: Path) -> None:
-        problem = build.smoke_run(tmp_path / "nope.exe")
-        assert problem is not None
+        assert build.smoke_help(tmp_path / "nope.exe") is not None
 
     def test_detects_wrong_entry_point(self) -> None:
         """能跑、退出码 0，但没打印帮助 —— 入口不对也要拦。"""
         assert build.looks_like_help("usage: hunter1 [-h] {serve,crawl,update} ...")
         assert not build.looks_like_help("")
         assert not build.looks_like_help("完全无关的输出")
+
+
+class TestSmokeRunLayering:
+    def test_help_failure_short_circuits_the_serve_probe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """第一层就不合格时不该再去起服务 —— 省下几秒钟。"""
+        monkeypatch.setattr(build, "smoke_help", lambda _exe: "起不来")
+        probed = {"n": 0}
+
+        def boom(_exe: Path, **_kw: object) -> str | None:
+            probed["n"] += 1
+            return None
+
+        monkeypatch.setattr(build, "smoke_serve", boom)
+        assert build.smoke_run(tmp_path / EXE_NAME) == "起不来"
+        assert probed["n"] == 0
+
+    def test_deep_layer_runs_when_help_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(build, "smoke_help", lambda _exe: None)
+        monkeypatch.setattr(build, "smoke_serve", lambda _exe, **_kw: "/ 返回 500")
+        assert build.smoke_run(tmp_path / EXE_NAME) == "/ 返回 500"
 
 
 class TestVerify:
@@ -138,6 +167,125 @@ class TestVerify:
     ) -> None:
         monkeypatch.setattr(build, "smoke_run", lambda _exe: None)
         assert build.verify(_make_dist(tmp_path)) == []
+
+
+class TestCheckPages:
+    """真正能兑现 docstring 那句承诺的一层：起服务、请求页面、看内容。
+
+    `--help` 走的是 argparse，**早于模板加载** —— 所以模板缺失、`_internal`
+    路径错位这类最典型的打包事故，它一个都测不出来。实测过：把 templates
+    目录删掉（保留 `_internal/`），`--help` 仍 exit 0，而实际起服务后
+    4 个页面全是 500（TemplateNotFound）。
+    """
+
+    def _serve(self, handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+        """在临时端口起一个最小 HTTP 服务，产出 base_url。"""
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def _ok_handler(self) -> type[BaseHTTPRequestHandler]:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = {
+                    "/": "<html>岗位库</html>",
+                    "/settings": "<html>Base URL</html>",
+                    "/assistant": "<html>求职助手</html>",
+                    "/crawl": "<html>开始抓取</html>",
+                    "/applications": "<html>投递记录</html>",
+                }.get(self.path, "")
+                if not body:
+                    self.send_error(404)
+                    return
+                payload = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args: object) -> None:
+                pass  # 别把测试输出搅乱
+
+        return Handler
+
+    def test_all_pages_healthy(self) -> None:
+        for base in self._serve(self._ok_handler()):
+            assert build.check_pages(base) == []
+
+    def test_flags_500_responses(self) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_error(500)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        for base in self._serve(Handler):
+            problems = build.check_pages(base)
+            assert problems, "500 必须被报出来 —— 这正是 --help 测不出的那类故障"
+            assert any("500" in p for p in problems)
+
+    def test_flags_200_without_expected_content(self) -> None:
+        """状态码 200 但内容不对也要拦：模板渲染成空页/错误页时就是这样。"""
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                payload = b"<html>something else entirely</html>"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        for base in self._serve(Handler):
+            problems = build.check_pages(base)
+            assert problems
+            assert any("内容" in p for p in problems)
+
+    def test_flags_unreachable_server(self) -> None:
+        problems = build.check_pages("http://127.0.0.1:1", timeout=2.0)
+        assert problems
+
+    def test_covers_the_template_rendering_pages(self) -> None:
+        """冒烟必须覆盖实际渲染模板的页面 —— 只请求 / 会漏掉配置页等。"""
+        requested: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                requested.append(self.path)
+                payload = b"<html>x</html>"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        for base in self._serve(Handler):
+            build.check_pages(base)
+        paths = set(requested)
+        assert {"/", "/settings", "/assistant", "/crawl", "/applications"} <= paths
+
+
+class TestFreePort:
+    def test_returns_a_bindable_port(self) -> None:
+        port = build.free_port()
+        assert 0 < port < 65536
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", port))  # 不该抛
+
+    def test_successive_calls_do_not_collide_immediately(self) -> None:
+        ports = {build.free_port() for _ in range(5)}
+        assert len(ports) > 1
 
 
 class TestFindTemplates:

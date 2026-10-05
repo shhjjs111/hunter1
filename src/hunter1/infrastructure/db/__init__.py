@@ -7,7 +7,7 @@ from hunter1.infrastructure.db.conversations import (
     Conversation,
     SqliteConversationRepository,
 )
-from hunter1.infrastructure.db.database import Database
+from hunter1.infrastructure.db.database import Database, DatabaseLocationError
 from hunter1.infrastructure.db.repository import (
     SqliteCompanyRepository,
     SqliteJobRepository,
@@ -31,6 +31,7 @@ __all__ = [
     "ConversationMessageRow",
     "ConversationRow",
     "Database",
+    "DatabaseLocationError",
     "JobRow",
     "SettingRow",
     "SqliteApplicationRepository",

@@ -24,6 +24,7 @@ from pathlib import Path
 
 from hunter1 import __version__
 from hunter1.crawlers.registry import available_sites
+from hunter1.infrastructure.db.database import DatabaseLocationError
 from hunter1.paths import data_dir, default_db_path
 from hunter1.web.context import AppContext
 
@@ -140,7 +141,14 @@ def _serve(args: argparse.Namespace) -> int:
             _open_browser_later(url)
             print("（已尝试打开浏览器；加 --no-browser 可关闭）")
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    finally:
+        # `uvicorn.run` 是常驻的：用户按 Ctrl+C 抛的是 KeyboardInterrupt，
+        # 正常返回路径根本走不到。所以清理必须在 finally —— 否则 SQLite 的
+        # `-wal` / `-shm` 会留在数据目录里（实测可复现），与「删目录即卸载」
+        # 的便携定位不符，也和 `_crawl` 的行为不一致。
+        context.db.dispose()
     return 0
 
 
@@ -240,12 +248,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     _enable_utf8_console()
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.command == "serve":
-        return _serve(args)
-    if args.command == "crawl":
-        return _crawl(args)
-    if args.command == "update":
-        return _update(args)
+    try:
+        if args.command == "serve":
+            return _serve(args)
+        if args.command == "crawl":
+            return _crawl(args)
+        if args.command == "update":
+            return _update(args)
+    except DatabaseLocationError as exc:
+        # 环境问题，不是程序缺陷：给一句人话 + 一个可行动的提示，
+        # 而不是把 traceback 砸到用户脸上。
+        print(f"数据库位置不可用：{exc}")
+        print("换一个可写的位置，例如 --db ./hunter1.db")
+        return 2
     parser.print_help()
     return 1
 

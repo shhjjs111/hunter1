@@ -20,8 +20,11 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from hunter1.domain.models import Job
 from hunter1.infrastructure.db import Database
+from hunter1.infrastructure.db.database import DatabaseLocationError
 
 
 def _job(index: int) -> Job:
@@ -34,6 +37,45 @@ def _job(index: int) -> Job:
         first_seen_at=datetime(2026, 10, 1, tzinfo=UTC),
         last_seen_at=datetime(2026, 10, 1, tzinfo=UTC),
     )
+
+
+class TestUnusableLocation:
+    """路径不可用时给人话，而不是裸 `OSError`。
+
+    这类失败几乎总是环境问题（指错路径、目录被组策略锁、磁盘满），
+    不是程序缺陷 —— 用户需要的是「哪个路径、为什么」，不是 traceback。
+    """
+
+    def test_parent_is_a_file(self, tmp_path: Path) -> None:
+        blocker = tmp_path / "blocker"
+        blocker.write_text("我是文件不是目录", encoding="utf-8")
+        with pytest.raises(DatabaseLocationError) as excinfo:
+            Database(blocker / "sub" / "hunter1.db")
+        message = str(excinfo.value)
+        assert "hunter1.db" in message  # 报出是哪个路径
+        assert message.strip()
+
+    def test_error_carries_path_and_cause(self, tmp_path: Path) -> None:
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        target = blocker / "sub" / "hunter1.db"
+        with pytest.raises(DatabaseLocationError) as excinfo:
+            Database(target)
+        assert excinfo.value.path == target
+        assert isinstance(excinfo.value.cause, OSError)
+
+    def test_is_not_a_bare_oserror(self, tmp_path: Path) -> None:
+        """必须是自有类型 —— 界面层靠它区分「环境问题」与「程序缺陷」。"""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        with pytest.raises(DatabaseLocationError):
+            Database(blocker / "hunter1.db")
+
+    def test_usable_nested_path_still_works(self, tmp_path: Path) -> None:
+        """别把正常的深层路径误判成错误。"""
+        db = Database(tmp_path / "a" / "b" / "c" / "hunter1.db")
+        db.initialize()
+        assert db.path.parent.is_dir()
 
 
 class TestCrossThreadWrites:

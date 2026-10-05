@@ -19,12 +19,31 @@ from hunter1.infrastructure.db.schema import Base
 from hunter1.infrastructure.db.settings import SqliteSettingsRepository
 
 
+class DatabaseLocationError(RuntimeError):
+    """数据库位置不可用（父路径是文件、没有写权限、磁盘满……）。
+
+    刻意用一个自有类型而不是把 `OSError` 直接往上抛：这类失败几乎总是
+    **环境问题**（用户指错了路径、目录被组策略锁了），而不是程序缺陷。
+    界面层据此给一句人话，而不是把 traceback 砸到用户脸上。
+    """
+
+    def __init__(self, path: Path, cause: OSError) -> None:
+        super().__init__(f"无法在 {path} 建库：{cause.strerror or cause}")
+        self.path = path
+        self.cause = cause
+
+
 class Database:
     """一个 SQLite 数据库的入口。只负责装配，不含业务规则。"""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # 裸的 PermissionError / FileExistsError 对用户毫无意义 ——
+            # 他不知道是哪个路径、也不知道该改什么。
+            raise DatabaseLocationError(self.path, exc) from exc
         self.engine: Engine = create_engine(f"sqlite:///{self.path}", future=True)
         _enable_sqlite_pragmas(self.engine)
 
@@ -73,4 +92,4 @@ def _enable_sqlite_pragmas(engine: Engine) -> None:
             cursor.close()
 
 
-__all__ = ["Database"]
+__all__ = ["Database", "DatabaseLocationError"]
