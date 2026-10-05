@@ -5,12 +5,16 @@
 #   bash scripts/check.sh
 #   PY=/path/to/python bash scripts/check.sh   # 显式指定解释器
 #
+# 覆盖范围按目录存在性**自动纳入**（迁移期友好，不需要改脚本）：
+#   backend/     总是检查：ruff format / ruff check / pyright / pytest
+#   frontend/    有 package.json 时检查：npm run check（类型 + 测试）
+#   contracts/   有 openapi.json 时检查：契约漂移门禁
+#
 # 解释器探测顺序：$PY → 项目自带 .tools/python → PATH 上的 python。
 # 这样在「系统没有 Python」的机器上，只要项目内工具链存在也能直接跑。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
 
 if [[ -z "${PY:-}" ]]; then
   if [[ -x "$ROOT/.tools/python/python.exe" ]]; then
@@ -24,16 +28,26 @@ fi
 
 echo "== 解释器: $PY =="
 
-echo "== 格式检查 (ruff format) =="
-"$PY" -m ruff format --check .
+echo "== 后端：格式检查 (ruff format) =="
+(cd "$ROOT/backend" && "$PY" -m ruff format --check .)
 
-echo "== 静态检查 (ruff check) =="
-"$PY" -m ruff check .
+echo "== 后端：静态检查 (ruff check) =="
+(cd "$ROOT/backend" && "$PY" -m ruff check .)
 
-echo "== 类型检查 (pyright) =="
-"$PY" -m pyright --pythonpath "$PY"
+echo "== 后端：类型检查 (pyright) =="
+(cd "$ROOT/backend" && "$PY" -m pyright --pythonpath "$PY")
 
-echo "== 测试 (pytest) =="
-"$PY" -m pytest
+echo "== 后端：测试 (pytest) =="
+(cd "$ROOT/backend" && "$PY" -m pytest)
+
+if [[ -f "$ROOT/frontend/package.json" ]]; then
+  echo "== 前端：类型检查 + 测试 (npm run check) =="
+  (cd "$ROOT/frontend" && npm run --silent check)
+fi
+
+if [[ -f "$ROOT/contracts/openapi.json" ]]; then
+  echo "== 契约：漂移门禁 (contracts.sh --check) =="
+  bash "$ROOT/scripts/contracts.sh" --check
+fi
 
 echo "== 全部通过 =="

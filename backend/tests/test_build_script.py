@@ -22,7 +22,8 @@ from types import ModuleType
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+# tests/ 在 backend/ 下，而 scripts/build.py 在仓库根 —— 上溯两级。
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_build_module() -> ModuleType:

@@ -20,11 +20,11 @@ class TestDevelopmentLayout:
         assert paths.is_frozen() is False
 
     def test_app_dir_is_repository_root(self) -> None:
-        # src/hunter1/paths.py → 上三级是仓库根
+        # src/hunter1/paths.py → 上溯找到含 pyproject.toml 的工程根（backend/）
         assert (paths.app_dir() / "pyproject.toml").is_file()
 
     def test_data_dir_is_repository_local_dot_data(self) -> None:
-        """开发时的数据目录是仓库根的 `.data/`（已在 .gitignore 里）。"""
+        """开发时的数据目录是工程根的 `.data/`（已在 .gitignore 里）。"""
         assert paths.data_dir() == paths.app_dir() / ".data"
         assert paths.data_dir().name == ".data"
 

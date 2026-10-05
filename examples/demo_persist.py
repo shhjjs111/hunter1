@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 # 允许直接 `python examples/demo_persist.py` 而无需安装（与 pytest 的 pythonpath 一致）
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.domain.models import CaptureStatus, Company, Job
 from hunter1.infrastructure.db import Database

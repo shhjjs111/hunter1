@@ -27,6 +27,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+BACKEND = ROOT / "backend"
 DIST = ROOT / "dist"
 APP_NAME = "hunter1"
 # 模板打进去的目标目录随 PyInstaller 大版本变过：6.x 放进 `_internal/`，
@@ -73,7 +74,10 @@ def _require_pyinstaller() -> None:
 
 
 def _run_pyinstaller() -> None:
-    # --clean 清掉 PyInstaller 的缓存目录，避免拿到上一次的残留
+    # --clean 清掉 PyInstaller 的缓存目录，避免拿到上一次的残留。
+    # cwd=backend：spec 里的相对路径（src/...）以工程根为基准解析；
+    # --distpath / --workpath 指到仓库根 —— 分发产物是跨端整合物，就该放在根，
+    # backend/ 里不留构建残渣。
     command = [
         sys.executable,
         "-m",
@@ -82,10 +86,14 @@ def _run_pyinstaller() -> None:
         "--clean",
         "--log-level",
         "WARN",
+        "--distpath",
+        str(DIST),
+        "--workpath",
+        str(ROOT / "build"),
         "hunter1.spec",
     ]
     print("== 构建 ==")
-    result = subprocess.run(command, cwd=ROOT, check=False)
+    result = subprocess.run(command, cwd=BACKEND, check=False)
     if result.returncode != 0:
         raise SystemExit(f"PyInstaller 失败（exit {result.returncode}）")
 

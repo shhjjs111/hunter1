@@ -23,7 +23,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from bs4 import BeautifulSoup
 
@@ -34,7 +34,7 @@ from hunter1.infrastructure.crawler.http import HttpFetcher
 
 ROOT = Path(__file__).resolve().parent.parent
 KEEP = 3
-FIXTURES = ROOT / "tests" / "crawlers" / "fixtures"
+FIXTURES = ROOT / "backend" / "tests" / "crawlers" / "fixtures"
 
 
 def prune(html: str, item_selector: str) -> str:

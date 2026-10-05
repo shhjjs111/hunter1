@@ -20,9 +20,7 @@ NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
 
 class FakeCrawler:
-    def __init__(
-        self, company: str, *, count: int = 1, boom: bool = False, key: str = ""
-    ) -> None:
+    def __init__(self, company: str, *, count: int = 1, boom: bool = False, key: str = "") -> None:
         self.key = key or company
         self.company = company
         self.careers_url = f"https://{company}.example.com/jobs"

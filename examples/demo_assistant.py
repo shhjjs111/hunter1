@@ -19,7 +19,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.application.assistant import run_turn
 from hunter1.application.job_tools import build_tools

@@ -12,6 +12,10 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.12"]
+    defaults:
+      run:
+        # Python 工程根在 backend/（仓库根是 monorepo 组装点，不放工程配置）
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 

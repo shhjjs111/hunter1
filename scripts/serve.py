@@ -1,6 +1,6 @@
 """开发期启动 Web UI —— 不装包也能跑。
 
-    ./.tools/python/python.exe scripts/serve.py --db .data/hunter1.db --port 8000
+    ./.tools/python/python.exe scripts/serve.py --port 8000
 
 为什么需要它：项目内自带的解释器是 Python **embeddable** 版，它用
 `python312._pth` 接管 `sys.path`，**会忽略 `PYTHONPATH`**；同时 editable 安装
@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.cli import main
 

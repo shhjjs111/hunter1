@@ -17,7 +17,7 @@ from hunter1.cli import (
 )
 from hunter1.paths import default_db_path
 
-# tests/web/test_cli.py → 上溯三级是仓库根
+# tests/web/test_cli.py → 上溯三级是后端工程根（backend/）
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -55,7 +55,7 @@ class TestServeOptions:
         """
         db = default_db_path()
         assert db.name == "hunter1.db"
-        assert db.parent.name == ".data"  # 开发态：仓库根的 .data/
+        assert db.parent.name == ".data"  # 开发态：backend/ 工程根的 .data/
         assert db == ROOT / ".data" / "hunter1.db"
 
     def test_default_db_is_a_db_file(self) -> None:

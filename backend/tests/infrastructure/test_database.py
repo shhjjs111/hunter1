@@ -156,8 +156,7 @@ class TestSchemaExports:
             for node in tree.body
             if isinstance(node, ast.Assign)
             and any(
-                isinstance(target, ast.Name) and target.id == "__all__"
-                for target in node.targets
+                isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
             )
         ]
         assert len(assignments) == 1, f"schema.py 有 {len(assignments)} 处顶层 __all__ 赋值"
