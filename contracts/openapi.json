@@ -176,6 +176,116 @@
         "title": "Body_settings_save_settings_post",
         "type": "object"
       },
+      "ConversationMessageView": {
+        "description": "会话里的一条消息。",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ConversationMessageView",
+        "type": "object"
+      },
+      "ConversationSummary": {
+        "description": "会话列表项。",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at"
+        ],
+        "title": "ConversationSummary",
+        "type": "object"
+      },
+      "CrawlStatusResponse": {
+        "description": "抓取进度快照。",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "sites": {
+            "items": {
+              "$ref": "#/components/schemas/SiteProgressView"
+            },
+            "title": "Sites",
+            "type": "array"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "total_created": {
+            "title": "Total Created",
+            "type": "integer"
+          },
+          "total_fetched": {
+            "title": "Total Fetched",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "running",
+          "sites",
+          "total_fetched",
+          "total_created"
+        ],
+        "title": "CrawlStatusResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -383,6 +493,151 @@
         "title": "JobSummary",
         "type": "object"
       },
+      "SettingsForm": {
+        "description": "配置页提交的表单。`api_key` 留空表示「不改」。",
+        "properties": {
+          "api_key": {
+            "default": "",
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          }
+        },
+        "required": [
+          "base_url",
+          "model"
+        ],
+        "title": "SettingsForm",
+        "type": "object"
+      },
+      "SettingsView": {
+        "description": "回给界面的配置（密钥只给掩码）。",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "masked_key": {
+            "title": "Masked Key",
+            "type": "string"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          }
+        },
+        "required": [
+          "base_url",
+          "model",
+          "masked_key",
+          "configured"
+        ],
+        "title": "SettingsView",
+        "type": "object"
+      },
+      "SiteProgressView": {
+        "description": "一个站点在这一轮里的进度。",
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "fetched": {
+            "title": "Fetched",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "status",
+          "fetched",
+          "created",
+          "updated"
+        ],
+        "title": "SiteProgressView",
+        "type": "object"
+      },
       "StageUpdateRequest": {
         "description": "推进投递阶段的请求体（`stage` 为 `ApplicationStage` 的字面值）。",
         "properties": {
@@ -427,6 +682,20 @@
         "title": "StageUpdateResponse",
         "type": "object"
       },
+      "StartCrawlResponse": {
+        "description": "启动结果。`started=False` 表示上一轮还在跑（不是错误）。",
+        "properties": {
+          "started": {
+            "title": "Started",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "StartCrawlResponse",
+        "type": "object"
+      },
       "StreamRequest": {
         "description": "对话请求体（流式与一次性共用）。",
         "properties": {
@@ -445,6 +714,35 @@
           "message"
         ],
         "title": "StreamRequest",
+        "type": "object"
+      },
+      "TurnResponse": {
+        "description": "一次性对话的结果。",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "iterations": {
+            "title": "Iterations",
+            "type": "integer"
+          },
+          "reply": {
+            "title": "Reply",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "reply",
+          "iterations",
+          "truncated"
+        ],
+        "title": "TurnResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -653,8 +951,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/ConversationSummary"
                   },
                   "title": "Response List Conversations Api Assistant Conversations Get",
                   "type": "array"
@@ -687,10 +984,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": {
-                      "type": "string"
-                    },
-                    "type": "object"
+                    "$ref": "#/components/schemas/ConversationMessageView"
                   },
                   "title": "Response Conversation Messages Api Assistant Conversations  Conversation Id  Get",
                   "type": "array"
@@ -767,9 +1061,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Turn Api Assistant Turn Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/TurnResponse"
                 }
               }
             },
@@ -797,11 +1089,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "title": "Response Start Crawl Api Crawl Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/StartCrawlResponse"
                 }
               }
             },
@@ -818,13 +1106,15 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
           }
         },
-        "summary": "Crawl Status"
+        "summary": "抓取进度快照"
       }
     },
     "/api/jobs": {
@@ -1011,6 +1301,90 @@
           }
         },
         "summary": "给一个岗位评分并写回"
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "operationId": "read_settings_api_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SettingsView"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Read Settings Api Settings Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "读取 LLM 配置"
+      },
+      "put": {
+        "operationId": "save_settings_api_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "保存 LLM 配置"
+      }
+    },
+    "/api/settings/test": {
+      "post": {
+        "operationId": "test_connection_api_settings_test_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Test Connection Api Settings Test Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "连通性探测（真发一次最小请求）"
       }
     },
     "/applications": {

@@ -55,6 +55,30 @@ class StreamRequest(BaseModel):
     conversation_id: str = ""
 
 
+class TurnResponse(BaseModel):
+    """一次性对话的结果。"""
+
+    conversation_id: str
+    reply: str
+    iterations: int
+    truncated: bool
+
+
+class ConversationSummary(BaseModel):
+    """会话列表项。"""
+
+    id: str
+    title: str
+    updated_at: str
+
+
+class ConversationMessageView(BaseModel):
+    """会话里的一条消息。"""
+
+    role: str
+    content: str
+
+
 def _sse(event: dict[str, object]) -> str:
     """一条 SSE 事件。用 `\\n\\n` 收尾是协议要求的分隔。"""
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -100,26 +124,34 @@ def build_router(
     """构造 assistant 的 APIRouter（依赖由组装处注入）。"""
     router = APIRouter()
 
-    @router.get("/assistant/conversations", summary="会话列表")
-    def list_conversations() -> list[dict[str, object]]:
+    @router.get(
+        "/assistant/conversations", response_model=list[ConversationSummary], summary="会话列表"
+    )
+    def list_conversations() -> list[ConversationSummary]:
         return [
-            {"id": item.id, "title": item.title, "updated_at": item.updated_at.isoformat()}
+            ConversationSummary(
+                id=item.id, title=item.title, updated_at=item.updated_at.isoformat()
+            )
             for item in store.list(limit=50)
         ]
 
-    @router.get("/assistant/conversations/{conversation_id}", summary="会话消息")
-    def conversation_messages(conversation_id: str) -> list[dict[str, str]]:
+    @router.get(
+        "/assistant/conversations/{conversation_id}",
+        response_model=list[ConversationMessageView],
+        summary="会话消息",
+    )
+    def conversation_messages(conversation_id: str) -> list[ConversationMessageView]:
         if store.get(conversation_id) is None:
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
         return [
-            {"role": str(message.role), "content": message.content}
+            ConversationMessageView(role=str(message.role), content=message.content)
             for message in store.messages(conversation_id)
         ]
 
     # ---- 一次性对话（无流式能力的调用方 / 脚本用）----
 
-    @router.post("/assistant/turn", summary="跑一轮对话（一次性返回）")
-    def turn(body: StreamRequest) -> dict[str, object]:
+    @router.post("/assistant/turn", response_model=TurnResponse, summary="跑一轮对话（一次性返回）")
+    def turn(body: StreamRequest) -> TurnResponse:
         text = body.message.strip()
         if not text:
             raise HTTPException(status_code=422, detail="请输入内容后再发送。")
@@ -141,12 +173,12 @@ def build_router(
             user_message=user_message,
             reply=result.reply,
         )
-        return {
-            "conversation_id": conversation_id,
-            "reply": result.reply.strip() or FALLBACK_REPLY,
-            "iterations": result.iterations,
-            "truncated": result.truncated,
-        }
+        return TurnResponse(
+            conversation_id=conversation_id,
+            reply=result.reply.strip() or FALLBACK_REPLY,
+            iterations=result.iterations,
+            truncated=result.truncated,
+        )
 
     # ---- 流式对话（SSE）----
 

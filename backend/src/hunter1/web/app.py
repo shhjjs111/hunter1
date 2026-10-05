@@ -21,7 +21,6 @@ from urllib.parse import quote
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
-    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -52,6 +51,8 @@ from hunter1.slices.jobs.router import build_router as build_jobs_router
 from hunter1.slices.jobs.store import JobStore
 from hunter1.slices.scoring.router import build_router as build_scoring_router
 from hunter1.slices.scoring.store import ScoreStore
+from hunter1.slices.settings.router import build_router as build_settings_router
+from hunter1.slices.settings.store import SettingsStore
 from hunter1.web.context import AppContext
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
@@ -128,6 +129,13 @@ def create_app(context: AppContext) -> FastAPI:
             ),
             prefix="/api",
         )
+    app.include_router(
+        build_settings_router(
+            store=SettingsStore(context.db),
+            llm_factory=context.llm_factory,
+        ),
+        prefix="/api",
+    )
 
     def render(request: Request, name: str, **extra: object) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -408,9 +416,11 @@ def create_app(context: AppContext) -> FastAPI:
             return RedirectResponse("/crawl?started=1", status_code=303)
         return RedirectResponse("/crawl?refused=1", status_code=303)
 
-    @app.get("/api/crawl/status")
-    def crawl_status() -> JSONResponse:
-        return JSONResponse(runner.snapshot().as_dict())
+    # 注意：`GET /api/crawl/status` 由 crawl 切片提供（见上方 include_router）。
+    # 这里曾经也定义过一个返回裸 JSONResponse 的版本 —— 路径重复会让
+    # OpenAPI 的响应 schema 退化成 `unknown`（前端拿不到类型），且行为取决于
+    # 路由注册顺序。删掉旧版本后，两个消费者（旧 SSR 页面的轮询脚本、
+    # 新前端）共用切片那一个有类型的端点。
 
     return app
 

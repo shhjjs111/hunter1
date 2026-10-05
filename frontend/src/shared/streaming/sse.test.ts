@@ -1,0 +1,74 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { streamSse } from "./sse";
+
+/** 造一个可分段推送的 ReadableStream，模拟真实网络的断续到达。 */
+function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (index >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunks[index++]));
+    },
+  });
+}
+
+function stubFetch(chunks: string[], status = 200): ReturnType<typeof vi.fn> {
+  const mock = vi.fn(async () => new Response(streamOf(chunks), { status }));
+  vi.stubGlobal("fetch", mock);
+  return mock;
+}
+
+describe("streamSse", () => {
+  it("解析单条事件", async () => {
+    stubFetch(['data: {"type":"text","text":"你好"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    await streamSse("/x", {}, (event) => events.push(event));
+    expect(events).toEqual([{ type: "text", text: "你好" }]);
+  });
+
+  it("跨 chunk 切断的事件能拼回来", async () => {
+    // 真实网络里一个事件可能被切成几个 TCP 段 —— 这是最容易写错的地方
+    stubFetch(['data: {"type":"te', 'xt","text":"拼', '接"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    await streamSse("/x", {}, (event) => events.push(event));
+    expect(events).toEqual([{ type: "text", text: "拼接" }]);
+  });
+
+  it("多条事件按序到达", async () => {
+    stubFetch([
+      'data: {"type":"text","text":"a"}\n\n',
+      'data: {"type":"text","text":"b"}\n\n',
+      'data: {"type":"done"}\n\n',
+    ]);
+    const types: unknown[] = [];
+    await streamSse("/x", {}, (event) => types.push(event.type));
+    expect(types).toEqual(["text", "text", "done"]);
+  });
+
+  it("非法 JSON 跳过但不中断流", async () => {
+    stubFetch(['data: {坏掉的\n\n', 'data: {"type":"done"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    await streamSse("/x", {}, (event) => events.push(event));
+    expect(events).toEqual([{ type: "done" }]);
+  });
+
+  it("末尾无空行的事件也能收到", async () => {
+    stubFetch(['data: {"type":"done"}']);
+    const events: Record<string, unknown>[] = [];
+    await streamSse("/x", {}, (event) => events.push(event));
+    expect(events).toEqual([{ type: "done" }]);
+  });
+
+  it("非 2xx 抛出可读错误（开流前的失败走 JSON 体）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"detail":"模型未配置"}', { status: 500 })),
+    );
+    await expect(streamSse("/x", {}, () => {})).rejects.toThrow(/HTTP 500.*模型未配置/);
+  });
+});

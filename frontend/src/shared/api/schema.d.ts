@@ -164,7 +164,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Crawl Status */
+        /** 抓取进度快照 */
         get: operations["crawl_status_api_crawl_status_get"];
         put?: never;
         post?: never;
@@ -236,6 +236,41 @@ export interface paths {
         put?: never;
         /** 给一个岗位评分并写回 */
         post: operations["score_api_scoring__job_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取 LLM 配置 */
+        get: operations["read_settings_api_settings_get"];
+        /** 保存 LLM 配置 */
+        put: operations["save_settings_api_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 连通性探测（真发一次最小请求） */
+        post: operations["test_connection_api_settings_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -505,6 +540,48 @@ export interface components {
              */
             temperature: string;
         };
+        /**
+         * ConversationMessageView
+         * @description 会话里的一条消息。
+         */
+        ConversationMessageView: {
+            /** Content */
+            content: string;
+            /** Role */
+            role: string;
+        };
+        /**
+         * ConversationSummary
+         * @description 会话列表项。
+         */
+        ConversationSummary: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * CrawlStatusResponse
+         * @description 抓取进度快照。
+         */
+        CrawlStatusResponse: {
+            /** Error */
+            error?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Running */
+            running: boolean;
+            /** Sites */
+            sites: components["schemas"]["SiteProgressView"][];
+            /** Started At */
+            started_at?: string | null;
+            /** Total Created */
+            total_created: number;
+            /** Total Fetched */
+            total_fetched: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -577,6 +654,61 @@ export interface components {
             title: string;
         };
         /**
+         * SettingsForm
+         * @description 配置页提交的表单。`api_key` 留空表示「不改」。
+         */
+        SettingsForm: {
+            /**
+             * Api Key
+             * @default
+             */
+            api_key: string;
+            /** Base Url */
+            base_url: string;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Model */
+            model: string;
+            /** Temperature */
+            temperature?: number | null;
+        };
+        /**
+         * SettingsView
+         * @description 回给界面的配置（密钥只给掩码）。
+         */
+        SettingsView: {
+            /** Base Url */
+            base_url: string;
+            /** Configured */
+            configured: boolean;
+            /** Masked Key */
+            masked_key: string;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Model */
+            model: string;
+            /** Temperature */
+            temperature?: number | null;
+        };
+        /**
+         * SiteProgressView
+         * @description 一个站点在这一轮里的进度。
+         */
+        SiteProgressView: {
+            /** Created */
+            created: number;
+            /** Error */
+            error?: string | null;
+            /** Fetched */
+            fetched: number;
+            /** Label */
+            label: string;
+            /** Status */
+            status: string;
+            /** Updated */
+            updated: number;
+        };
+        /**
          * StageUpdateRequest
          * @description 推进投递阶段的请求体（`stage` 为 `ApplicationStage` 的字面值）。
          */
@@ -597,6 +729,14 @@ export interface components {
             stage: string;
         };
         /**
+         * StartCrawlResponse
+         * @description 启动结果。`started=False` 表示上一轮还在跑（不是错误）。
+         */
+        StartCrawlResponse: {
+            /** Started */
+            started: boolean;
+        };
+        /**
          * StreamRequest
          * @description 对话请求体（流式与一次性共用）。
          */
@@ -608,6 +748,20 @@ export interface components {
             conversation_id: string;
             /** Message */
             message: string;
+        };
+        /**
+         * TurnResponse
+         * @description 一次性对话的结果。
+         */
+        TurnResponse: {
+            /** Conversation Id */
+            conversation_id: string;
+            /** Iterations */
+            iterations: number;
+            /** Reply */
+            reply: string;
+            /** Truncated */
+            truncated: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -762,9 +916,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["ConversationSummary"][];
                 };
             };
         };
@@ -786,9 +938,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    }[];
+                    "application/json": components["schemas"]["ConversationMessageView"][];
                 };
             };
             /** @description Validation Error */
@@ -854,9 +1004,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TurnResponse"];
                 };
             };
             /** @description Validation Error */
@@ -885,9 +1033,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["StartCrawlResponse"];
                 };
             };
         };
@@ -907,7 +1053,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CrawlStatusResponse"];
                 };
             };
         };
@@ -1038,6 +1184,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_settings_api_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsView"] | null;
+                };
+            };
+        };
+    };
+    save_settings_api_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsForm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_connection_api_settings_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };
