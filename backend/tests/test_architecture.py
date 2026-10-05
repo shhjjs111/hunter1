@@ -11,6 +11,9 @@
   对 platform 只允许 `platform.text`（纯函数）。
 - `application`（用例）不得 import `hunter1.{platform, web, crawlers, slices}` ——
   只依赖 domain 与端口（Protocol）。
+- `slices`（业务切片）不得 import `hunter1.{web, crawlers}`；对旧层
+  （`hunter1.application`）的依赖必须登记在 `SLICE_LEGACY_ALLOW`（Wave 4 清空）；
+  切片之间只经公开面（`__init__`），不得深链其他切片的内部模块。
 """
 
 from __future__ import annotations
@@ -29,6 +32,12 @@ FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
     "application": ("hunter1.platform", "hunter1.web", "hunter1.crawlers", "hunter1.slices"),
 }
 
+# 切片 → 过渡期登记的旧层依赖（Wave 4 完成后必须清空；新增条目需评审）
+SLICE_LEGACY_ALLOW: dict[str, tuple[str, ...]] = {
+    # 投递记录本体的归属是 applications 切片；jobs 只做入口，Wave 4 切换
+    "jobs": ("hunter1.application.applications",),
+}
+
 
 def _imported_modules(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -43,6 +52,11 @@ def _imported_modules(path: Path) -> set[str]:
 
 def _py_files(layer: str) -> list[Path]:
     return sorted((SRC / layer).rglob("*.py"))
+
+
+def _slice_dirs() -> list[Path]:
+    slices = SRC / "slices"
+    return sorted(p for p in slices.iterdir() if p.is_dir() and p.name != "__pycache__")
 
 
 def _rel(path: Path) -> str:
@@ -83,8 +97,47 @@ def test_domain_layer_has_no_third_party_io_libraries() -> None:
 
 
 def test_layers_exist() -> None:
-    for layer in ["platform", "domain", "application", "web", "crawlers"]:
+    for layer in ["platform", "slices", "domain", "application", "web", "crawlers"]:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
+
+
+def test_slices_respect_boundaries() -> None:
+    """切片不得 import web / crawlers；对旧层的依赖必须登记在册。
+
+    登记制而不是全禁：迁移期允许**显式登记**的过渡依赖（可审计、有期限），
+    比「悄悄放行」或「一律禁止导致迁移停摆」都更可控。
+    """
+    offenders: list[str] = []
+    for slice_dir in _slice_dirs():
+        allowed = SLICE_LEGACY_ALLOW.get(slice_dir.name, ())
+        for path in sorted(slice_dir.rglob("*.py")):
+            for module in _imported_modules(path):
+                if module.startswith(("hunter1.web", "hunter1.crawlers")):
+                    offenders.append(f"{_rel(path)} imports {module}")
+                elif module.startswith("hunter1.application") and not any(
+                    module == entry or module.startswith(f"{entry}.") for entry in allowed
+                ):
+                    offenders.append(f"{_rel(path)} imports {module}（未登记的旧层依赖）")
+    assert not offenders, "切片边界违规：\n" + "\n".join(offenders)
+
+
+def test_slices_do_not_reach_into_each_other() -> None:
+    """切片间只经公开面 —— 禁止深链其他切片的内部模块。
+
+    `from hunter1.slices.jobs import JobStore` 合法（公开面）；
+    `from hunter1.slices.jobs.store import JobStore` 违规（深链内部）。
+    深链让领地边界失效，并行改动的冲突会从这里回来。
+    """
+    offenders: list[str] = []
+    for slice_dir in _slice_dirs():
+        name = slice_dir.name
+        for path in sorted(slice_dir.rglob("*.py")):
+            for module in _imported_modules(path):
+                if module.startswith("hunter1.slices."):
+                    parts = module.split(".")
+                    if len(parts) > 3 and parts[2] != name:
+                        offenders.append(f"{_rel(path)} imports {module}")
+    assert not offenders, "切片深链违规：\n" + "\n".join(offenders)
 
 
 def test_release_source_port_matches_client_signature() -> None:

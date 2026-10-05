@@ -42,6 +42,8 @@ from hunter1.domain.assistant import Message, Role
 from hunter1.domain.llm import TextDelta
 from hunter1.domain.models import ApplicationStage, Job
 from hunter1.domain.settings import LLMSettings
+from hunter1.slices.jobs.router import build_router as build_jobs_router
+from hunter1.slices.jobs.store import JobStore
 from hunter1.web.context import AppContext
 from hunter1.web.crawl_runner import CrawlRunner
 
@@ -73,6 +75,13 @@ def create_app(context: AppContext) -> FastAPI:
     )
     app.state.context = context
     app.state.runner = runner
+
+    # ---- 切片 API（JSON）—— 过渡期与旧 SSR 页面共存于同一 app ----
+    # 组装处注入依赖：切片不 import web（依赖方向 web → slices）。
+    app.include_router(
+        build_jobs_router(store=JobStore(context.db), clock=context.clock),
+        prefix="/api",
+    )
 
     def render(request: Request, name: str, **extra: object) -> HTMLResponse:
         return templates.TemplateResponse(
