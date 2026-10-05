@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 构建产物
+dist/
+build/
+
+# 工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# 运行态 / 本地数据（永远不入库）
+.data/
+*.log
+
+# 编辑器
+.vscode/
+.idea/
