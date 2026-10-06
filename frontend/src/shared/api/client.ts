@@ -12,11 +12,16 @@ import type { paths } from "./schema";
  * fetch 显式转发而不让库在 createClient 时捕获 globalThis.fetch：
  * 测试可以按用例替换全局 fetch（vi.stubGlobal），运行时也能后挂 polyfill。
  */
-function resolveBaseUrl(): string {
+export function resolveBaseUrl(): string {
   if (typeof location !== "undefined" && location.origin) {
     return location.origin;
   }
   return "/";
+}
+
+/** 拼一个绝对 API URL —— SSE 等**绕过 openapi-fetch** 的调用方复用同一份 baseUrl。 */
+export function apiUrl(path: string): string {
+  return `${resolveBaseUrl().replace(/\/+$/, "")}${path}`;
 }
 
 export const api = createClient<paths>({

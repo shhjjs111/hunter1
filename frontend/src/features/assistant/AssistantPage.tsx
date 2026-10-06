@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Button, Card, EmptyState, ErrorNotice, PageHeader } from "../../shared/ui";
+import { apiUrl } from "../../shared/api/client";
 import { streamSse } from "../../shared/streaming/sse";
 import { useConversationMessages, useConversations, useRefreshConversations } from "./api";
 import { MessageBubble, type ChatItem } from "./components/MessageBubble";
@@ -47,7 +48,7 @@ export function AssistantPage() {
 
     try {
       await streamSse(
-        "/api/assistant/stream",
+        apiUrl("/api/assistant/stream"),
         { message: text, conversation_id: currentId ?? "" },
         (event) => {
           if (event.type === "text") {
@@ -160,7 +161,10 @@ export function AssistantPage() {
           ) : (
             <div className="space-y-3">
               {items.map((item, index) => (
-                <MessageBubble key={index} item={item} />
+                // 消息模型没有 id，用「role + 内容前缀 + 序号」组合做 key：
+                // 列表只追加、不重排，这个组合在其中是稳定的；纯 index 在将来若
+                // 支持重排/删除时会复用错 keyed 状态。
+                <MessageBubble key={`${item.role}:${item.content.slice(0, 32)}:${index}`} item={item} />
               ))}
             </div>
           )}

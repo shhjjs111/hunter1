@@ -49,6 +49,3 @@ export function AppLayout() {
     </div>
   );
 }
-
-/** 供路由表引用的布局元素（与 NAV 同源，避免两处漂移）。 */
-export { NAV as NAV_ITEMS };
