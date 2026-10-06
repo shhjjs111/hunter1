@@ -148,6 +148,25 @@ hunter1 update --source <版本清单 URL>   # 检查更新
    而 `TextDelta`/`StreamComplete` 这套事件契约，让「真流式」与「降级后的
    一次性返回」在调用方看来是同一个接口（`degraded` 标记是哪一种）。
 
+### 给已有用户加数据库约束（规程）
+
+`Base.metadata.create_all()` **只对新表生效** —— 对已存在的表，它不会补加索引或
+唯一约束。所以给已发布的库加约束不能只改 ORM 模型，要走三步：
+
+1. **先修脏数据**：约束生效前库里可能已有违反它的行，直接 `CREATE UNIQUE INDEX`
+   会抛裸 `IntegrityError`。而 `initialize()` 跑在 `AppContext.default` 的**启动
+   路径**上 —— 那等于应用起不来，报错还是 sqlite 原始异常，用户无从自救。
+2. **在 `Database.initialize()` 里建**（不是在 ORM 的 `__table_args__`）：老库也
+   需要这条约束，而 `create_all` 补不上。用 `IF NOT EXISTS` 保证语句幂等。
+3. **修复要留痕**：重排/清理是在**改用户数据**，不能静默。真触发时打一行提示
+   （见 `initialize()` 里的 `repaired` 分支）。
+
+参照实现：`platform/db/database.py` 的 `_repair_duplicate_message_sequences`
+（`(conversation_id, sequence)` 唯一索引）—— 检测用分组 `HAVING COUNT(*) > 1`
+（干净库只付一次 GROUP BY、零写入），修复**重排而非删除**（保住数据），排序键
+`(sequence, created_at, id)` 保证结果确定。测试见
+`tests/platform/test_conversations.py` 的 `TestRepairOfLegacyDuplicates`。
+
 ## 运维脚本
 
 | 脚本 | 用途 |
