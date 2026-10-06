@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
 import type { components } from "../../shared/api/schema";
@@ -28,6 +28,7 @@ export function useCrawlStatus() {
 }
 
 export function useStartCrawl() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
       const { data, error } = await api.POST("/api/crawl");
@@ -35,6 +36,16 @@ export function useStartCrawl() {
         throw new Error("启动抓取失败");
       }
       return data;
+    },
+    onSuccess: () => {
+      // 必须重取状态：缓存里还是 `running: false`，而上面 useCrawlStatus 的
+      // refetchInterval 只在 running 时轮询 —— 不重取就永远转不起来，
+      // 界面最长 staleTime（30 秒）内毫无反应，按钮还恢复可点，
+      // 用户再点只会看到「上一轮还在跑」。
+      //
+      // 立刻重取就能拿到 `running: true`：后端 `CrawlRunner.start()` 是**同步**
+      // 置位后再返回的（见 slices/crawl/runner.py），所以这里没有竞态窗口。
+      void queryClient.invalidateQueries({ queryKey: ["crawl", "status"] });
     },
   });
 }
