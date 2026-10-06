@@ -264,15 +264,40 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 1. **版本号**：只改 `src/hunter1/__init__.py` 的 `__version__`（单一来源，有测试锁定）。
 2. **全量门禁**：`bash scripts/check.sh` 全绿。
 3. **打包 + 冒烟**：`./.tools/python/python.exe scripts/build.py --zip`。
-4. **升级演练（真旧库）**：拿一份**上个版本**的用户库副本，用新版本启动一次，
+4. **生成清单**：
+   ```bash
+   ./.tools/python/python.exe scripts/make_manifest.py \
+       --asset win32=dist/hunter1-win32.zip \
+       --url-base <上传后的下载地址前缀> \
+       --out dist/manifest.json
+   ```
+   清单里 `assets[].platform` 必须用 `sys.platform` 词汇（见上文对照表）；
+   脚本会对已知错词（`windows`/`macos`…）直接报错、对占位符 URL 告警。
+   `version` 取自包本身，与 `--version` 不一致时拒绝生成。
+5. **升级演练（真旧库）**：拿一份**上个版本**的用户库副本，用新版本启动一次，
    确认三条路径 —— 这是自动化门禁覆盖不到的（测试与冒烟都用全新临时库）：
    | 场景 | 观察点 |
    |---|---|
    | 干净旧库 | 正常启动；新增的唯一索引出现；**行数不变**；无告警 |
    | 撞过号的旧库 | stderr 打出「检测到 N 个会话…已重排」；序号重排为 1..N；消息不丢 |
    | 带已移除字段的旧配置 | `GET /api/settings` 的 `broken` 为 `false`（不被判损坏） |
-5. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
-6. **上传 + 打 tag**：exe + zip + manifest.json 传 Release，tag = `v` + `__version__`。
+6. **更新链路演练**（起本地 HTTP 服务当"发布源"，无需真的上传）：
+   ```bash
+   cd dist/verify/serve && <python> -m http.server <PORT> --bind 127.0.0.1
+   <新版本 exe> update --source http://127.0.0.1:<PORT>/manifest.json   # 期望「已是最新」
+   <旧版本 exe> update --source … --dest <dir> --download               # 期望「可更新」+ 解压
+   # 把清单里 sha256 改一个字符再跑 → 期望 checksum_mismatch 且目标目录为空
+   ```
+7. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
+8. **上传 + 打 tag**：exe + zip + manifest.json 传 Release，tag = `v` + `__version__`
+   （`rules.py` 容忍 `v` 前缀）。**上传后用真实地址重新生成一次清单**——`manifest.json`
+   里的 `url` 是绝对地址，上传前无法知道。
+
+> ⚠️ **镜像会改写命令行里的 GitHub 地址**。开了 `/mirror china` 时，
+> `--url-base https://github.com/...` 会被改写成 `https://gitcode.com/gh_mirror/...`
+> 再传给脚本（实测：Python 收到的 `sys.argv` 已被改写）。生成清单时会把这个
+> 改写后的地址烤进去。要发布到 GitHub 官方地址，生成清单前先 `/mirror default`，
+> 或直接用不带 github.com 的地址。
 
 ## 参考
 

@@ -165,12 +165,18 @@ flowchart LR
 7. **前端 TS 已降级到 6.0.3**（为装上 `typescript-eslint`；TS 7 尚无它所需的 JS API）。
    升回条件见上文「前端 lint 与 TS 版本」：`typescript-eslint` 支持 TS ≥ 7.1 即可直接升回。
    登记在此是为了避免「降级靠惯性变成永久态」。
+8. **更新清单未签名，更新源不内嵌默认地址**。当前 `hunter1 update` 要求显式传
+   `--source`（或设 `HUNTER1_UPDATE_SOURCE`）。原因：链上只有 `sha256`，它保证
+   传输完整、不保证来源真实 —— 清单被篡改等于任意代码执行。内嵌一个默认 URL
+   就等于替用户引入静默信任锚。
+   **触发条件（满足其一即应处理）**：要内嵌默认更新源 URL 之前，或要推广给
+   非本人用户之前 —— 先做清单签名（或改用带保护的 tag + 受信分发渠道）。
 
 ## 验证矩阵
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 695 项 |
+| 后端全量 | `cd backend && pytest` | 710 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |

@@ -70,6 +70,32 @@ hunter1/data/          ← 首次运行自动创建
 | 命令行抓取 | `<python> scripts/serve.py` 之外的 `hunter1 crawl` |
 | 自更新 | `hunter1 update --source <版本清单 URL>` |
 
+## 更新
+
+```bash
+hunter1 update --source <版本清单 URL>            # 只看有没有新版
+hunter1 update --source <版本清单 URL> --download # 下好并解压到 updates/<版本>/
+```
+
+也可以把地址放进环境变量，省去每次传参：
+
+```bash
+export HUNTER1_UPDATE_SOURCE=https://…/manifest.json
+hunter1 update --download
+```
+
+**为什么默认不内嵌更新源 URL**：更新链只校验 `sha256` —— 它保证**传输完整**，
+不保证**来源真实**。清单被篡改就等于任意代码执行。在签名（或受保护的 tag）就位
+之前，内嵌一个默认地址等于替用户引入一个静默的信任锚。所以第一版保持显式指定：
+你给的地址，才走那条地址。
+
+国内用户可以把 `--source` 指向任意镜像（清单里的 `url` 决定实际下载地址，
+换镜像时重新生成清单即可）。**注意**：`asset_for()` 按 `sys.platform` 词汇
+（`win32`/`darwin`/`linux`）精确匹配，清单里写别的词会静默匹配不上。
+
+下载完成后程序**不会自我替换**（Windows 上运行中的 exe 覆盖不了自己）：把
+`updates/<版本>/` 里的内容覆盖过程序目录即可，这也是便携软件的自然更新动作。
+
 ## 现状
 
 | 维度 | 状态 |
@@ -77,8 +103,8 @@ hunter1/data/          ← 首次运行自动创建
 | 后端切片 | ✅ 6 个（jobs / crawl / applications / assistant / scoring / settings） |
 | 前端 SPA | ✅ 5 个页面（岗位库 / 抓取 / 投递 / 助手 / 配置） |
 | 契约流水线 | ✅ 导出 + 双漂移门禁（快照 + 前端类型） |
-| 测试 | 后端 678 + 前端 55（含整体渲染验收） |
-| 打包分发 | ✅ 单目录产物，前端产物嵌入 |
+| 测试 | 后端 710 + 前端 58（含整体渲染验收） |
+| 打包分发 | ✅ 单目录产物，前端产物嵌入；自更新链路（清单+下载+校验+解压）已实测 |
 
 ## 务实说明
 
