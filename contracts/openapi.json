@@ -576,34 +576,9 @@
             "title": "Base Url",
             "type": "string"
           },
-          "max_tokens": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Tokens"
-          },
           "model": {
             "title": "Model",
             "type": "string"
-          },
-          "temperature": {
-            "anyOf": [
-              {
-                "maximum": 2.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Temperature"
           }
         },
         "required": [
@@ -636,32 +611,10 @@
             "title": "Masked Key",
             "type": "string"
           },
-          "max_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Tokens"
-          },
           "model": {
             "default": "",
             "title": "Model",
             "type": "string"
-          },
-          "temperature": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Temperature"
           }
         },
         "title": "SettingsView",

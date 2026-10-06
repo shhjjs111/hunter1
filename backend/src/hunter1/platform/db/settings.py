@@ -23,6 +23,12 @@ if TYPE_CHECKING:
 
 LLM_KEY = "llm"
 
+#: 已从 `LLMSettings` 移除的字段。旧版本存下的配置 JSON 里可能还留着它们，
+#: 而 `LLMSettings` 是 `extra="forbid"` —— 不先剔除的话，升级后读旧库会直接把
+#: 这份配置判成「损坏」，用户被挡在配置页外（虽然重填能自救，但这是白挨的
+#: 一次惊吓）。这些键没有语义了，静默丢弃即可。
+_LEGACY_LLM_FIELDS = frozenset({"temperature", "max_tokens"})
+
 
 class SqliteSettingsRepository:
     """键值配置仓储。"""
@@ -59,6 +65,8 @@ class SqliteSettingsRepository:
         raw = self.get_raw(LLM_KEY)
         if raw is None:
             return None
+        for legacy in _LEGACY_LLM_FIELDS:
+            raw.pop(legacy, None)
         try:
             return LLMSettings.model_validate(raw)
         except ValidationError as exc:

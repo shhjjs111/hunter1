@@ -26,7 +26,7 @@ class TestLLMSettings:
     def test_minimal_valid_settings(self) -> None:
         settings = _settings()
         assert settings.base_url == "https://api.deepseek.com/v1"
-        assert settings.temperature is None
+        assert settings.model == "deepseek-chat"
 
     def test_trailing_slash_is_trimmed(self) -> None:
         assert _settings(base_url="https://api.x.com/v1/").base_url == "https://api.x.com/v1"
@@ -52,11 +52,16 @@ class TestLLMSettings:
     def test_is_configured_true_when_all_present(self) -> None:
         assert _settings().is_configured is True
 
-    def test_temperature_range_is_enforced(self) -> None:
-        assert _settings(temperature=0.0).temperature == 0.0
-        assert _settings(temperature=2.0).temperature == 2.0
+    def test_temperature_and_max_tokens_are_not_accepted(self) -> None:
+        """两个字段已从模型撤除（存而不用）—— 再传就是未定义字段。
+
+        保留这条断言，是为了让「哪天有人想把它们加回来」时必须显式改模型，
+        而不是随手传一个被静默忽略的 kwargs。
+        """
         with pytest.raises(ValidationError):
-            _settings(temperature=3.0)
+            _settings(temperature=0.7)
+        with pytest.raises(ValidationError):
+            _settings(max_tokens=1200)
 
     def test_masked_key_never_reveals_the_whole_key(self) -> None:
         """界面要展示「填了哪个 key」，但不能把整个 key 端出去。"""

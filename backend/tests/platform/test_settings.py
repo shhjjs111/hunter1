@@ -36,9 +36,28 @@ class TestSettingsRepository:
 
     def test_roundtrip(self, db: Database) -> None:
         repo = db.settings()
-        saved = _settings(temperature=0.3, max_tokens=1200)
+        saved = _settings()
         repo.save_llm(saved)
         assert repo.get_llm() == saved
+
+    def test_legacy_removed_fields_are_tolerated(self, db: Database) -> None:
+        """旧版本存下的配置可能带已移除的字段（temperature / max_tokens）。
+
+        `LLMSettings` 是 `extra="forbid"`：若不先剔除这两个键，升级后读旧库
+        会直接把配置判成「损坏」，用户白挨一次惊吓。这里锁住「静默丢弃、不算坏」。
+        """
+        db.settings().set_raw(
+            "llm",
+            {
+                "base_url": "https://api.deepseek.com/v1",
+                "model": "deepseek-chat",
+                "api_key": "sk-abc123456789",
+                "temperature": 0.7,
+                "max_tokens": 1200,
+            },
+        )
+        loaded = db.settings().get_llm()
+        assert loaded is not None and loaded.model == "deepseek-chat"
 
     def test_save_overwrites(self, db: Database) -> None:
         repo = db.settings()

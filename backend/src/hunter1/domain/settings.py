@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class _Config(BaseModel):
@@ -26,8 +26,6 @@ class LLMSettings(_Config):
     base_url: str
     model: str
     api_key: str = ""
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, gt=0)
 
     @field_validator("base_url")
     @classmethod

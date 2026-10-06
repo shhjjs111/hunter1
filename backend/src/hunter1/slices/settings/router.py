@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from hunter1.application.ports import LLMProvider
 from hunter1.domain.settings import LLMSettings
@@ -26,8 +26,6 @@ class SettingsForm(BaseModel):
     base_url: str
     model: str
     api_key: str = ""
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, gt=0)
 
 
 class SettingsView(BaseModel):
@@ -41,8 +39,6 @@ class SettingsView(BaseModel):
     base_url: str = ""
     model: str = ""
     masked_key: str = ""
-    temperature: float | None = None
-    max_tokens: int | None = None
     configured: bool = False
     #: 已保存的配置不合法（数据损坏 / 旧版本遗留）。界面据此提示「请重新填写」，
     #: 而不是把它当成「还没配过」——那会让用户填过的内容无声消失。
@@ -54,8 +50,6 @@ def _view(settings: LLMSettings) -> SettingsView:
         base_url=settings.base_url,
         model=settings.model,
         masked_key=settings.masked_key(),
-        temperature=settings.temperature,
-        max_tokens=settings.max_tokens,
         configured=settings.is_configured,
     )
 
@@ -107,8 +101,6 @@ def build_router(
                 base_url=form.base_url,
                 model=form.model,
                 api_key=key,
-                temperature=form.temperature,
-                max_tokens=form.max_tokens,
             )
         except ValidationError as exc:
             # 就地回显错误原因 —— 用户要知道哪儿错了，而不是一个 500

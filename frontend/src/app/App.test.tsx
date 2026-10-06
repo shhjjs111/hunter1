@@ -67,8 +67,6 @@ function stubBackend() {
         base_url: "https://api.example.com/v1",
         model: "m",
         masked_key: "sk-…1234",
-        temperature: null,
-        max_tokens: null,
         configured: true,
       });
     }

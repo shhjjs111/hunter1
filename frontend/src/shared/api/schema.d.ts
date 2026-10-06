@@ -530,12 +530,8 @@ export interface components {
             api_key: string;
             /** Base Url */
             base_url: string;
-            /** Max Tokens */
-            max_tokens?: number | null;
             /** Model */
             model: string;
-            /** Temperature */
-            temperature?: number | null;
         };
         /**
          * SettingsView
@@ -566,15 +562,11 @@ export interface components {
              * @default
              */
             masked_key: string;
-            /** Max Tokens */
-            max_tokens?: number | null;
             /**
              * Model
              * @default
              */
             model: string;
-            /** Temperature */
-            temperature?: number | null;
         };
         /**
          * SiteProgressView

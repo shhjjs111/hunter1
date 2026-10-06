@@ -12,8 +12,6 @@ export function SettingsPage() {
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [temperature, setTemperature] = useState("");
-  const [maxTokens, setMaxTokens] = useState("");
   const hydrated = useRef(false);
 
   // 把读到的配置回填表单 —— **只回填一次**。
@@ -31,10 +29,6 @@ export function SettingsPage() {
     hydrated.current = true;
     setBaseUrl(settings.data.base_url);
     setModel(settings.data.model);
-    setTemperature(
-      settings.data.temperature != null ? String(settings.data.temperature) : "",
-    );
-    setMaxTokens(settings.data.max_tokens != null ? String(settings.data.max_tokens) : "");
   }, [settings.data]);
 
   return (
@@ -75,8 +69,6 @@ export function SettingsPage() {
                 model,
                 // 空 key = 不改（后端语义）；这里原样传，别自作主张塞占位符
                 api_key: apiKey,
-                temperature: temperature.trim() === "" ? null : Number(temperature),
-                max_tokens: maxTokens.trim() === "" ? null : Number(maxTokens),
               },
               { onSuccess: () => setApiKey("") },
             );
@@ -115,23 +107,6 @@ export function SettingsPage() {
               placeholder="sk-…"
             />
           </Field>
-
-          <div className="flex gap-4">
-            <Field label="temperature" hint="0–2，留空用厂商默认">
-              <input
-                className="w-32 rounded border border-slate-300 px-3 py-2"
-                value={temperature}
-                onChange={(event) => setTemperature(event.target.value)}
-              />
-            </Field>
-            <Field label="max_tokens" hint="留空用厂商默认">
-              <input
-                className="w-32 rounded border border-slate-300 px-3 py-2"
-                value={maxTokens}
-                onChange={(event) => setMaxTokens(event.target.value)}
-              />
-            </Field>
-          </div>
 
           <div className="flex items-center gap-3 pt-2">
             <Button type="submit" variant="primary" disabled={save.isPending}>

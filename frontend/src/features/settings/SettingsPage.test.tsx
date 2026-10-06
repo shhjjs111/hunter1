@@ -16,8 +16,6 @@ const SETTINGS = {
   model: "deepseek-chat",
   masked_key: "sk-…abcd",
   configured: true,
-  temperature: 0.7,
-  max_tokens: null,
   broken: false,
 };
 
@@ -37,7 +35,7 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
-  it("用户清空某字段后，refetch 不会偷偷填回服务器旧值", async () => {
+  it("用户改过的字段不会被 refetch 偷偷填回服务器旧值", async () => {
     let payload: unknown = SETTINGS;
     vi.stubGlobal(
       "fetch",
@@ -51,27 +49,32 @@ describe("SettingsPage", () => {
     );
 
     renderPage();
-    const temperature = (await screen.findByLabelText(/temperature/)) as HTMLInputElement;
+    const baseUrl = (await screen.findByLabelText(/Base URL/)) as HTMLInputElement;
     await waitFor(() => {
-      expect(temperature.value).toBe("0.7");
+      expect(baseUrl.value).toBe("https://api.example.com/v1");
     });
 
-    // 用户清空（temperature 是可选字段，清空后表单仍可提交 ——
-    // 用必填的 base_url 复现不出来：HTML5 required 会直接挡住提交）
-    fireEvent.change(temperature, { target: { value: "" } });
-    expect(temperature.value).toBe("");
+    // 用户改成别的地址。注：原先这个用例用 temperature 做载体（「清空一个可选字段
+    // 后表单仍可提交」），但 temperature / max_tokens 已作为「存而不用」的死控件
+    // 撤除，表单里只剩 base_url / model 两个必填项 —— 清空它们会被 HTML5 required
+    // 挡住提交，复现不出 refetch。于是改用「改成一个不同的非空值」：它同样能锁住
+    // 「hydrated 守卫是否还在」（守卫若被删，refetch 会把服务器旧值盖回去）。
+    fireEvent.change(baseUrl, { target: { value: "https://typed.example.com/v1" } });
+    expect(baseUrl.value).toBe("https://typed.example.com/v1");
 
     // 保存会 invalidate ["settings"] → refetch。
     // 用 masked_key 当「refetch 已落地」的锚点 —— 它渲染在 API Key 的提示里。
-    // 没有这个锚点，waitFor 会在 refetch 完成前就满足（值本来就是 ""），
+    // 没有这个锚点，waitFor 会在 refetch 完成前就满足（值本来就是），
     // 测试等于什么都没验（第一版就是这么假绿的）。
     payload = { ...SETTINGS, masked_key: "sk-…REFETCHED" };
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await screen.findByText(/sk-…REFETCHED/);
 
-    // 关键：用户刚清空的字段不许被异步回填覆盖
-    expect((screen.getByLabelText(/temperature/) as HTMLInputElement).value).toBe("");
+    // 关键：用户刚改的值不许被异步回填覆盖
+    expect((screen.getByLabelText(/Base URL/) as HTMLInputElement).value).toBe(
+      "https://typed.example.com/v1",
+    );
   });
 
   it("保存失败时不清空 API Key 输入框（否则用户要重敲密钥）", async () => {
