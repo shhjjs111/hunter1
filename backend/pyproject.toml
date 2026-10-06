@@ -76,3 +76,17 @@ source = ["src/hunter1"]
 include = ["src"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
+# 本机自带解释器是 Python **embeddable** 版（`.tools/python`）：pyright 自动探测
+# 时拿不到它的 site-packages，会把已装好的 pydantic / fastapi / sqlalchemy 等
+# 全报成 `Import ... could not be resolved` —— 是**假错**，不是依赖缺失
+# （同一个环境里 pytest 能正常跑 817 项）。实测：裸跑 pyright 39 条假错，
+# 补上本项后归零。
+#
+# 路径是**仓库相对**（相对本文件所在目录 `backend/`），不是机器绝对路径；
+# 该目录不存在时 pyright 只是忽略这条搜索路径、不报错 —— CI 上即为此情形
+# （CI 用正常 Python 环境，本项是多余但无害的一条搜索路径）。
+#
+# 与 check.sh 的关系：check.sh 用 `--pythonpath` 显式传解释器，本项对它是冗余的
+# 双保险。本项的价值在于让**裸跑 `pyright` 与 IDE** 也能得到正确结果，避免
+# 开发者把 39 条假错当成噪音而习惯性忽略真错误。
+extraPaths = ["../.tools/python/Lib/site-packages"]
