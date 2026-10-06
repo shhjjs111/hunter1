@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -467,3 +468,66 @@ class TestScoringReachableInProduction:
         # 收紧断言：必须说的是**模型配置**损坏，不是「画像未配置」蒙混过关
         assert "模型" in detail and "画像" not in detail, f"要指出是模型配置问题，实际：{detail}"
         app.state.context.db.dispose()
+
+
+class TestStructuredDegradationIsRememberedAcrossRequests:
+    """降级发现只付一次代价 —— **在生产装配下**验证，不是单元级。
+
+    单元测试（`tests/platform/test_llm.py`）证明的是「两个共享 (base_url, model) 的
+    客户端会共享记忆」。但生产里客户端是**每请求新建**的（`main._runtime_llm`），
+    所以真正要证的是：跨请求它仍活着。两者之间隔着组装根 —— 若那里的 base_url 因
+    归一化差异而键不匹配，单元测试全绿而生产每次调用都重吃 400。
+
+    （这正是本轮修的 bug 的翻版：机制存在，但装配方式让它失效。）
+    """
+
+    def test_second_request_skips_rejected_modes(self, tmp_path: Path) -> None:
+        import httpx
+
+        from hunter1.domain.settings import LLMSettings
+        from hunter1.platform.llm import OpenAICompatibleClient, clear_rejected_modes
+        from hunter1.slices.scoring import CandidateProfile
+        from hunter1.slices.scoring.store import ScoreStore
+
+        clear_rejected_modes()
+        modes: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            fmt = body.get("response_format")
+            modes.append("none" if fmt is None else str(fmt.get("type")))
+            if fmt is not None:
+                return httpx.Response(400, json={"error": {"message": "unsupported"}})
+            return httpx.Response(
+                200,
+                json={
+                    "model": "m",
+                    "choices": [{"message": {"role": "assistant", "content": '{"score": 55}'}}],
+                },
+            )
+
+        app = _production_context(tmp_path, "prod-degrade.db")
+        db = app.state.context.db
+        db.jobs().upsert(_seeded_job())
+        ScoreStore(db).save_profile(CandidateProfile(keywords=["集成"]))
+        # base_url 故意带尾斜杠：客户端构造时会归一化（strip + 去尾斜杠），
+        # 键必须落在归一化后的值上，否则第二次请求找不到记忆。
+        db.settings().save_llm(
+            LLMSettings(base_url="https://api.example.com/v1/", model="m", api_key="sk-x")
+        )
+        app.state.context.llm_factory = lambda s: OpenAICompatibleClient(  # type: ignore[assignment]
+            base_url=s.base_url,
+            api_key=s.api_key,
+            model=s.model,
+            transport=httpx.MockTransport(handler),
+        )
+
+        with TestClient(app) as test_client:
+            assert test_client.post(f"/api/scoring/{JOB_ID}").status_code == 200
+            first = list(modes)
+            modes.clear()
+            assert test_client.post(f"/api/scoring/{JOB_ID}").status_code == 200
+
+        assert first == ["json_schema", "json_object", "none"], f"首次降级链不符：{first}"
+        assert modes == ["none"], f"第二次请求不该重试已拒模式，实际发出：{modes}"
+        db.dispose()
