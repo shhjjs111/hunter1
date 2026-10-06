@@ -21,17 +21,27 @@ python -m pytest
 ```
 
 > 本机（Windows）说明：若系统无 Python，项目内自带工具链在 `.tools/python`
-> （该目录已 gitignore，不随仓库分发）。用它跑质量门禁：
+> （该目录已 gitignore，不随仓库分发）。**检查统一走 `check.sh`**（自动探测解释器）：
 >
 > ```bash
-> ./.tools/python/python.exe -m pytest
-> ./.tools/python/python.exe -m ruff check .
-> ./.tools/python/python.exe -m pyright
+> bash scripts/check.sh
+> ```
+>
+> 要单跑某一环，**必须先 `cd backend`**（Python 工程根不在仓库根），且 pyright
+> 必须显式 `--pythonpath` 指向项目自带解释器 —— 否则它探测不到这个 embeddable
+> 环境，会把已装好的 pydantic / fastapi 全报成 `Import ... could not be resolved`
+> （**假错**，不是依赖缺失）：
+>
+> ```bash
+> cd backend
+> ../.tools/python/python.exe -m pytest
+> ../.tools/python/python.exe -m ruff check .
+> ../.tools/python/python.exe -m pyright --pythonpath ../.tools/python/python.exe
 > ```
 >
 > ⚠️ 该项目内解释器是 **Python embeddable 版**，`pip install -e .`（editable 安装）
 > 在它上面会因构建后端隔离失败。不影响开发——`pyproject.toml` 已配
-> `pythonpath = ["src"]`，pytest 能直接找到 `src/` 下的包。
+> `pythonpath = ["src", "."]`，pytest 能直接找到包。
 
 ## 质量门禁
 
@@ -119,19 +129,21 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 ## 架构约束（硬性）
 
-1. **依赖方向**：`interfaces → application → domain`；`domain` **不得** import `infrastructure`。
-   `application` 也不得 import `infrastructure`（只依赖 `application/ports.py` 里的 Protocol）。
-2. **可测试性**：`domain` / `application` 的测试**不需要网络与数据库**。
-   环境特定的能力一律经端口注入（见 `web/context.py` 的 `AppContext`）。
+1. **依赖方向**（`tests/test_architecture.py` 逐条断言，越权即红灯）：
+   `platform ← slices`；`slices` 之间只允许
+   `crawl/scoring/applications/assistant → jobs`；进程边界协议从
+   `hunter1.application.ports` 取。完整表格见 `docs/ARCHITECTURE.md`。
+2. **可测试性**：切片测试**不需要网络与数据库**（真 SQLite + 假外部世界）。
+   环境特定的能力一律经端口注入（见 `main.py` 的 `AppContext`）。
 3. **TDD**：新增行为先写失败测试（RED），再实现（GREEN）。
-4. **可扩展**：新增站点 = 在 `crawlers/registry.py` 的 `SITES` 加一条
+4. **可扩展**：新增站点 = 在 `slices/crawl/sites.py` 的 `SITES` 加一条
    `SiteDefinition` + 一份 HTML 快照；新增助手工具 = 写一个带类型标注的函数并注册。
    两者都不改核心代码。
 5. **不静默失败**：拿不到数据与「没有数据」必须能分辨 ——
    被风控拦截抛 `CrawlBlockedError`、配置损坏抛错而不是返回 `None`、
    模型报错要原样显示给用户。
    **流式端点尤其要注意**：响应一旦开始就没法再重定向，所以失败必须作为
-   事件流里的一条 `error` 事件交出去（见 `web/app.py` 的 `_stream_turn`）；
+   事件流里的一条 `error` 事件交出去（见 `slices/assistant/router.py` 的 `_stream_turn`）；
    而 `TextDelta`/`StreamComplete` 这套事件契约，让「真流式」与「降级后的
    一次性返回」在调用方看来是同一个接口（`degraded` 标记是哪一种）。
 
@@ -139,8 +151,10 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/check.sh` | 一条命令跑完格式/静态/类型/测试（与 CI 同款） |
-| `scripts/build.py` | 构建打包产物 + 硬校验（模板、体积） |
+| `scripts/check.sh` | 一条命令跑完后端格式/静态/类型/测试 + 前端检查 + 契约漂移（与 CI 同款） |
+| `scripts/contracts.sh` | 导出 OpenAPI 快照与前端类型；`--check` 为漂移门禁 |
+| `scripts/dev.sh` | 开发形态：API(:8000) + Vite(:5173) 双进程 |
+| `scripts/build.py` | 构建打包产物 + 硬校验（前端产物可达性、体积） |
 | `scripts/refresh_fixtures.py` | 站点改版后重抓并刷新离线快照（裁剪 + 回读校验后才落盘） |
 | `scripts/serve.py` | 开发期启动 Web UI（不装包也能用） |
 
@@ -150,22 +164,22 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 ./.tools/python/python.exe scripts/build.py --zip
 ```
 
-- 配置：`hunter1.spec`（单目录模式）。**templates 必须显式带上** ——
-  `web/app.py` 用 `Path(__file__).parent / "templates"` 找模板，而 `.py` 被编译进
-  归档后不会顺带带上同目录的 `.html`；目标路径与源码结构保持一致，
+- 配置：`hunter1.spec`（单目录模式）。**前端构建产物必须显式带上** ——
+  `main.frontend_dir()` 在打包态从 `sys._MEIPASS / "hunter1" / "web_dist"` 定位它，
+  而 `.py` 被编译进归档时不会顺带带上 `frontend/dist`；目标路径与解析分支保持一致，
   这样同一行代码在开发态与打包态都成立。
 - 硬校验分两层（`scripts/build.py`）：
-  1. **静态**：缺 exe / 缺模板目录 / 超体积预算 → 不合格；
-  2. **冒烟**：先跑 `--help`（秒级，抓「根本起不来」），再**真起一次服务**
-     请求 5 个页面（`/`、`/settings`、`/assistant`、`/crawl`、`/applications`），
-     逐页断言 200 且含特征词。
+  1. **静态**：缺 exe / 缺前端产物 / 超体积预算 → 不合格；
+  2. **冒烟**：先跑 `--help`（秒级，抓「根本起不来」），再**真起一次服务**：
+     请求各前端路由（`/`、`/settings`、`/assistant`、`/crawl`、`/applications`），
+     再**从 `index.html` 取出它引用的资源路径逐个请求** —— 前端缺产物或文件名
+     对不上时，页面壳能返回 200 而 JS 404，只有按引用查才抓得到。
 
-  > 为什么必须有第二层：`--help` 走 argparse，**早于模板加载**。模板缺失或
-  > 路径错位时它照样 exit 0，而实际起服务后每个页面都 500。实测过：删掉
-  > `templates/` 保留 `_internal/`，`--help` 返回 0，服务起来后 5 个页面全 500
-  > （`TemplateNotFound`）。只靠静态检查会放行这种包。
+  > 为什么必须有第二层：`--help` 走 argparse，**早于静态资源加载**。产物缺失或
+  > 路径错位时它照样 exit 0，而实际起服务后页面拿不到资源。只靠静态检查会放行
+  > 这种包。
 
-- 体积预算 80MB（实测约 42MB）。原先写 200MB —— 那是实际值的近 5 倍，
+- 体积预算 80MB（当前产物实测约 43MB）。原先写 200MB —— 那是实际值的近 5 倍，
   永远不会触发，等于没有门禁；收到 80MB 才有区分度。
 - 冒烟用临时库、临时端口，日志写文件（不是管道：产物出错时会刷大量 traceback，
   管道缓冲区写满会让子进程阻塞在写日志上，表现为莫名的 ReadTimeout）。
