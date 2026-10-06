@@ -114,19 +114,23 @@ class TestSliceApisAreMounted:
     def test_job_detail_and_apply(self, client) -> None:  # type: ignore[no-untyped-def]
         test_client, db = client
         assert test_client.get(f"/api/jobs/{JOB_ID}").status_code == 200
-        assert test_client.post(f"/api/jobs/{JOB_ID}/apply").status_code == 201
+        # 投递入口归 applications（投递记录本体在那里）—— body 带 job_id
+        applied = test_client.post("/api/applications", json={"job_id": JOB_ID})
+        assert applied.status_code == 201
         assert db.applications().count() == 1
 
     def test_applications_list(self, client) -> None:  # type: ignore[no-untyped-def]
         test_client, _db = client
-        test_client.post(f"/api/jobs/{JOB_ID}/apply")
+        test_client.post("/api/applications", json={"job_id": JOB_ID})
         payload = test_client.get("/api/applications").json()
         assert len(payload["items"]) == 1
         assert payload["items"][0]["company"] == "集成公司"
 
     def test_application_stage_flow(self, client) -> None:  # type: ignore[no-untyped-def]
         test_client, _db = client
-        application_id = test_client.post(f"/api/jobs/{JOB_ID}/apply").json()["application_id"]
+        application_id = test_client.post("/api/applications", json={"job_id": JOB_ID}).json()[
+            "application_id"
+        ]
         response = test_client.post(
             f"/api/applications/{application_id}/stage",
             json={"stage": "interview", "note": "一面"},

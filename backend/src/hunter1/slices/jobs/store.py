@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from hunter1.domain.models import Application, Job
+from hunter1.domain.models import Job
 from hunter1.platform.db import Database
 from hunter1.platform.db.repository import SqliteJobRepository
 
@@ -39,16 +39,6 @@ class JobStore:
     def count(self, *, keyword: str) -> int:
         repository: SqliteJobRepository = self._db.jobs()
         return repository.count(keyword=keyword) if keyword else repository.count()
-
-    # ---- 投递（入口在 jobs，记录本体归 applications 切片）----
-
-    def save_application(self, application: Application) -> None:
-        self._db.applications().upsert(application)
-
-    def find_application_by_job(self, job_id: str) -> Application | None:
-        """该岗位已有的投递记录（幂等判据）；有则返回最近一条，否则 None。"""
-        found = self._db.applications().by_job(job_id)
-        return found[0] if found else None
 
 
 __all__ = ["JobStore"]

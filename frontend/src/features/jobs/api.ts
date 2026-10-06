@@ -1,5 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../../shared/api/client";
 import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
@@ -25,24 +24,5 @@ export function useJobs(keyword: string, page: number) {
     queryFn: () => fetchJobs(keyword, page),
     // 翻页/换关键词时保留上一页内容，避免闪白
     placeholderData: (previous) => previous,
-  });
-}
-
-export function useApplyToJob() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (jobId: string) => {
-      const { data, error, response } = await api.POST("/api/jobs/{job_id}/apply", {
-        params: { path: { job_id: jobId } },
-      });
-      if (error || !data) {
-        throw new Error(`记录投递失败（HTTP ${response.status}）`);
-      }
-      return data;
-    },
-    onSuccess: () => {
-      // 投递记录会出现在 applications feature —— 先只刷新本切片的查询
-      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
-    },
   });
 }

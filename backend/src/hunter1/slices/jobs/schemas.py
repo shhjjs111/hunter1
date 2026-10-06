@@ -64,10 +64,4 @@ class JobListResponse(BaseModel):
     has_next: bool
 
 
-class ApplyResponse(BaseModel):
-    """记录投递的结果。"""
-
-    application_id: str
-
-
-__all__ = ["ApplyResponse", "JobDetail", "JobListResponse", "JobSummary"]
+__all__ = ["JobDetail", "JobListResponse", "JobSummary"]

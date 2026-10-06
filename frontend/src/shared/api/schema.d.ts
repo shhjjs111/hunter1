@@ -14,7 +14,8 @@ export interface paths {
         /** 投递列表 */
         get: operations["list_applications_api_applications_get"];
         put?: never;
-        post?: never;
+        /** 记录投递 */
+        post: operations["create_application_api_applications_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -185,23 +186,6 @@ export interface paths {
         get: operations["job_detail_api_jobs__job_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/apply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** 记录投递 */
-        post: operations["job_apply_api_jobs__job_id__apply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -405,6 +389,17 @@ export interface components {
             total_created: number;
             /** Total Fetched */
             total_fetched: number;
+        };
+        /**
+         * CreateApplicationRequest
+         * @description 记录一次投递的请求体。
+         *
+         *     `job_id` 支持全 id 或唯一前缀（与岗位详情端点同一套解析）—— 助手常只看到
+         *     前 8 位 id，界面给的是全 id，两者都得能用。
+         */
+        CreateApplicationRequest: {
+            /** Job Id */
+            job_id: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -692,6 +687,39 @@ export interface operations {
             };
         };
     };
+    create_application_api_applications_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateApplicationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_application_api_applications__application_id__delete: {
         parameters: {
             query?: never;
@@ -966,37 +994,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    job_apply_api_jobs__job_id__apply_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApplyResponse"];
                 };
             };
             /** @description Validation Error */

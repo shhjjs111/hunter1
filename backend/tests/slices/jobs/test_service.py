@@ -13,7 +13,7 @@ import pytest
 
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
-from hunter1.slices.jobs.service import MAX_PAGE, apply_to_job, find_job, list_jobs
+from hunter1.slices.jobs.service import MAX_PAGE, find_job, list_jobs
 from hunter1.slices.jobs.store import JobStore
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
@@ -130,29 +130,3 @@ class TestFindJob:
         job, ambiguous = find_job(store, "zzzz")
         assert job is None
         assert ambiguous == 0
-
-
-class TestApply:
-    def test_records_application_with_snapshot(self, store: JobStore) -> None:
-        """投递要快照公司名与标题（岗位库清空后记录仍可读）。"""
-        job, _ = find_job(store, FULL_A)
-        assert job is not None
-        application = apply_to_job(store=store, job=job, now=NOW)
-        assert application.job_id == FULL_A
-        assert application.company == "字节跳动"
-        assert application.title == "AI产品经理"
-
-    def test_application_is_persisted(self, store: JobStore) -> None:
-        job, _ = find_job(store, FULL_A)
-        assert job is not None
-        application = apply_to_job(store=store, job=job, now=NOW)
-        assert store._db.applications().get(application.id) is not None
-
-    def test_repeat_apply_is_idempotent(self, store: JobStore) -> None:
-        """重复投递同一岗位只产生一条记录 —— 重复点击不该堆出多条投递。"""
-        job, _ = find_job(store, FULL_A)
-        assert job is not None
-        first = apply_to_job(store=store, job=job, now=NOW)
-        second = apply_to_job(store=store, job=job, now=NOW)
-        assert second.id == first.id
-        assert len(store._db.applications().by_job(FULL_A)) == 1

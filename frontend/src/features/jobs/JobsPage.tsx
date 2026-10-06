@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import { useScoreJob } from "../scoring/api";
-import { useApplyToJob, useJobs } from "./api";
+import { useApplyToJob } from "../applications/api";
+import { useJobs } from "./api";
 import { JobsTable } from "./components/JobsTable";
 import { Pager } from "./components/Pager";
 import { SearchBar } from "./components/SearchBar";

@@ -74,3 +74,29 @@ export function useDeleteApplication() {
     },
   });
 }
+
+/**
+ * 记录一次投递。
+ *
+ * 归 applications feature 而不是 jobs：投递记录的本体在这里，岗位页只是**调用方**
+ * （入口挂在 `POST /api/applications`，请求体带 job_id）。
+ */
+export function useApplyToJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (jobId: string) => {
+      const { data, error, response } = await api.POST("/api/applications", {
+        body: { job_id: jobId },
+      });
+      if (error || !data) {
+        throw new Error(`记录投递失败（HTTP ${response.status}）`);
+      }
+      return data;
+    },
+    onSuccess: () => {
+      // 新投递落在 applications；岗位页的投递按钮状态也要跟着刷新
+      void queryClient.invalidateQueries({ queryKey: ["applications"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}

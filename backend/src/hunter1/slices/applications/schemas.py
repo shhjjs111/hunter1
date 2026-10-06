@@ -65,9 +65,27 @@ class ApplicationListResponse(BaseModel):
     items: list[ApplicationSummary]
 
 
+class CreateApplicationRequest(BaseModel):
+    """记录一次投递的请求体。
+
+    `job_id` 支持全 id 或唯一前缀（与岗位详情端点同一套解析）—— 助手常只看到
+    前 8 位 id，界面给的是全 id，两者都得能用。
+    """
+
+    job_id: str
+
+
+class ApplyResponse(BaseModel):
+    """记录投递的结果。"""
+
+    application_id: str
+
+
 __all__ = [
     "ApplicationListResponse",
     "ApplicationSummary",
+    "ApplyResponse",
+    "CreateApplicationRequest",
     "StageUpdateRequest",
     "StageUpdateResponse",
 ]

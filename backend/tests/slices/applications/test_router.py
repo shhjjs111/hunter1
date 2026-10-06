@@ -14,27 +14,54 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hunter1.domain.models import Application, ApplicationStage
+from hunter1.domain.models import Application, ApplicationStage, Job
 from hunter1.platform.db import Database
 from hunter1.slices.applications.router import build_router
 from hunter1.slices.applications.store import ApplicationStore
+from hunter1.slices.jobs import JobStore
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+JOB_FULL = "d" * 32
+JOB_PREFIX_TWIN = "d" * 8 + "e" * 24
 
 
 @pytest.fixture()
-def store(tmp_path: Path) -> ApplicationStore:
-    db = Database(tmp_path / "applications-api.db")
-    db.initialize()
+def db(tmp_path: Path) -> Database:
+    database = Database(tmp_path / "applications-api.db")
+    database.initialize()
+    return database
+
+
+@pytest.fixture()
+def store(db: Database) -> ApplicationStore:
     return ApplicationStore(db)
 
 
 @pytest.fixture()
-def client(store: ApplicationStore) -> Iterator[TestClient]:
+def jobs(db: Database) -> JobStore:
+    """记录投递要按 id 查岗位 —— 与 store 共用同一个库。"""
+    return JobStore(db)
+
+
+@pytest.fixture()
+def client(store: ApplicationStore, jobs: JobStore) -> Iterator[TestClient]:
     app = FastAPI()
-    app.include_router(build_router(store=store, clock=lambda: NOW), prefix="/api")
+    app.include_router(build_router(store=store, jobs=jobs, clock=lambda: NOW), prefix="/api")
     with TestClient(app) as test_client:
         yield test_client
+
+
+def _seed_job(db: Database, job_id: str = JOB_FULL) -> None:
+    db.jobs().upsert(
+        Job(
+            id=job_id,
+            company_id="c1",
+            title="AI产品经理",
+            detail_url="https://x/1",
+            source="实习僧",
+            company_name="字节跳动",
+        )
+    )
 
 
 def _application(**overrides: object) -> Application:
@@ -97,6 +124,46 @@ class TestStageEndpoint:
     def test_missing_is_404(self, client: TestClient) -> None:
         response = client.post("/api/applications/zzzz/stage", json={"stage": "interview"})
         assert response.status_code == 404
+
+
+class TestApplyEndpoint:
+    """记录投递（入口从 jobs 迁到 applications —— 投递记录本体归本切片）。"""
+
+    def test_creates_and_returns_201(
+        self, client: TestClient, db: Database, store: ApplicationStore
+    ) -> None:
+        _seed_job(db)
+        response = client.post("/api/applications", json={"job_id": JOB_FULL})
+        assert response.status_code == 201
+        application_id = response.json()["application_id"]
+        assert store.get(application_id) is not None
+
+    def test_accepts_unique_prefix(self, client: TestClient, db: Database) -> None:
+        _seed_job(db)
+        response = client.post("/api/applications", json={"job_id": JOB_FULL[:8]})
+        assert response.status_code == 201
+
+    def test_ambiguous_prefix_is_409(self, client: TestClient, db: Database) -> None:
+        _seed_job(db, JOB_FULL)
+        _seed_job(db, JOB_PREFIX_TWIN)
+        response = client.post("/api/applications", json={"job_id": "d" * 8})
+        assert response.status_code == 409
+        assert "2 条匹配" in response.json()["detail"]
+
+    def test_missing_job_is_404(self, client: TestClient) -> None:
+        assert client.post("/api/applications", json={"job_id": "zzzz"}).status_code == 404
+
+    def test_repeat_apply_returns_same_id(
+        self, client: TestClient, db: Database, store: ApplicationStore
+    ) -> None:
+        """重复点击投递：响应幂等（同一 application_id），库里只有一条记录。"""
+        _seed_job(db)
+        first = client.post("/api/applications", json={"job_id": JOB_FULL}).json()["application_id"]
+        second = client.post("/api/applications", json={"job_id": JOB_FULL}).json()[
+            "application_id"
+        ]
+        assert second == first
+        assert len(store.by_job(JOB_FULL)) == 1
 
 
 class TestDeleteEndpoint:

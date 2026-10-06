@@ -83,6 +83,7 @@ describe("JobsPage", () => {
       ([input]) => (input as Request).method === "POST",
     );
     expect(postCalls).toHaveLength(1);
-    expect((postCalls[0][0] as Request).url).toContain("/api/jobs/j1/apply");
+    // 投递入口已从 jobs 迁到 applications（投递记录本体归 applications 切片）
+    expect((postCalls[0][0] as Request).url).toContain("/api/applications");
   });
 });

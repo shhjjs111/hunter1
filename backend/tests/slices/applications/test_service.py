@@ -1,17 +1,21 @@
-"""投递用例单元测试 —— 纯领域逻辑，无 IO。
+"""投递用例单元测试。
 
-迁移自 `tests/application/test_applications.py`：断言语义逐条保留，仅改 import
-路径（`hunter1.application.applications` → `hunter1.slices.applications.service`）。
+`new_application` / `change_stage` 是纯领域逻辑，无 IO（迁移自
+`tests/application/test_applications.py`：断言语义逐条保留）。
+`apply_to_job`（记录投递，迁移自 jobs 切片的同名用例）需要落库，用真 SQLite。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from hunter1.domain.models import ApplicationStage, Job
-from hunter1.slices.applications.service import change_stage, new_application
+from hunter1.platform.db import Database
+from hunter1.slices.applications.service import apply_to_job, change_stage, new_application
+from hunter1.slices.applications.store import ApplicationStore
 
 
 def _job(**overrides: object) -> Job:
@@ -96,3 +100,39 @@ class TestChangeStage:
                 stage=ApplicationStage.INTERVIEW,
                 now=datetime(2026, 9, 1, tzinfo=UTC),
             )
+
+
+@pytest.fixture()
+def store(tmp_path: Path) -> ApplicationStore:
+    db = Database(tmp_path / "applications-service.db")
+    db.initialize()
+    return ApplicationStore(db)
+
+
+class TestApplyToJob:
+    """记录投递（迁移自 jobs 切片的 TestApply）。"""
+
+    def test_snapshots_company_and_title(self, store: ApplicationStore) -> None:
+        """投递要快照公司名与标题（岗位库清空后记录仍可读）。"""
+        application = apply_to_job(store=store, job=_job(), now=NOW)
+        assert application.job_id == "j1"
+        assert application.company == "字节跳动"
+        assert application.title == "AI产品经理"
+
+    def test_is_persisted(self, store: ApplicationStore) -> None:
+        application = apply_to_job(store=store, job=_job(), now=NOW)
+        assert store.get(application.id) is not None
+
+    def test_repeat_apply_is_idempotent(self, store: ApplicationStore) -> None:
+        """重复投递同一岗位只产生一条记录 —— 重复点击不该堆出多条投递。"""
+        first = apply_to_job(store=store, job=_job(), now=NOW)
+        second = apply_to_job(store=store, job=_job(), now=NOW)
+        assert second.id == first.id
+        assert len(store.by_job("j1")) == 1
+
+    def test_different_jobs_are_separate_records(self, store: ApplicationStore) -> None:
+        """幂等只针对同一岗位 —— 不同岗位各记一条。"""
+        first = apply_to_job(store=store, job=_job(id="j1"), now=NOW)
+        second = apply_to_job(store=store, job=_job(id="j2"), now=NOW)
+        assert first.id != second.id
+        assert store.count() == 2

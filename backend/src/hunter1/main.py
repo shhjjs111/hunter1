@@ -187,9 +187,18 @@ def create_app(context: AppContext) -> FastAPI:
     app.state.runner = runner
 
     # ---- 切片路由（全部挂在 /api 下）----
-    _mount(build_jobs_router(store=JobStore(context.db), clock=context.clock))
+    # jobs 的存储门面复用同一实例：applications 记录投递时要按 id 查岗位
+    # （「投递」动作归 applications，岗位查询归 jobs —— 依赖方向白名单允许）。
+    job_store = JobStore(context.db)
+    _mount(build_jobs_router(store=job_store))
     _mount(build_crawl_router(runner=runner))
-    _mount(build_applications_router(store=ApplicationStore(context.db), clock=context.clock))
+    _mount(
+        build_applications_router(
+            store=ApplicationStore(context.db),
+            jobs=job_store,
+            clock=context.clock,
+        )
+    )
     _mount(build_settings_router(store=SettingsStore(context.db), llm_factory=context.llm_factory))
     _mount(
         build_assistant_router(

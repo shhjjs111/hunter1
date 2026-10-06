@@ -77,7 +77,7 @@ def store(tmp_path: Path) -> JobStore:
 @pytest.fixture()
 def client(store: JobStore) -> Iterator[TestClient]:
     app = FastAPI()
-    app.include_router(build_router(store=store, clock=lambda: NOW), prefix="/api")
+    app.include_router(build_router(store=store), prefix="/api")
     with TestClient(app) as test_client:
         yield test_client
 
@@ -132,21 +132,3 @@ class TestDetailEndpoint:
 
     def test_missing_is_404(self, client: TestClient) -> None:
         assert client.get("/api/jobs/zzzz").status_code == 404
-
-
-class TestApplyEndpoint:
-    def test_201_and_persisted(self, client: TestClient, store: JobStore) -> None:
-        response = client.post(f"/api/jobs/{FULL_A}/apply")
-        assert response.status_code == 201
-        application_id = response.json()["application_id"]
-        assert store._db.applications().get(application_id) is not None
-
-    def test_missing_job_is_404(self, client: TestClient) -> None:
-        assert client.post("/api/jobs/zzzz/apply").status_code == 404
-
-    def test_repeat_apply_returns_same_id(self, client: TestClient, store: JobStore) -> None:
-        """重复点击投递：响应幂等（同一 application_id），且库里只有一条记录。"""
-        first = client.post(f"/api/jobs/{FULL_A}/apply").json()["application_id"]
-        second = client.post(f"/api/jobs/{FULL_A}/apply").json()["application_id"]
-        assert second == first
-        assert len(store._db.applications().by_job(FULL_A)) == 1

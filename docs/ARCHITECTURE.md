@@ -134,7 +134,7 @@ flowchart LR
    `Message/Role/ToolCall` 归 `platform/llm`（它们描述的是模型消息协议）。
    现在保留是因为 `platform/db` 与 `platform/llm` 都要用 —— 归位切片会让
    platform 反向依赖 slices。已在各 `SLICE.md` 记录。
-2. **`application/` 只剩两个模块**（`ports.py` + `applications.py`，有架构测试钉死）。
+2. **`application/` 只剩 `ports.py` 一个模块**（有架构测试钉死，`SLICE_LEGACY_ALLOW` 已清空）。
    原先这里住着 `assistant / crawl / job_tools / tools / score` 五个模块 —— 它们是
    `slices/` 对应实现的**逐字拷贝**（差异仅 import 前缀 2~4 行），生产代码 0 引用，
    却各带一套测试（105 项）。已随本次清理删除，`examples/` 改指生产路径。
@@ -143,10 +143,14 @@ flowchart LR
    两套测试都绿、只有一套在生产跑；二是那 105 项「绿」不证明任何生产行为，
    是**假信心**（验证矩阵因此从 772 降到 668，降的是冗余不是覆盖）。
    `crawlers/` 的删除同理，两者都有存在性断言防止复活。
-   ⚠️ `slices/jobs/service.py` 仍经 `application.applications` 取 `new_application`
-   （登记在 `SLICE_LEGACY_ALLOW`）。**不能**直接改指 `slices.applications`：那会引入
-   `jobs → applications` 反向依赖（白名单是 `applications → jobs` 单向）。清理前需先
-   决定「投递」这一动作归属哪个切片。
+
+   `applications.py` 是最后一块拼图，它的清理需要一个**设计决策**而非机械搬运：
+   投递记录的本体归 applications 切片，但入口原先挂在 jobs
+   （`POST /jobs/{id}/apply`）。若 jobs 直接改指 `slices.applications`，会引入
+   `jobs → applications` 反向依赖（白名单是单向的）。**决策：端点随域走** ——
+   入口迁为 `POST /api/applications`（body 带 `job_id`），applications 经公开面
+   查岗位（`applications → jobs` 本就在白名单内）。依赖图因此更简单，也与领域
+   叙事一致：「投递是我做过的事」，入口本就该在 applications。
 3. **`application/ports.py` 是共享协议模块**（架构测试显式豁免）。
    它是进程边界的抽象，不属于任何切片 —— 但位置不理想（在 `application` 包下）。
 4. **无 no-JS 回退**：SPA 的取舍。旧 SSR 版本有表单回退，v2 放弃。
@@ -166,7 +170,7 @@ flowchart LR
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 704 项 |
+| 后端全量 | `cd backend && pytest` | 695 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |

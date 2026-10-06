@@ -42,10 +42,7 @@ FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 
 # 切片 → 过渡期登记的旧层依赖（Wave 4 完成后必须清空；新增条目需评审）
-SLICE_LEGACY_ALLOW: dict[str, tuple[str, ...]] = {
-    # 投递记录本体的归属是 applications 切片；jobs 只做入口，Wave 4 切换
-    "jobs": ("hunter1.application.applications",),
-}
+SLICE_LEGACY_ALLOW: dict[str, tuple[str, ...]] = {}
 
 # 协议层的共享豁免：`application/ports.py` 里是**进程边界**的抽象
 # （Crawler / JobRepository / TextFetcher / LLMProvider），它们不是「某个切片的实现」，
@@ -151,13 +148,15 @@ def test_application_layer_is_minimal() -> None:
     （改一边忘另一边，两套测试都绿、只有一套在生产跑）；二是那些「绿」不证明任何
     生产行为，是假信心。
 
-    现存两个各有理由：
+    现存一个各有理由：
     - `ports.py`：共享的进程边界协议（见 SHARED_PORT_MODULE 的说明）；
-    - `applications.py`：仍被 `slices/jobs/service.py` 引用（登记在
-      SLICE_LEGACY_ALLOW），清理需先决定「投递」动作归属哪个切片 —— 是架构决策，
-      不是机械搬运。
+    - `__init__.py`：包标识。
+
+    `applications.py` 已随「投递」归属迁移删除：入口 `POST /api/applications`
+    与记录本体同在 applications 切片，jobs 不再经旧层取 `new_application`，
+    `SLICE_LEGACY_ALLOW` 随之清空。
     """
-    allowed = {"__init__.py", "ports.py", "applications.py"}
+    allowed = {"__init__.py", "ports.py"}
     actual = {p.name for p in (SRC / "application").glob("*.py")}
     extra = actual - allowed
     assert not extra, f"application/ 出现了意料之外的模块（并存期拷贝？）：{sorted(extra)}"
