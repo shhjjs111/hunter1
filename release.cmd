@@ -2,9 +2,11 @@
 rem ===================================================================
 rem  hunter1 one-click release -- just double-click this file.
 rem
-rem  It asks for a GitHub token (input hidden), remembers it, then
+rem  It reads the GitHub token from the CLIPBOARD (so: click "Copy" on the
+rem  token page, then double-click here -- no pasting into the console,
+rem  whose Ctrl+V does not work by default). It remembers the token, then
 rem  pushes the code, creates the Release and uploads the artifacts.
-rem  The token is stored outside the repo; later runs skip the prompt.
+rem  Later runs skip the token step entirely.
 rem
 rem  Why this file is pure ASCII: cmd.exe parses a .cmd file using the
 rem  CURRENT console code page, so non-ASCII bytes here can be

@@ -111,12 +111,82 @@ def save_token(token: str) -> Path:
     return path
 
 
-def prompt_for_token() -> str:
-    """交互式要令牌：不回显、当场校验、通过才落盘。
+def token_from_clipboard() -> str | None:
+    """读剪贴板里的文本（仅 Windows）。读不到就返回 None。
 
-    这是双击入口的主要路径（`release.cmd` → 本脚本）。用 `getpass` 而非
-    `input`：令牌不回显，旁人看不到屏幕；也不进 shell 历史（这是双击运行，
-    根本没有 shell）。
+    存在的理由：用户报「双击后令牌粘不进那个窗口」。Windows 传统控制台的
+    Ctrl+V 默认**没有**绑定粘贴，这不是用户操作错。用户在浏览器里点了「复制」
+    之后，脚本自己去读剪贴板，就完全跳过了「往窗口里粘贴」这一步。
+
+    只用操作系统自带能力，不引入第三方依赖。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # 没有 PowerShell、被策略挡住、或超时 —— 都只是「这条路走不通」，
+        # 不该让整个发布失败，退回手动输入即可。
+        return None
+    if result.returncode != 0:
+        return None
+    text = (result.stdout or "").strip()
+    return text or None
+
+
+def looks_like_a_token(text: str) -> bool:
+    """粗判一段文本像不像 GitHub 令牌。
+
+    只做「够长 + 无空白」的宽松判断，**不**用前缀白名单来*拒绝* —— 令牌格式
+    改过几次（`ghp_` → `github_pat_`），按前缀判定会把新格式判成错的。真正的
+    判据只有一个：GitHub 的回应（`verify_token`）。
+    """
+    return len(text) >= 20 and not any(ch.isspace() for ch in text)
+
+
+def _accept_clipboard_token() -> str | None:
+    """试着用剪贴板里的令牌；用户拒绝或校验失败时返回 None（转手动输入）。"""
+    candidate = token_from_clipboard()
+    if not candidate:
+        return None
+    # 只显示前 4 位与长度 —— 令牌不能出现在屏幕、日志或聊天记录里。
+    prefix = candidate[:4]
+    verdict = "看起来像令牌" if looks_like_a_token(candidate) else "不太像令牌（太短或含空格）"
+    print(f"剪贴板里有一段文本：{prefix}…（共 {len(candidate)} 字符），{verdict}。")
+    try:
+        answer = input("  回车 = 就用它　　n = 改成手动输入：").strip().lower()
+    except EOFError:
+        return None
+    if answer == "n":
+        return None
+    login = verify_token(candidate)
+    if login is None:
+        print("  ✗ GitHub 拒绝了剪贴板里的内容，转手动输入。", file=sys.stderr)
+        return None
+    path = save_token(candidate)
+    print(f"  ✓ 令牌有效，账号：{login}")
+    print(f"  ✓ 已存到 {path}（仓库外，不会被提交）")
+    return candidate
+
+
+def prompt_for_token() -> str:
+    """交互式要令牌：优先读剪贴板，退回手动输入；校验通过才落盘。
+
+    这是双击入口的主要路径（`release.cmd` → 本脚本）。
     """
     import getpass
 
@@ -124,6 +194,15 @@ def prompt_for_token() -> str:
     print("  生成：https://github.com/settings/tokens")
     print("  勾选：repo（classic）；或 Contents: Read and write（fine-grained）")
     print()
+
+    # 先试剪贴板 —— 用户在浏览器点了「复制」就能直接用，不必往这个窗口里粘贴。
+    accepted = _accept_clipboard_token()
+    if accepted is not None:
+        return accepted
+
+    # 手动兜底。这个窗口是传统控制台，Ctrl+V 默认不生效 —— 必须教用户右键，
+    # 否则他会以为「粘不进去 = 脚本坏了」。
+    print("手动输入：在这个窗口里 **右键** 即可粘贴（Ctrl+V 默认不生效）。")
     # 空回车**不**计入尝试次数：手滑敲了三次回车就被锁在外面，是很糟的体验。
     # 只有「令牌被 GitHub 拒绝」才算一次失败。
     attempts = 0

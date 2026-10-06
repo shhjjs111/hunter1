@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -95,7 +96,16 @@ class TestResolveTarget:
 
 
 class TestPromptForToken:
-    """交互输入的**清洗与失败处理**（不碰网络：桩掉 verify_token）。"""
+    """交互输入的**清洗与失败处理**（不碰网络：桩掉 verify_token）。
+
+    本类只覆盖**手动**输入路径，所以用 autouse fixture 把剪贴板显式断开 ——
+    否则这些用例会去读**真实**剪贴板（实测踩到过：跑测试时读到了我自己的剪贴板
+    内容，还把前 4 位打印进了测试输出）。测试不许碰用户环境，读也不行。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_clipboard(self, monkeypatch) -> None:
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: None)
 
     def test_sanitises_pasted_input(self, monkeypatch, tmp_path: Path) -> None:
         """用户常把 `GITHUB_TOKEN=…` 整行、连带空格一起粘进来。"""
@@ -186,3 +196,118 @@ class TestReadTokenInteractiveGate:
 
         with pytest.raises(gh.PublishError):
             gh.read_token(interactive=False)
+
+
+class TestLooksLikeAToken:
+    """宽松判据：够长 + 无空白。不用前缀白名单拒绝（令牌格式变过好几次）。"""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ghp_" + "a" * 36,  # classic PAT
+            "github_pat_" + "b" * 82,  # fine-grained PAT
+            "g" * 20,  # 边界：刚好够长
+        ],
+    )
+    def test_accepts_plausible_tokens(self, text: str) -> None:
+        assert gh.looks_like_a_token(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "too-short",
+            "g" * 19,  # 边界：差一个字符
+            "has a space in it aaaaaaaaaaaa",
+            "two\nlines\nhere\nand\nhere\nand\nhere",
+        ],
+    )
+    def test_rejects_implausible(self, text: str) -> None:
+        assert not gh.looks_like_a_token(text)
+
+
+class TestTokenFromClipboard:
+    """桩掉子进程 —— 测试绝不读写真实剪贴板。"""
+
+    def _fake_run(self, monkeypatch, *, stdout="", returncode=0, raises=None):
+        def runner(*args, **kwargs):
+            if raises is not None:
+                raise raises
+            return subprocess.CompletedProcess(args=args, returncode=returncode, stdout=stdout)
+
+        monkeypatch.setattr(gh.subprocess, "run", runner)
+
+    def test_returns_stripped_text(self, monkeypatch) -> None:
+        self._fake_run(monkeypatch, stdout="  ghp_abc  \n")
+        assert gh.token_from_clipboard() == "ghp_abc"
+
+    def test_empty_clipboard_is_none(self, monkeypatch) -> None:
+        self._fake_run(monkeypatch, stdout="   \n")
+        assert gh.token_from_clipboard() is None
+
+    def test_nonzero_exit_is_none(self, monkeypatch) -> None:
+        self._fake_run(monkeypatch, returncode=1, stdout="whatever")
+        assert gh.token_from_clipboard() is None
+
+    def test_missing_powershell_is_none(self, monkeypatch) -> None:
+        """没有 PowerShell / 被策略挡住 —— 只是这条路不通，不该炸整个发布。"""
+        self._fake_run(monkeypatch, raises=FileNotFoundError("powershell.exe"))
+        assert gh.token_from_clipboard() is None
+
+    def test_timeout_is_none(self, monkeypatch) -> None:
+        self._fake_run(monkeypatch, raises=subprocess.TimeoutExpired("powershell.exe", 15))
+        assert gh.token_from_clipboard() is None
+
+
+class TestAcceptClipboardToken:
+    """用户报的「粘不进窗口」就靠这条路绕开 —— 必须稳。"""
+
+    def test_enter_accepts_and_saves(self, monkeypatch, tmp_path: Path) -> None:
+        target = tmp_path / ".tok"
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: "github_pat_from_clipboard01")
+        monkeypatch.setattr(gh, "verify_token", lambda token: "someone")
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # 直接回车
+
+        assert gh._accept_clipboard_token() == "github_pat_from_clipboard01"
+        assert target.read_text(encoding="utf-8") == "github_pat_from_clipboard01"
+
+    def test_n_declines_without_calling_github(self, monkeypatch, tmp_path: Path) -> None:
+        """选了 n 就不该发出网络请求，也不该落盘。"""
+        target = tmp_path / ".tok"
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: "some-other-copied-text-here")
+        monkeypatch.setattr(gh, "verify_token", lambda token: pytest.fail("不该发起校验"))
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
+
+        assert gh._accept_clipboard_token() is None
+        assert not target.exists()
+
+    def test_rejected_token_falls_back_without_saving(self, monkeypatch, tmp_path: Path) -> None:
+        target = tmp_path / ".tok"
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: "stale-token-not-valid-any")
+        monkeypatch.setattr(gh, "verify_token", lambda token: None)
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+
+        assert gh._accept_clipboard_token() is None
+        assert not target.exists()
+
+    def test_empty_clipboard_never_prompts(self, monkeypatch) -> None:
+        """剪贴板空着就直接转手动，不该弹一个没有内容的确认。"""
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: None)
+        monkeypatch.setattr("builtins.input", lambda *a, **k: pytest.fail("不该发问"))
+
+        assert gh._accept_clipboard_token() is None
+
+    def test_prompt_for_token_prefers_clipboard(self, monkeypatch, tmp_path: Path) -> None:
+        """剪贴板命中时不该走到 getpass（那正是「粘不进去」的那一步）。"""
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / ".tok")
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: "clip-token-abcdefghijklmn")
+        monkeypatch.setattr(gh, "verify_token", lambda token: "someone")
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "")
+        monkeypatch.setattr(
+            "getpass.getpass", lambda *a, **k: pytest.fail("剪贴板已命中，不该再要求粘贴")
+        )
+
+        assert gh.prompt_for_token() == "clip-token-abcdefghijklmn"
