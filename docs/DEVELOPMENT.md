@@ -177,6 +177,11 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 | `scripts/build.py` | 构建打包产物 + 硬校验（前端产物可达性、体积） |
 | `scripts/refresh_fixtures.py` | 站点改版后重抓并刷新离线快照（裁剪 + 回读校验后才落盘） |
 | `scripts/serve.py` | 开发期启动 Web UI（不装包也能用） |
+| `scripts/make_manifest.py` | 生成自更新清单（版本取包本身；拒绝平台错词；对占位符 URL 告警） |
+| `scripts/gh_setup.sh` | 安全交接 GitHub 令牌：只经 stdin（不回显），存到**仓库外**，当场校验 |
+| `scripts/gh_publish.py` | 推送 + 建 Release + 上传产物；`--reupload` 刷新已有 Release 的地址 |
+| `scripts/release.sh` | 发布收尾（校验产物 → 生成真清单 → 打印待执行的命令） |
+| `release.cmd` | **双击即发布**：从剪贴板读令牌 → 复用 → 推代码建 Release |
 
 ## 打包
 
@@ -288,6 +293,13 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    <旧版本 exe> update --source … --dest <dir> --download               # 期望「可更新」+ 解压
    # 把清单里 sha256 改一个字符再跑 → 期望 checksum_mismatch 且目标目录为空
    ```
+   两个实测细节（省得下次卡住）：
+   - `make_manifest.py` 的 `version` **取自包本身**，所以它生成的清单版本 = 当前
+     代码版本，拿它当"更新源"永远得到「已是最新」、**不触发下载**。要演练下载路径，
+     得手工把清单里的 `version` 抬高一位（如 `0.1.1`）—— 那是测试夹具，不是产物。
+   - 校验失败时 exe 退出码为 **1**（成功为 0）。用 `cmd | head` 取 `$?` 拿到的是
+     `head` 的码，别据此判断 —— 要读真实码就 `> file 2>&1; echo $?`。
+   - 解压结果是**单目录**结构（`<dest>/<version>/hunter1/`），不是平铺的。
 7. **多分辨率视觉验收**（必做，别省）：布局问题**单元测试抓不到** —— jsdom 没有布局
    引擎，组件测试全绿也不代表窄屏不塌。用 Edge/Chrome 无头截图逐个分辨率看：
    ```bash
@@ -308,15 +320,59 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    > 加 `--virtual-time-budget=4000` 等页面加载完再截，否则会截到「加载中」。
 
 8. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
-9. **上传 + 打 tag**：exe + zip + manifest.json 传 Release，tag = `v` + `__version__`
-   （`rules.py` 容忍 `v` 前缀）。**上传后用真实地址重新生成一次清单**——`manifest.json`
-   里的 `url` 是绝对地址，上传前无法知道。
+9. **上传 + 打 tag**：优先用脚本（**别手打 `git remote add` / `git push`** —— 见下方
+   镜像警告）：
+   ```bash
+   bash scripts/gh_setup.sh                                   # 首次：安全喂入令牌
+   ./.tools/python/python.exe scripts/gh_publish.py <owner>/hunter1
+   # 或直接双击 release.cmd（从剪贴板读令牌，不必往控制台粘贴）
+   ```
+   `gh_publish.py` 会做四件事：推送分支与 tag → 建 Release → **用真实地址重新生成
+   清单**（`url` 是绝对地址，上传前无从得知）→ 上传 zip + manifest.json。
+   tag 取 `v` + `__version__`（`rules.py` 容忍 `v` 前缀）。它的前置校验是
+   「工作区干净 + tag 指向 HEAD」，不满足就拒绝。
 
-> ⚠️ **镜像会改写命令行里的 GitHub 地址**。开了 `/mirror china` 时，
+### 账号/仓库改名后：`--reupload`
+
+**已发布的 `manifest.json` 里那个绝对地址不会随改名更新** —— 改名后旧版 exe
+只能靠 301 重定向撑着，而旧用户名一旦被别人注册，重定向就断。
+
+```bash
+./.tools/python/python.exe scripts/gh_publish.py <新owner>/hunter1 --reupload
+```
+
+它跳过 git push 与「tag 指向 HEAD」校验（产物没重新构建，那条校验说明不了什么），
+代价由一道更贴切的阀门顶上：**比对本地产物与线上清单里的 sha256**，不一致就拒绝。
+拿不到线上清单时也拒绝（fail-closed）—— 否则这个开关就等于「关掉安全检查」。
+
+> ⚠️ **重传后立刻验证会看到旧内容，那是 CDN 缓存，不是失败。** 实测：刚传完从
+> `releases/download/...` 取回的仍是上一版（331 字节），而走
+> `api.github.com/repos/.../releases/assets/<id>` 取回的是新内容（327 字节）。
+> 两条通道内容不一致 = 缓存；等一会儿自己过期。别据此判定上传失败。
+
+> ⚠️ **镜像会改写命令行文本里的 GitHub 地址**。开了 `/mirror china` 时，
 > `--url-base https://github.com/...` 会被改写成 `https://gitcode.com/gh_mirror/...`
 > 再传给脚本（实测：Python 收到的 `sys.argv` 已被改写）。生成清单时会把这个
-> 改写后的地址烤进去。要发布到 GitHub 官方地址，生成清单前先 `/mirror default`，
-> 或直接用不带 github.com 的地址。
+> 改写后的地址烤进去。
+>
+> **`git remote add` 同样中招** —— 实测
+> `git config --local x "https://github.com/a/b.git"` 存进去的是
+> `gitcode.com/gh_mirror/a/b.git`（只读镜像，push 必失败）。所以**别手打 remote
+> 地址**：`gh_publish.py` 把地址写在**脚本文件里**（文件内容不受改写），并且会
+> 检测并纠正已存错的 `origin`。
+>
+> 实测的改写边界（判断某条路是否安全时照此对照）：
+>
+> | 路径 | 是否被改写 |
+> |---|---|
+> | bash 命令文本里的 `github.com/...`（含 heredoc、`python -c "…"`） | ✗ 会 |
+> | `git config` / `git remote` 写入的值 | ✗ 会 |
+> | bash 里 `api.github.com/...` | ✓ 不会 |
+> | cmd / PowerShell | ✓ 不会 |
+> | Python 脚本**文件内**的字符串 | ✓ 不会 |
+>
+> 要发布到 GitHub 官方地址又必须手写时：先 `/mirror default`，或用 shell 变量
+> 拼接（`H=github; "...https://${H}.com/..."` —— 实测能逃过改写）。
 
 ## 参考
 
