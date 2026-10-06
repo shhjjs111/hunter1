@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 import argparse
-import base64
+import contextlib
 import json
 import os
 import subprocess
@@ -40,6 +40,29 @@ from hunter1.platform.update.rules import ReleaseManifest  # noqa: E402
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
 DEFAULT_TOKEN_FILE = Path.home() / ".hunter1_gh_token"
+
+
+def _enable_utf8_output() -> None:
+    """让 Windows 控制台也能正确打印 ✓ / ↑ 这类字符。
+
+    实测：默认代码页（简中 Windows 是 GBK）下，`print("✓ …")` 直接抛
+    `UnicodeEncodeError: 'gbk' codec can't encode character '\\u2713'` ——
+    整个发布流程在第一行输出就崩。控制台代码页与流编码都调到 UTF-8。
+
+    任何一步失败都静默跳过：显示不好是小事，不能因此让脚本起不来。
+    与 `hunter1.cli` 的 `_enable_utf8_console` 同一套做法。
+    """
+    if os.name == "nt":
+        with contextlib.suppress(Exception):
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 class PublishError(RuntimeError):
@@ -236,6 +259,7 @@ def regenerate_manifest(owner: str, repo: str, tag: str) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _enable_utf8_output()
     parser = argparse.ArgumentParser(prog="gh_publish.py", description="推送并建 Release")
     parser.add_argument("owner_repo", help="owner/repo")
     parser.add_argument("--create-repo", action="store_true", help="仓库不存在时自动创建")
