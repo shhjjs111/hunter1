@@ -116,20 +116,20 @@ class TestConnectionProbe:
         for client in _client(db):
             client.put("/api/settings", json=FORM)
             payload = client.post("/api/settings/test").json()
-            assert payload["ok"] == "1"
+            assert payload["ok"] is True
             assert "fake-model" in payload["message"]
 
     def test_failure_is_reported_not_raised(self, db: Database) -> None:
         for client in _client(db, FakeLLM(boom=True)):
             client.put("/api/settings", json=FORM)
             payload = client.post("/api/settings/test").json()
-            assert payload["ok"] == "0"
+            assert payload["ok"] is False
             assert "unreachable" in payload["message"]
 
     def test_without_config_explains(self, db: Database) -> None:
         for client in _client(db):
             payload = client.post("/api/settings/test").json()
-            assert payload["ok"] == "0"
+            assert payload["ok"] is False
             assert "配置不完整" in payload["message"]
 
 

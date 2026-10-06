@@ -342,6 +342,23 @@ export interface components {
             summary: string;
         };
         /**
+         * ConnectionTestResponse
+         * @description 连通性探测的结果 —— **有类型的响应**，不是裸 dict。
+         *
+         *     裸 `dict[str, str]` 会让 OpenAPI 退化成 `additionalProperties: {type: string}`
+         *     （契约里看不出有什么字段），前端只能靠魔法值判断：`probe.data.ok === "1"`。
+         *     本仓库其余 5 个切片所有端点都有类型，唯独这里漏了（AGENTS.md「响应要有类型」）。
+         *
+         *     `ok` 用 **bool** 而不是 "1"/"0"：字符串状态码有两个毛病 —— 前端得写
+         *     `=== "1"` 这种依赖约定的比较；契约里也说不清 `ok` 到底有哪些取值。
+         */
+        ConnectionTestResponse: {
+            /** Message */
+            message: string;
+            /** Ok */
+            ok: boolean;
+        };
+        /**
          * ConversationMessageView
          * @description 会话里的一条消息。
          */
@@ -1123,9 +1140,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["ConnectionTestResponse"];
                 };
             };
         };

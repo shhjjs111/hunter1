@@ -121,6 +121,25 @@
         "title": "CandidateProfile",
         "type": "object"
       },
+      "ConnectionTestResponse": {
+        "description": "连通性探测的结果 —— **有类型的响应**，不是裸 dict。\n\n裸 `dict[str, str]` 会让 OpenAPI 退化成 `additionalProperties: {type: string}`\n（契约里看不出有什么字段），前端只能靠魔法值判断：`probe.data.ok === \"1\"`。\n本仓库其余 5 个切片所有端点都有类型，唯独这里漏了（AGENTS.md「响应要有类型」）。\n\n`ok` 用 **bool** 而不是 \"1\"/\"0\"：字符串状态码有两个毛病 —— 前端得写\n`=== \"1\"` 这种依赖约定的比较；契约里也说不清 `ok` 到底有哪些取值。",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "title": "ConnectionTestResponse",
+        "type": "object"
+      },
       "ConversationMessageView": {
         "description": "会话里的一条消息。",
         "properties": {
@@ -1428,11 +1447,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Test Connection Api Settings Test Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ConnectionTestResponse"
                 }
               }
             },

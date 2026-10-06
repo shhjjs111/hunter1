@@ -93,10 +93,12 @@ def build_router(
         return _view(candidate)
 
     @router.post("/settings/test", summary="连通性探测（真发一次最小请求）")
-    def test_connection() -> dict[str, str]:
+    def test_connection() -> ConnectionTestResponse:
         settings = store.get_llm()
         if settings is None or not settings.is_configured:
-            return {"ok": "0", "message": "配置不完整：base_url / 模型 / API Key 都要填。"}
+            return ConnectionTestResponse(
+                ok=False, message="配置不完整：base_url / 模型 / API Key 都要填。"
+            )
         try:
             llm = llm_factory(settings)
             response = llm.complete(
@@ -105,10 +107,27 @@ def build_router(
                 max_tokens=16,
             )
         except Exception as exc:
-            return {"ok": "0", "message": f"{type(exc).__name__}: {exc}"}
-        return {"ok": "1", "message": f"连接成功，模型 {response.model or settings.model} 已应答。"}
+            return ConnectionTestResponse(ok=False, message=f"{type(exc).__name__}: {exc}")
+        return ConnectionTestResponse(
+            ok=True, message=f"连接成功，模型 {response.model or settings.model} 已应答。"
+        )
 
     return router
 
 
-__all__ = ["SettingsForm", "SettingsView", "build_router"]
+class ConnectionTestResponse(BaseModel):
+    """连通性探测的结果 —— **有类型的响应**，不是裸 dict。
+
+    裸 `dict[str, str]` 会让 OpenAPI 退化成 `additionalProperties: {type: string}`
+    （契约里看不出有什么字段），前端只能靠魔法值判断：`probe.data.ok === "1"`。
+    本仓库其余 5 个切片所有端点都有类型，唯独这里漏了（AGENTS.md「响应要有类型」）。
+
+    `ok` 用 **bool** 而不是 "1"/"0"：字符串状态码有两个毛病 —— 前端得写
+    `=== "1"` 这种依赖约定的比较；契约里也说不清 `ok` 到底有哪些取值。
+    """
+
+    ok: bool
+    message: str
+
+
+__all__ = ["ConnectionTestResponse", "SettingsForm", "SettingsView", "build_router"]

@@ -123,10 +123,10 @@ export function SettingsPage() {
         )}
         {probe.data && (
           <div className="mt-4">
-            {probe.data.ok === "1" ? (
-              <SuccessNotice message={probe.data.message ?? ""} />
+            {probe.data.ok ? (
+              <SuccessNotice message={probe.data.message} />
             ) : (
-              <ErrorNotice message={probe.data.message ?? "连接失败"} />
+              <ErrorNotice message={probe.data.message || "连接失败"} />
             )}
           </div>
         )}
