@@ -39,6 +39,22 @@ describe("streamSse", () => {
     expect(events).toEqual([{ type: "text", text: "拼接" }]);
   });
 
+  it("兼容 CRLF 行结束（代理/框架默认可能发 \\r\\n）", async () => {
+    // \r\n\r\n 不含 \n\n —— 不归一化的话整条流会被当成一个切不开的块
+    stubFetch(['data: {"type":"text","text":"a"}\r\n\r\ndata: {"type":"done"}\r\n\r\n']);
+    const events: Record<string, unknown>[] = [];
+    await streamSse("/x", {}, (event) => events.push(event));
+    expect(events).toEqual([{ type: "text", text: "a" }, { type: "done" }]);
+  });
+
+  it("CRLF 跨 chunk 切断也能拼回，且不误切", async () => {
+    // \r 与 \n 分属两个 chunk：提前把裸 \r 转成 \n 会与下一段拼出假空行
+    stubFetch(['data: {"type":"a"}\r\n\r\n', 'data: {"type":"b"}\r\n\r\n']);
+    const events: Record<string, unknown>[] = [];
+    await streamSse("/x", {}, (event) => events.push(event));
+    expect(events).toEqual([{ type: "a" }, { type: "b" }]);
+  });
+
   it("多条事件按序到达", async () => {
     stubFetch([
       'data: {"type":"text","text":"a"}\n\n',

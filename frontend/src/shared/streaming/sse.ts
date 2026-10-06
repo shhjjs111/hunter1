@@ -40,6 +40,12 @@ export async function streamSse(
     }
     buffer += decoder.decode(value, { stream: true });
 
+    // SSE 允许 CRLF（\r\n）作行结束 —— 反向代理与部分框架默认就发 CRLF。
+    // 先归一成 \n 再切分：否则 "\r\n\r\n" 不含 "\n\n"，事件根本切不开。
+    // 只替换成对的 \r\n（不碰裸 \r）：若跨 chunk 边界把 \r 提前转成 \n，
+    // 会与下一 chunk 的 \n 拼出假空行，把一条事件误切成两条。
+    buffer = buffer.replace(/\r\n/g, "\n");
+
     // 事件之间以空行分隔；最后一段可能不完整，留在 buffer 里等下一个 chunk
     const blocks = buffer.split("\n\n");
     buffer = blocks.pop() ?? "";
