@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ProfileEditor } from "../scoring/components/ProfileEditor";
 import { Button, Card, ErrorNotice, PageHeader, SuccessNotice } from "../../shared/ui";
@@ -14,19 +14,27 @@ export function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [temperature, setTemperature] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
+  const hydrated = useRef(false);
 
-  // 读到的配置回填表单（只做一次，不覆盖用户正在输入的内容）
+  // 把读到的配置回填表单 —— **只回填一次**。
+  //
+  // 必须用「已回填」标记，不能写成 `setX(current => current || server)`：
+  // 后者表面上是「不覆盖用户输入」，实际是「首个非空值永久锁定」——
+  // 用户清空某字段后，`current` 变成 ""，任何一次 refetch（保存后 invalidate、
+  // 窗口焦点回归）都会把服务器旧值**静默填回去**，用户以为自己清掉了。
+  //
+  // 也不能只靠依赖数组：`settings.data` 每次 refetch 都是新对象，引用必变。
   useEffect(() => {
-    if (settings.data) {
-      setBaseUrl((current) => current || settings.data!.base_url);
-      setModel((current) => current || settings.data!.model);
-      setTemperature((current) =>
-        current || (settings.data!.temperature != null ? String(settings.data!.temperature) : ""),
-      );
-      setMaxTokens((current) =>
-        current || (settings.data!.max_tokens != null ? String(settings.data!.max_tokens) : ""),
-      );
+    if (!settings.data || hydrated.current) {
+      return;
     }
+    hydrated.current = true;
+    setBaseUrl(settings.data.base_url);
+    setModel(settings.data.model);
+    setTemperature(
+      settings.data.temperature != null ? String(settings.data.temperature) : "",
+    );
+    setMaxTokens(settings.data.max_tokens != null ? String(settings.data.max_tokens) : "");
   }, [settings.data]);
 
   return (
@@ -43,15 +51,20 @@ export function SettingsPage() {
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
-            save.mutate({
-              base_url: baseUrl,
-              model,
-              // 空 key = 不改（后端语义）；这里原样传，别自作主张塞占位符
-              api_key: apiKey,
-              temperature: temperature.trim() === "" ? null : Number(temperature),
-              max_tokens: maxTokens.trim() === "" ? null : Number(maxTokens),
-            });
-            setApiKey("");
+            // 密钥输入框只在**保存成功**后才清空。
+            // 原先是在 mutate 之后同步执行 setApiKey("") —— 请求失败时密钥已被清掉，
+            // 用户得把 key 重新敲一遍，而他刚被告知「模型名不合法」这种无关错误。
+            save.mutate(
+              {
+                base_url: baseUrl,
+                model,
+                // 空 key = 不改（后端语义）；这里原样传，别自作主张塞占位符
+                api_key: apiKey,
+                temperature: temperature.trim() === "" ? null : Number(temperature),
+                max_tokens: maxTokens.trim() === "" ? null : Number(maxTokens),
+              },
+              { onSuccess: () => setApiKey("") },
+            );
           }}
         >
           <Field label="Base URL" hint="任意 OpenAI 兼容端点，如 https://api.deepseek.com/v1">
