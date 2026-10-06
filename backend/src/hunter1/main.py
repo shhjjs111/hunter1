@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from hunter1.application.ports import Crawler, LLMProvider, TextFetcher
+from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
 from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db import Database
 from hunter1.slices.applications.router import build_router as build_applications_router
@@ -146,11 +146,22 @@ def create_app(context: AppContext) -> FastAPI:
         """
         settings = context.db.settings().get_llm()
         if settings is None or not settings.is_configured:
-            raise RuntimeError("模型未配置：请先在「配置」页填好 base_url / 模型 / API Key")
+            raise ModelNotConfiguredError(
+                "模型未配置：请先在「配置」页填好 base_url / 模型 / API Key"
+            )
         return context.llm_factory(settings)
 
     def _mount(router: APIRouter, prefix: str = API_PREFIX) -> None:
         app.include_router(router, prefix=prefix)
+
+    # 「模型未配置」是**初始状态**，不是服务端故障：统一映射为 409 + 可行动指引。
+    # 注册在应用级而不是逐路由捕获：评分与助手（含流式）都经 `_runtime_llm`，
+    # 一处覆盖全部；将来新增用模型的切片也自动继承同一语义。
+    @app.exception_handler(ModelNotConfiguredError)
+    async def _model_not_configured(
+        _request: Request, exc: ModelNotConfiguredError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     runner = _build_runner(context)
     # 暴露给外部观察与测试注入（app.state 是 ASGI 约定的挂载点）：

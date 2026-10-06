@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from hunter1.application.ports import LLMProvider
+from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
 from hunter1.domain.assistant import Message, Role
 from hunter1.domain.llm import TextDelta
 from hunter1.slices.assistant.service import (
@@ -162,6 +162,10 @@ def build_router(
             result: AssistantResult = run_turn(
                 llm=llm_factory(), registry=tools, messages=[*history, user_message]
             )
+        except ModelNotConfiguredError:
+            # 「模型未配置」不是**上游故障**（根本没发出请求），502 的语义不符；
+            # 交给应用级处理器映射为 409 + 指引（与 scoring 切片同一语义）。
+            raise
         except Exception as exc:
             # 不落库：失败的尝试不留会话（免得下次把失败那句当上下文）
             raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc

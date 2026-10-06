@@ -100,6 +100,17 @@ class Crawler(Protocol):
     def fetch(self) -> list[RawJob]: ...
 
 
+class ModelNotConfiguredError(RuntimeError):
+    """组装处拿不到可用的模型配置，因而无法构造 `LLMProvider`。
+
+    这**不是服务端故障**，而是初始状态（用户还没在「配置」页填写
+    base_url / 模型 / API Key）。声明在进程边界模块里，是为了让
+    「构造 provider 可能以这种方式失败」成为**契约的一部分**：
+    组装处与各切片据此给出可行动的错误，而不是让一个 `RuntimeError`
+    穿透成 500「Internal Server Error」—— 后者对用户零信息量。
+    """
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     """大模型能力的最小契约。
@@ -151,6 +162,7 @@ __all__ = [
     "Crawler",
     "JobRepository",
     "LLMProvider",
+    "ModelNotConfiguredError",
     "SettingsRepository",
     "TextFetcher",
 ]

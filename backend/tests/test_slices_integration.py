@@ -398,3 +398,45 @@ class TestScoringReachableInProduction:
         detail = response.json()["detail"]
         assert "画像" in detail, f"错误信息要指出缺什么，实际：{detail}"
         app.state.context.db.dispose()
+
+    def test_missing_model_config_is_actionable_not_500(self, tmp_path: Path) -> None:
+        """画像配了、模型没配 → 也是 409 + 指引，不是 500。
+
+        「500 Internal Server Error」对用户毫无信息量，而真实原因是**初始状态**
+        （还没填 API Key），不是服务端 bug。项目自己的原则是「不静默失败、
+        模型报错要原样显示给用户」—— 500 正是这条原则的反面。
+        """
+        from hunter1.slices.scoring import CandidateProfile
+        from hunter1.slices.scoring.store import ScoreStore
+
+        app = _production_context(tmp_path, "prod-nomodel.db")
+        app.state.context.db.jobs().upsert(_seeded_job())
+        ScoreStore(app.state.context.db).save_profile(CandidateProfile(keywords=["集成"]))
+        # 刻意不保存 LLM 配置
+
+        with TestClient(app) as test_client:
+            response = test_client.post(f"/api/scoring/{JOB_ID}")
+
+        assert response.status_code == 409, (
+            f"期望 409，实际 {response.status_code}：{response.text[:120]}"
+        )
+        detail = response.json()["detail"]
+        assert "模型" in detail and "配置" in detail, f"要指出缺什么并给指引，实际：{detail}"
+        app.state.context.db.dispose()
+
+    def test_missing_model_config_covers_assistant_too(self, tmp_path: Path) -> None:
+        """助手共用同一个 `_runtime_llm` —— 应用级处理器应当一并覆盖。
+
+        这条断言是在验证「注册在应用级」这个**设计主张**本身：若将来有人把它
+        挪回逐路由捕获，助手会重新变成 500，而这条测试会红。
+        """
+        app = _production_context(tmp_path, "prod-nomodel-assistant.db")
+
+        with TestClient(app) as test_client:
+            response = test_client.post("/api/assistant/turn", json={"message": "你好"})
+
+        assert response.status_code == 409, (
+            f"期望 409，实际 {response.status_code}：{response.text[:120]}"
+        )
+        assert "配置" in response.json()["detail"]
+        app.state.context.db.dispose()
