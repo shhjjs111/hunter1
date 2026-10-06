@@ -244,6 +244,36 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 - 压缩包里出现越界路径（`..` / 绝对路径）直接拒绝，不静默「修正」。
 - 刻意不实现自我替换（见 README 的说明），因此没有「重启后生效」那类隐藏行为。
 
+### ⚠️ 平台键有两套，别混用
+
+项目里存在**两组**平台名，取值不同、用途不同：
+
+| 来源 | 取值 | 用在哪 |
+|---|---|---|
+| `sys.platform` | `win32` / `darwin` / `linux` | 更新链：`cli._update` 传入、`asset_for()` 精确匹配、`build.py` 的 zip 名（`hunter1-win32.zip`） |
+| `paths.py` 的 `_platform_tag` | `windows` / `macos` / `linux` | 仅数据目录与可执行文件后缀 |
+
+**manifest 的 `platform` 字段必须写 `win32`**（与 `asset_for` 的输入对齐）。
+写 `windows` 不会报错，只会让「有产物却永远匹配不上」——`asset_for` 是精确匹配、
+刻意不退回别的平台，于是每次检查更新都得到「本平台暂无产物」。
+
+### 发布前检查单
+
+按序执行，逐项确认：
+
+1. **版本号**：只改 `src/hunter1/__init__.py` 的 `__version__`（单一来源，有测试锁定）。
+2. **全量门禁**：`bash scripts/check.sh` 全绿。
+3. **打包 + 冒烟**：`./.tools/python/python.exe scripts/build.py --zip`。
+4. **升级演练（真旧库）**：拿一份**上个版本**的用户库副本，用新版本启动一次，
+   确认三条路径 —— 这是自动化门禁覆盖不到的（测试与冒烟都用全新临时库）：
+   | 场景 | 观察点 |
+   |---|---|
+   | 干净旧库 | 正常启动；新增的唯一索引出现；**行数不变**；无告警 |
+   | 撞过号的旧库 | stderr 打出「检测到 N 个会话…已重排」；序号重排为 1..N；消息不丢 |
+   | 带已移除字段的旧配置 | `GET /api/settings` 的 `broken` 为 `false`（不被判损坏） |
+5. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
+6. **上传 + 打 tag**：exe + zip + manifest.json 传 Release，tag = `v` + `__version__`。
+
 ## 参考
 
 - 架构与路线：[docs/DEVELOPMENT-PLAN.md](DEVELOPMENT-PLAN.md)
