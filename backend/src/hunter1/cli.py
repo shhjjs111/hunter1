@@ -25,7 +25,7 @@ from pathlib import Path
 from hunter1 import __version__
 from hunter1.main import AppContext
 from hunter1.paths import data_dir, default_db_path
-from hunter1.platform.db.database import DatabaseLocationError
+from hunter1.platform.db import DatabaseLocationError
 from hunter1.slices.crawl import available_sites
 
 # 更新源没有内建默认值：这个项目还没有发布渠道，编一个假 URL 只会让
