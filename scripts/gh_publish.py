@@ -437,13 +437,15 @@ def main(argv: list[str] | None = None) -> int:
     print("  ✓ 工作区干净，tag 指向 HEAD")
 
     if args.dry_run:
+        # 省略 owner 时（dry-run 不读令牌）显示占位 —— 否则 "/hunter1" 看起来
+        # 像路径写错了，而不是「稍后由令牌补上」。
+        target = f"{owner or '「令牌对应账号」'}/{repo}"
         print("\n[dry-run] 将执行：")
-        print(
-            f"  1. 确保仓库 {owner}/{repo} 存在" + ("（不存在则创建）" if args.create_repo else "")
-        )
+        print(f"  1. 确保仓库 {target} 存在" + ("（不存在则创建）" if args.create_repo else ""))
         print(f"  2. git push origin HEAD:refs/heads/main 与 refs/tags/{tag}")
         print(f"  3. 建 Release {tag}")
         print("  4. 重新生成清单（真实地址）并上传 hunter1-win32.zip + manifest.json")
+        print("\n[dry-run] 结束 —— 未做任何改动。")
         return 0
 
     try:
