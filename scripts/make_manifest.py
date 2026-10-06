@@ -62,9 +62,14 @@ _PLACEHOLDER_TOKENS = ("OWNER", "REPO", "CHANGE-ME", "CHANGEME", "TODO", "YOUR-O
 
 
 def warn_if_placeholder(url_base: str) -> str | None:
-    """URL 前缀像模板占位符时返回提示语，否则 None。"""
-    upper = (url_base or "").upper()
-    hit = [token for token in _PLACEHOLDER_TOKENS if token in upper]
+    """URL 前缀像模板占位符时返回提示语，否则 None。
+
+    **大小写敏感**：占位符的惯例是全大写（`OWNER` / `REPO`）。不能先把 URL
+    转成大写再匹配 —— 那会让真实仓库名里的 `repo`（如 `my-repo`）命中占位符
+    词，给所有这类仓库发假告警（实测踩到过：`example/repo` 被判成没替换）。
+    """
+    text = url_base or ""
+    hit = [token for token in _PLACEHOLDER_TOKENS if token in text]
     if not hit:
         return None
     return (

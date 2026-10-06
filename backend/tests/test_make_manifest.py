@@ -195,6 +195,28 @@ class TestPlaceholderWarning:
             is None
         )
 
+    def test_url_containing_repo_word_is_not_flagged(self) -> None:
+        """真实仓库名里含 `repo` 字样（如 my-repo）不能被误判成占位符。
+
+        这条是**实测暴露**的：检测原先把整个 URL 转大写再匹配，于是
+        `example/repo` 的 `repo` 大写后命中了占位符词 `REPO`，
+        任何叫 `xxx-repo` 的仓库都会收到假告警。
+        """
+        for url in (
+            "https://github.com/acme/my-repo/releases/download/v0.1.0",
+            "https://github.com/owner/repo/releases/download/v0.1.0",
+        ):
+            assert make_manifest.warn_if_placeholder(url) is None, url
+
+    def test_uppercase_placeholder_is_still_caught(self) -> None:
+        """占位符的惯例是全大写 —— 真的没替换时仍要抓到。"""
+        assert (
+            make_manifest.warn_if_placeholder(
+                "https://github.com/OWNER/REPO/releases/download/v0.1.0"
+            )
+            is not None
+        )
+
     def test_cli_still_writes_file_but_warns(self, artifact: Path, tmp_path: Path, capsys) -> None:
         """告警不阻断生成（占位符清单仍有价值：sha256/size 是真的），
         但必须说出来，不能让人以为可以直接发。"""
