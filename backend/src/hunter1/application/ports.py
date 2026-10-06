@@ -108,7 +108,7 @@ class LLMProvider(Protocol):
     不需要改任何用例代码；测试可注入假实现，完全离线。
 
     `stream_with_tools` 的承诺是**始终可用**：厂商不支持流式时由实现自行退化
-    （见 `infrastructure.llm`），调用方不必判断「这家支不支持流式」。
+    （见 `platform.llm`），调用方不必判断「这家支不支持流式」。
     """
 
     def complete(
