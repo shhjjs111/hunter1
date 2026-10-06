@@ -291,6 +291,12 @@ export interface components {
             items: components["schemas"]["ApplicationSummary"][];
         };
         /**
+         * ApplicationStage
+         * @description 投递所处阶段。顺序即流程顺序，界面按此排进度。
+         * @enum {string}
+         */
+        ApplicationStage: "applied" | "written_test" | "interview" | "offer" | "rejected" | "withdrawn";
+        /**
          * ApplicationSummary
          * @description 投递列表项。
          */
@@ -588,13 +594,16 @@ export interface components {
         };
         /**
          * StageUpdateRequest
-         * @description 推进投递阶段的请求体（`stage` 为 `ApplicationStage` 的字面值）。
+         * @description 推进投递阶段的请求体。
+         *
+         *     `stage` 直接用 `ApplicationStage` 而非 `str`：OpenAPI 快照里会输出**真正的
+         *     enum**（前端可照契约比对，不再靠魔法字符串对齐一份手抄的取值表），非法值由
+         *     请求体校验直接拒为 422 —— 路由不必再手工判一次、也就不会漏判。
          */
         StageUpdateRequest: {
             /** Note */
             note?: string | null;
-            /** Stage */
-            stage: string;
+            stage: components["schemas"]["ApplicationStage"];
         };
         /**
          * StageUpdateResponse

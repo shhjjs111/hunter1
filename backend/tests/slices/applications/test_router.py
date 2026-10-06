@@ -88,10 +88,11 @@ class TestStageEndpoint:
         assert loaded.stage is ApplicationStage.INTERVIEW
         assert loaded.updated_at == NOW
 
-    def test_unknown_stage_is_400(self, client: TestClient, store: ApplicationStore) -> None:
+    def test_unknown_stage_is_422(self, client: TestClient, store: ApplicationStore) -> None:
+        """`stage` 现在是枚举类型 —— 非法值由请求体校验拒为 422（而非路由手工判 400）。"""
         store.upsert(_application(id="a1"))
         response = client.post("/api/applications/a1/stage", json={"stage": "bogus"})
-        assert response.status_code == 400
+        assert response.status_code == 422
 
     def test_missing_is_404(self, client: TestClient) -> None:
         response = client.post("/api/applications/zzzz/stage", json={"stage": "interview"})

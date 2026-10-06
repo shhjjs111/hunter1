@@ -2,7 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import contract from "../../../../contracts/openapi.json";
 import { ApplicationsPage } from "./ApplicationsPage";
+import { STAGE_ORDER } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -85,5 +87,22 @@ describe("ApplicationsPage 删除确认", () => {
     await waitFor(() => {
       expect(deleteCalls(fetchMock)).toHaveLength(1);
     });
+  });
+});
+
+describe("前端阶段枚举与契约一致", () => {
+  // STAGE_ORDER 是**手抄**的枚举取值表，会与后端漂移。拿契约快照逐条比对：
+  // 契约里 stage 现在是真 enum（后端用 ApplicationStage 换来），pydantic 把
+  // 它提成了独立的 `ApplicationStage` schema（`$ref` 指向），增删阶段而忘了
+  // 同步前端时这里会红 —— 不必靠人工记得同步。
+  it("STAGE_ORDER 与契约的 ApplicationStage enum 取值完全一致", () => {
+    const enumValues = (
+      contract as {
+        components: { schemas: { ApplicationStage: { enum: string[] } } };
+      }
+    ).components.schemas.ApplicationStage.enum;
+
+    expect([...STAGE_ORDER].sort()).toEqual([...enumValues].sort());
+    expect(new Set(STAGE_ORDER).size).toBe(STAGE_ORDER.length); // 无重复
   });
 });

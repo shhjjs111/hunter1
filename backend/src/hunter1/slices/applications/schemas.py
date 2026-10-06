@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from hunter1.domain.models import Application
+from hunter1.domain.models import Application, ApplicationStage
 
 
 class ApplicationSummary(BaseModel):
@@ -41,9 +41,14 @@ class ApplicationSummary(BaseModel):
 
 
 class StageUpdateRequest(BaseModel):
-    """推进投递阶段的请求体（`stage` 为 `ApplicationStage` 的字面值）。"""
+    """推进投递阶段的请求体。
 
-    stage: str
+    `stage` 直接用 `ApplicationStage` 而非 `str`：OpenAPI 快照里会输出**真正的
+    enum**（前端可照契约比对，不再靠魔法字符串对齐一份手抄的取值表），非法值由
+    请求体校验直接拒为 422 —— 路由不必再手工判一次、也就不会漏判。
+    """
+
+    stage: ApplicationStage
     note: str | None = None
 
 

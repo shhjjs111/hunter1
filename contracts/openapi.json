@@ -18,6 +18,19 @@
         "title": "ApplicationListResponse",
         "type": "object"
       },
+      "ApplicationStage": {
+        "description": "投递所处阶段。顺序即流程顺序，界面按此排进度。",
+        "enum": [
+          "applied",
+          "written_test",
+          "interview",
+          "offer",
+          "rejected",
+          "withdrawn"
+        ],
+        "title": "ApplicationStage",
+        "type": "string"
+      },
       "ApplicationSummary": {
         "description": "投递列表项。",
         "properties": {
@@ -666,7 +679,7 @@
         "type": "object"
       },
       "StageUpdateRequest": {
-        "description": "推进投递阶段的请求体（`stage` 为 `ApplicationStage` 的字面值）。",
+        "description": "推进投递阶段的请求体。\n\n`stage` 直接用 `ApplicationStage` 而非 `str`：OpenAPI 快照里会输出**真正的\nenum**（前端可照契约比对，不再靠魔法字符串对齐一份手抄的取值表），非法值由\n请求体校验直接拒为 422 —— 路由不必再手工判一次、也就不会漏判。",
         "properties": {
           "note": {
             "anyOf": [
@@ -680,8 +693,7 @@
             "title": "Note"
           },
           "stage": {
-            "title": "Stage",
-            "type": "string"
+            "$ref": "#/components/schemas/ApplicationStage"
           }
         },
         "required": [

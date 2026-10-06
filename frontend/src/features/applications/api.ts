@@ -4,6 +4,8 @@ import { api } from "../../shared/api/client";
 import type { components } from "../../shared/api/schema";
 
 export type ApplicationSummary = components["schemas"]["ApplicationSummary"];
+/** 契约里的阶段枚举（后端 `ApplicationStage`）—— 现已进契约，不再是魔法字符串。 */
+export type ApplicationStage = components["schemas"]["ApplicationStage"];
 
 export const STAGE_LABELS: Record<string, string> = {
   applied: "已投递",
@@ -14,7 +16,7 @@ export const STAGE_LABELS: Record<string, string> = {
   withdrawn: "已放弃",
 };
 
-export const STAGE_ORDER = [
+export const STAGE_ORDER: ApplicationStage[] = [
   "applied",
   "written_test",
   "interview",
@@ -41,7 +43,9 @@ export function useChangeStage() {
     mutationFn: async (input: { applicationId: string; stage: string; note?: string }) => {
       const { data, error, response } = await api.POST("/api/applications/{application_id}/stage", {
         params: { path: { application_id: input.applicationId } },
-        body: { stage: input.stage, note: input.note ?? null },
+        // `<select>` 的值天生是 string，在**这里**收窄为契约枚举即可 ——
+        // 调用方的类型不必被 DOM 的宽 string 污染。
+        body: { stage: input.stage as ApplicationStage, note: input.note ?? null },
       });
       if (error || !data) {
         throw new Error(`改阶段失败（HTTP ${response.status}）`);

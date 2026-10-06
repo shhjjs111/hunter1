@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Response
 
-from hunter1.domain.models import ApplicationStage
 from hunter1.slices.applications import schemas, service
 from hunter1.slices.applications.store import ApplicationStore
 
@@ -52,11 +51,8 @@ def build_router(
         application = store.get(application_id)
         if application is None:
             raise HTTPException(status_code=404, detail=f"投递不存在：{application_id}")
-        try:
-            stage = ApplicationStage(body.stage)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"未知阶段：{body.stage}") from None
-        updated = service.change_stage(application, stage=stage, now=now(), note=body.note)
+        # stage 已由请求体校验成合法枚举（非法值在进入本函数之前就是 422）
+        updated = service.change_stage(application, stage=body.stage, now=now(), note=body.note)
         store.upsert(updated)
         return schemas.StageUpdateResponse(application_id=updated.id, stage=updated.stage.value)
 
