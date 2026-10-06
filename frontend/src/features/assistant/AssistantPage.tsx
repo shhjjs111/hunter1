@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button, Card, EmptyState, ErrorNotice, PageHeader } from "../../shared/ui";
 import { streamSse } from "../../shared/streaming/sse";
@@ -16,6 +16,14 @@ export function AssistantPage() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // 卸载时中止在飞的流：否则回调会继续对已卸载的组件 setState
+  // （切走路由后流还在跑，白耗流量也白改状态）。
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   // 历史消息（已落库的）与本次流式（还在飞的）拼在一起展示
   const history: ChatItem[] = (messages.data ?? []).map((item) => ({
@@ -65,6 +73,15 @@ export function AssistantPage() {
             if (id) {
               setCurrentId(id);
             }
+            // 关键顺序：先清 live，再 refresh。
+            //
+            // 后端在 yield `done` **之前**就 `_persist` 落库了（见 router.py 的
+            // `_stream_turn`），所以 refresh 拉回来的 history 已经包含本轮两条消息。
+            // 若不先清 live，`items = [...history, ...live]` 会把本轮显示两遍。
+            //
+            // 代价：history 重取完成前会短暂空一瞬。本工具是本地 SQLite，
+            // 重取是毫秒级；而「消息重复显示」是确定性错误 —— 两害相权取此。
+            setLive([]);
             refresh();
           } else if (event.type === "error") {
             setError(String(event.message ?? "未知错误"));
@@ -73,7 +90,11 @@ export function AssistantPage() {
         controller.signal,
       );
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      // 用户主动「中止」不是错误 —— 别把 AbortError 当失败弹给用户
+      const aborted = exc instanceof DOMException && exc.name === "AbortError";
+      if (!aborted) {
+        setError(exc instanceof Error ? exc.message : String(exc));
+      }
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -96,6 +117,7 @@ export function AssistantPage() {
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-medium text-slate-700">会话</h2>
           <Button
+            disabled={streaming}
             onClick={() => {
               setCurrentId(null);
               setLive([]);
@@ -108,11 +130,14 @@ export function AssistantPage() {
         <ul className="space-y-1">
           {(conversations.data ?? []).map((item) => (
             <li key={item.id}>
+              {/* 流式进行中禁止切换：切走会把本轮流内容追加到另一个会话上，
+                  且 done 后 currentId 被覆盖回去 —— 用户的选择被静默撤销。 */}
               <button
                 type="button"
+                disabled={streaming}
                 className={`w-full truncate rounded px-2 py-1 text-left text-sm ${
                   currentId === item.id ? "bg-slate-900 text-white" : "hover:bg-slate-100"
-                }`}
+                } ${streaming ? "cursor-not-allowed opacity-50" : ""}`}
                 onClick={() => {
                   setCurrentId(item.id);
                   setLive([]);
