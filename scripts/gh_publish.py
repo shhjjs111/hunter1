@@ -788,7 +788,10 @@ def main(argv: list[str] | None = None) -> int:
     print("  改坏清单一个 sha256 字符 → 期望 checksum_mismatch 且不留半包")
     print("\n  稳定入口（写进 HUNTER1_UPDATE_SOURCE，一次设好终身有效）：")
     print(f"    https://github.com/{owner}/{repo}/releases/latest/download/manifest.json")
-    print("\n  ⚠ 别忘了去 GitHub 撤销本次用的令牌，并删除本地令牌文件。")
+    print(
+        f"\n  令牌已存到 {DEFAULT_TOKEN_FILE}，下次发版自动复用；"
+        "不再发版时再到 GitHub 撤销它并删除该文件。"
+    )
     return 0
 
 
