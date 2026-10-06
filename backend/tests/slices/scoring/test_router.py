@@ -275,5 +275,7 @@ class TestProfileEndpoints:
         with self._client(db, FakeLLM()) as client:
             response = client.post(f"/api/scoring/{JOB_ID}")
 
-        assert response.status_code == 409, f"期望 409，实际 {response.status_code}：{response.text[:120]}"
+        assert response.status_code == 409, (
+            f"期望 409，实际 {response.status_code}：{response.text[:120]}"
+        )
         assert "画像" in response.json()["detail"]
