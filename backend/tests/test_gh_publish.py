@@ -293,6 +293,71 @@ class TestReuploadGuard:
         assert result is None
 
 
+class TestProxyFromSettings:
+    """把 Windows 注册表的代理设置解析成代理 URL。
+
+    为什么需要它：用户的系统代理写在注册表里（`ProxyEnable=1`），浏览器会用，
+    但 **Python urllib 不读注册表**。GitHub 直连被挡时，`release.cmd` 就会失败，
+    而用户看到的是「连不上」——他不会想到是代理没被用上。
+    """
+
+    def test_disabled_means_no_proxy(self) -> None:
+        assert gh.proxy_from_settings(0, "127.0.0.1:7897") is None
+        assert gh.proxy_from_settings(None, "127.0.0.1:7897") is None
+
+    def test_enabled_with_host_port(self) -> None:
+        assert gh.proxy_from_settings(1, "127.0.0.1:7897") == "http://127.0.0.1:7897"
+
+    def test_blank_server_means_no_proxy(self) -> None:
+        assert gh.proxy_from_settings(1, "") is None
+        assert gh.proxy_from_settings(1, "   ") is None
+
+    def test_per_scheme_form_prefers_https(self) -> None:
+        """IE 风格：`http=a:1;https=b:2` —— 我们要的是 https 那条（GitHub 走 https）。"""
+        assert gh.proxy_from_settings(1, "http=127.0.0.1:8080;https=127.0.0.1:7897") == (
+            "http://127.0.0.1:7897"
+        )
+
+    def test_per_scheme_form_falls_back_to_http_entry(self) -> None:
+        assert gh.proxy_from_settings(1, "http=127.0.0.1:8080") == "http://127.0.0.1:8080"
+
+    def test_already_has_scheme(self) -> None:
+        assert gh.proxy_from_settings(1, "http://127.0.0.1:7897") == "http://127.0.0.1:7897"
+
+    def test_whitespace_is_tolerated(self) -> None:
+        assert gh.proxy_from_settings(1, "  127.0.0.1:7897  ") == "http://127.0.0.1:7897"
+
+    def test_bare_host_without_port_is_still_a_proxy(self) -> None:
+        assert gh.proxy_from_settings(1, "proxy.corp") == "http://proxy.corp"
+
+
+class TestEffectiveProxy:
+    def test_env_var_wins(self, monkeypatch) -> None:
+        """显式设了 HTTPS_PROXY 就听它的 —— 便于临时指向别的代理或本地调试。"""
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9999")
+        monkeypatch.setattr(gh, "system_proxy", lambda: pytest.fail("不该去读注册表"))
+        assert gh.effective_proxy() == "http://127.0.0.1:9999"
+
+    def test_falls_back_to_system_proxy(self, monkeypatch) -> None:
+        for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(gh, "system_proxy", lambda: "http://127.0.0.1:7897")
+        assert gh.effective_proxy() == "http://127.0.0.1:7897"
+
+    def test_opt_out_env_disables_everything(self, monkeypatch) -> None:
+        """`HUNTER1_NO_PROXY=1` 是逃生口：代理本身有问题时别被它卡死。"""
+        monkeypatch.setenv("HUNTER1_NO_PROXY", "1")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9999")
+        monkeypatch.setattr(gh, "system_proxy", lambda: "http://127.0.0.1:7897")
+        assert gh.effective_proxy() is None
+
+    def test_nothing_configured_is_none(self, monkeypatch) -> None:
+        for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "HUNTER1_NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(gh, "system_proxy", lambda: None)
+        assert gh.effective_proxy() is None
+
+
 class TestReadTokenInteractiveGate:
     def test_non_tty_raises_instead_of_hanging(self, monkeypatch, tmp_path: Path) -> None:
         """CI 里没有终端：必须报错，不能停在一个永远等不到输入的提示上。"""

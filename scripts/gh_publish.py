@@ -81,6 +81,84 @@ def _enable_utf8_output() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def proxy_from_settings(enable: object, server: str) -> str | None:
+    """把 Windows 注册表的 `ProxyEnable` / `ProxyServer` 解析成代理 URL。
+
+    纯函数，便于单测（不碰注册表）。取值形态见 `system_proxy` 的说明。
+    """
+    if not enable:
+        return None
+    raw = (server or "").strip()
+    if not raw:
+        return None
+    # IE 风格：`http=a:1;https=b:2`。GitHub 走 https，优先取 https 那条。
+    if "=" in raw:
+        entries: dict[str, str] = {}
+        for part in raw.split(";"):
+            key, _, value = part.partition("=")
+            if value.strip():
+                entries[key.strip().lower()] = value.strip()
+        raw = entries.get("https") or next(iter(entries.values()), "")
+        if not raw:
+            return None
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    return raw
+
+
+def system_proxy() -> str | None:
+    """Windows 系统代理；未启用/读不到则 None。
+
+    **为什么需要它**：用户的代理写在注册表里（控制面板/系统设置那个开关），
+    浏览器会用，但 **Python urllib 不读注册表** —— 于是 GitHub 直连被挡时，
+    release.cmd 报「连不上」，而用户不会想到是代理没被用上。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except OSError:
+        return None
+    return proxy_from_settings(enable, server)
+
+
+def effective_proxy() -> str | None:
+    """本次运行该用的代理。
+
+    优先级：`HUNTER1_NO_PROXY`（逃生口，设了就完全不用代理）→ 环境变量
+    `HTTPS_PROXY`/`http_proxy` 等 → Windows 系统代理。
+
+    逃生口是必要的：代理本身出问题时（端口不通、规则不对），没有它就会被
+    卡死在一条路上，而用户不知道还能怎么办。
+    """
+    if os.environ.get("HUNTER1_NO_PROXY", "").strip():
+        return None
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return system_proxy()
+
+
+def _opener(proxy: str | None) -> urllib.request.OpenerDirector:
+    """按代理设置造一个 opener。显式传 handler，避免与 urllib 自己的环境变量
+    处理叠加出「到底用了哪个代理」说不清的局面。"""
+    if proxy:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        )
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 class PublishError(RuntimeError):
     pass
 
@@ -296,7 +374,7 @@ def api_request(
     if data is not None:
         request.add_header("Content-Type", content_type)
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with _opener(effective_proxy()).open(request, timeout=120) as response:
             body = response.read()
             if response.status not in expect:
                 raise PublishError(f"{method} {path} → HTTP {response.status}")
@@ -305,7 +383,14 @@ def api_request(
         detail = exc.read().decode("utf-8", "replace")[:400]
         raise PublishError(f"{method} {path} → HTTP {exc.code}：{detail}") from None
     except urllib.error.URLError as exc:
-        raise PublishError(f"{method} {path} → 网络不可达：{exc.reason}") from None
+        proxy = effective_proxy()
+        hint = f"（已试过代理 {proxy}）" if proxy else "（未使用代理）"
+        raise PublishError(
+            f"{method} {path} → 网络不可达：{exc.reason}{hint}\n"
+            "  若浏览器能开 GitHub、这里却不行，多半是系统代理没被用上 —— 本脚本"
+            "会自动读 Windows 代理设置；仍不行就设 HTTPS_PROXY 环境变量，"
+            "或确认代理端口是否变了（HUNTER1_NO_PROXY=1 可强制不用代理）。"
+        ) from None
 
 
 def git(*args: str, token: str, cwd: Path = ROOT) -> str:
@@ -326,8 +411,12 @@ def git(*args: str, token: str, cwd: Path = ROOT) -> str:
         askpass.chmod(0o700)
         env = dict(os.environ, GIT_ASKPASS=str(askpass), HUNTER1_GH_TOKEN=token)
         env.pop("GIT_TERMINAL_PROMPT", None)
+        # 推送同样可能被网络挡住。用 `-c` 一次性传代理，**不写进用户的 .gitconfig**
+        # —— 那是用户的配置面，工具不该擅自改。
+        proxy = effective_proxy()
+        proxy_args = ["-c", f"http.proxy={proxy}", "-c", f"https.proxy={proxy}"] if proxy else []
         result = subprocess.run(
-            ["git", *args],
+            ["git", *proxy_args, *args],
             cwd=cwd,
             env=env,
             capture_output=True,
