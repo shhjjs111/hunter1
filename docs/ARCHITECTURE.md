@@ -141,18 +141,23 @@ flowchart LR
    它是进程边界的抽象，不属于任何切片 —— 但位置不理想（在 `application` 包下）。
 4. **无 no-JS 回退**：SPA 的取舍。旧 SSR 版本有表单回退，v2 放弃。
 5. **SSE 进度未做**：抓取进度仍是轮询（与旧界面语义一致）。
-6. **candidate_profile 未持久化**：画像由组装处注入，编辑界面待做；
-   未提供时 scoring 端点不挂载（「没接线」表现为「端点不存在」）。
+6. ~~**candidate_profile 未持久化**~~ —— **已解决**（画像可配置 + 评分端点始终挂载）。
+   原描述为：「画像由组装处注入，编辑界面待做；未提供时 scoring 端点不挂载
+   （「没接线」表现为「端点不存在」）」。这条记录的问题比描述更严重：画像
+   **从来没有**生产入口（`cli.py` 不注入），所以成品里评分根本不可达，而契约
+   快照却声称它有 —— 前端照契约写会拿到 405（SPA 回落的 GET 拦下了 POST）。
+   现画像存库、`GET/PUT /api/scoring/profile` 可读写、未配置时给 409 + 指引。
+   教训：**「端点不存在」不是一种诚实的失败**——它让契约与运行时静默分叉。
 
 ## 验证矩阵
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 757 项 |
+| 后端全量 | `cd backend && pytest` | 764 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
-| 前端 | `cd frontend && npm run check` | 类型 + 29 项（含整体渲染验收） |
+| 前端 | `cd frontend && npm run check` | 类型 + 36 项（含整体渲染验收） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
 | 全门禁 | `bash scripts/check.sh` | 以上全部 |
 | 打包 | `python scripts/build.py` | 布局 + 冒烟（SPA 外壳 + API） |

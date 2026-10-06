@@ -12,6 +12,7 @@
 |---|---|
 | `score_job` | 评分用例（失败抛 `ScoringError`，不返回 0 分） |
 | `CandidateProfile` / `ScoreCard` / `ScoringError` | 领域模型 |
+| `ProfileForm` / `ProfileView` / `ScoreView` | HTTP 形状（契约源头；路由响应都是有类型的模型） |
 | `PROMPT_VERSION` / `build_user_prompt` / `SYSTEM_PROMPT` / `SCORE_SCHEMA` | 提示词（换代只动 `prompts.py`） |
 | `ScoreStore` / `build_router` | 存取门面与 HTTP 面工厂 |
 
@@ -34,7 +35,13 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/scoring/{job_id}` | 评分并写回；404 岗位不存在、422 模型失败 |
+| GET | `/api/scoring/profile` | 读候选人画像（**未配置时为 `null`**，不是 404 —— 未配置是初始状态） |
+| PUT | `/api/scoring/profile` | 保存画像；三项全空 → 422（画像至少要有一项信号） |
+| POST | `/api/scoring/{job_id}` | 评分并写回；**409 画像未配置**、404 岗位不存在、422 模型失败 |
+
+端点**始终挂载**：画像未配置不是「端点不存在」，而是「端点存在但状态未就绪」
+（409 + 修复指引）。若改成「没配就不挂载」，前端照契约发出的 POST 会落进 SPA
+回落的 `GET /{path:path}`、收到 405 —— 与真实原因无关的错误。
 
 ## 独立验证命令
 
@@ -57,5 +64,6 @@ cd backend && <python> -m pytest tests/slices/scoring -q
   已随本切片归位；旧文件待下线。
 - `store.py` 直接访问 `platform.db` 的岗位仓储；jobs 切片将来若提供评分写回
   的公开面，可改经其调用（协议不变，只换实现）。
-- `CandidateProfile` 目前由组装处在启动时构造并注入；画像的持久化与编辑界面
-  尚未实现（迁移范围外）。
+- `CandidateProfile` 目前由**用户经「配置」页写入**，存在通用键值配置区
+  （与 LLM 配置同表，`ScoreStore.load_profile/save_profile`）；组装处每请求
+  经 `profile_provider` 读取，改画像**立刻生效、不必重启**（与 `llm_factory` 同理）。
