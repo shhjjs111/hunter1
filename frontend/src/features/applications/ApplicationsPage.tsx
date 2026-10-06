@@ -17,7 +17,12 @@ export function ApplicationsPage() {
       {changeStage.isError && <ErrorNotice message={(changeStage.error as Error).message} />}
       {remove.isError && <ErrorNotice message={(remove.error as Error).message} />}
 
-      {applications.data?.length === 0 ? (
+      {applications.isLoading ? (
+        // 显式加载态：否则首帧会渲染一张空表，与「一条都没有」看起来一样
+        <Card>
+          <p className="px-4 py-6 text-sm text-slate-500">加载中…</p>
+        </Card>
+      ) : applications.data?.length === 0 ? (
         <EmptyState>还没有投递记录。去「岗位库」找岗位，点「记录投递」。</EmptyState>
       ) : (
         <Card>
@@ -59,7 +64,20 @@ export function ApplicationsPage() {
                   <td className="px-4 py-2 text-slate-500">{item.updated_at.slice(0, 10)}</td>
                   <td className="px-4 py-2 text-slate-500">{item.note ?? "—"}</td>
                   <td className="px-4 py-2 text-right">
-                    <Button onClick={() => remove.mutate(item.id)}>删除</Button>
+                    <Button
+                      onClick={() => {
+                        // 删除不可撤销（后端无软删）—— 先确认，避免误点丢记录
+                        if (
+                          window.confirm(
+                            `删除「${item.company}」的投递记录？此操作不可撤销。`,
+                          )
+                        ) {
+                          remove.mutate(item.id);
+                        }
+                      }}
+                    >
+                      删除
+                    </Button>
                   </td>
                 </tr>
               ))}
