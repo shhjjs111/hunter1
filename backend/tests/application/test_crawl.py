@@ -11,10 +11,10 @@ from pathlib import Path
 import pytest
 
 from hunter1.application.crawl import BatchCrawlResult, CrawlResult, crawl_all, crawl_company
-from hunter1.crawlers.static_html import ListPageSpec, StaticHtmlCrawler
 from hunter1.domain.crawl import RawJob, job_identity
 from hunter1.domain.models import Job
 from hunter1.platform.db import Database
+from hunter1.slices.crawl import ListPageSpec, StaticHtmlCrawler
 
 
 @pytest.fixture()

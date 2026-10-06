@@ -5,7 +5,7 @@
     ./.tools/python/python.exe examples/demo_sites.py             # 真实站点
     ./.tools/python/python.exe examples/demo_sites.py --offline   # 用快照，不联网
 
-演示 M2 的完整链路：`crawlers.registry`（站点表）→ `HttpFetcher`
+演示 M2 的完整链路：`slices.crawl`（站点表）→ `HttpFetcher`
 （主机限流 + 重试 + UA 轮换）→ `StaticHtmlCrawler`（声明式选择器）
 → `crawl_all`（批量 upsert，单站失败不中断）→ SQLite。
 
@@ -21,12 +21,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.application.crawl import crawl_all
-from hunter1.crawlers.registry import SITES, available_sites, build_all
 from hunter1.platform.fetch.http import HttpFetcher
 from hunter1.platform.db import Database
+from hunter1.slices.crawl import SITES, available_sites, build_all
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXTURES = ROOT / "backend" / "tests" / "crawlers" / "fixtures"
+FIXTURES = ROOT / "backend" / "tests" / "slices" / "crawl" / "fixtures"
 
 
 class _FixtureFetcher:
@@ -94,7 +94,7 @@ def main(argv: list[str]) -> int:
 
 
 def _build_offline(key: str):
-    from hunter1.crawlers.registry import build_site
+    from hunter1.slices.crawl import build_site
 
     return build_site(key, fetcher=_FixtureFetcher(key))
 

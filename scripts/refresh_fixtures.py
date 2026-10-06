@@ -6,7 +6,7 @@
     ./.tools/python/python.exe scripts/refresh_fixtures.py zhipin     # 指定站点
 
 做三件事：
-1. 按 `crawlers.registry` 的选择器从**真实页面**抓取；
+1. 按 `slices.crawl` 站点表的选择器从**真实页面**抓取；
 2. 裁剪成小快照（保留前 N 条 + 其祖先链 + 其后代，去掉脚本/样式/其余条目）；
 3. 用同一套选择器回读裁剪结果，确认快照仍然可解析 —— 不合格就**不落盘**。
 
@@ -27,14 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src
 
 from bs4 import BeautifulSoup
 
-from hunter1.crawlers.guards import ensure_not_blocked
-from hunter1.crawlers.registry import SITES, available_sites
-from hunter1.crawlers.static_html import parse_list_page
 from hunter1.platform.fetch.http import HttpFetcher
+from hunter1.slices.crawl import SITES, available_sites, ensure_not_blocked, parse_list_page
 
 ROOT = Path(__file__).resolve().parent.parent
 KEEP = 3
-FIXTURES = ROOT / "backend" / "tests" / "crawlers" / "fixtures"
+FIXTURES = ROOT / "backend" / "tests" / "slices" / "crawl" / "fixtures"
 
 
 def prune(html: str, item_selector: str) -> str:
@@ -98,7 +96,7 @@ def main(argv: list[str]) -> int:
     if failed:
         print(f"\n{failed} 刷新失败；旧快照保留，请人工核对选择器。")
         return 1
-    print("\n全部刷新完成；跑 `pytest tests/crawlers` 复核。")
+    print("\n全部刷新完成；跑 `pytest tests/slices/crawl` 复核。")
     return 0
 
 

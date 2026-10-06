@@ -7,7 +7,7 @@
 用 `SiteDefinition.crawler_class` 挂进来。
 
 选择器的可核销依据：每个站点的选择器都对**真实页面**核对过，
-并在 `tests/crawlers/fixtures/<key>.html` 留了 HTML 快照供离线回归
+并在 `tests/slices/crawl/fixtures/<key>.html` 留了 HTML 快照供离线回归
 （见 tests/slices/crawl/test_sites.py）。
 
 合规提示：这些站点只抓**公开列表页**上的岗位信息，不做登录、不绕验证码、

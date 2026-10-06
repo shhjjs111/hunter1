@@ -111,8 +111,18 @@ def test_domain_layer_has_no_third_party_io_libraries() -> None:
 
 
 def test_layers_exist() -> None:
-    for layer in ["platform", "slices", "domain", "application", "crawlers"]:
+    for layer in ["platform", "slices", "domain", "application"]:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
+
+
+def test_legacy_crawlers_layer_is_gone() -> None:
+    """旧 `crawlers/` 层必须不存在（收尾迁移完成）：抓取能力归 `slices/crawl`。
+
+    留着旧实现会让「站点注册表在哪」有两个答案 —— `cli.py` 就曾查旧表做参数
+    校验，而应用查新表：新站点只登记到 `slices/crawl/sites.py` 时，CLI 会拒绝
+    一个实际可用的站点。两套注册表在本次收尾前已并存，是真实的分叉风险。
+    """
+    assert not (SRC / "crawlers").exists(), "旧 crawlers/ 层残留"
 
 
 def test_assembly_root_exists() -> None:

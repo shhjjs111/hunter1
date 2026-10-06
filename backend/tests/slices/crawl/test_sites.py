@@ -5,8 +5,7 @@ fixture 是**真实页面裁剪**（保留前 3 条 + 必要祖先链），所�
 这里会红，而不是等到线上抓不到才被发现。
 
 （从旧 `tests/crawlers/test_site_registry.py` 迁移：断言语义逐条保留。
-快照仍留在原处 `tests/crawlers/fixtures/`，未搬进切片 —— 它们同时被
-旧测试引用，搬家会制造无谓耦合；切换完成后可一并归位。）
+快照已随收尾迁移归位到本目录 `fixtures/`。）
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import pytest
 
 from hunter1.slices.crawl.sites import SITES, available_sites, build_all, build_site, get_site
 
-FIXTURES = Path(__file__).resolve().parents[2] / "crawlers" / "fixtures"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 # 规划 §7 M2 的验收线：≥5 个真实站点
 MIN_SITES = 5
