@@ -1,0 +1,9 @@
+{
+  "verify": {
+    "test": "bash scripts/check.sh",
+    "build": "bash scripts/check.sh",
+    "typecheck": "bash scripts/check.sh",
+    "lint": "bash scripts/check.sh"
+  },
+  "_note": "唯一门禁入口是 scripts/check.sh —— 按目录存在性自动纳入：backend/(ruff format + ruff check + pyright + pytest)、frontend/(npm run check，就位后)、contracts/(漂移门禁，就位后)。单跑某类检查的命令见该脚本内部分节与 docs/DEVELOPMENT.md。"
+}
