@@ -4,16 +4,21 @@
 
 规则（迁移期版本；终态随各波次收紧，见 AGENTS.md）：
 
-- `platform`（机制内核）不得 import `hunter1.{slices, application, web, crawlers}`。
+- `platform`（机制内核）不得 import `hunter1.{slices, application}`。
   过渡期豁免：允许依赖 `hunter1.domain.*`（共享模型 —— Wave 4 后随各切片归位，
   届时本豁免删除）。
-- `domain`（纯模型与规则）不得 import `hunter1.{application, web, crawlers, slices}`；
+- `domain`（纯模型与规则）不得 import `hunter1.{application, slices}`；
   对 platform 只允许 `platform.text`（纯函数）。
-- `application`（用例）不得 import `hunter1.{platform, web, crawlers, slices}` ——
+- `application`（用例）不得 import `hunter1.{platform, slices}` ——
   只依赖 domain 与端口（Protocol）。
-- `slices`（业务切片）不得 import `hunter1.{main, crawlers}`；对旧层
+- `slices`（业务切片）不得 import `hunter1.main`；对旧层
   （`hunter1.application`）的依赖必须登记在 `SLICE_LEGACY_ALLOW`（Wave 4 清空）；
   切片之间只经公开面（`__init__`），不得深链其他切片的内部模块。
+
+**已删除的层不在上表里**：`web/`（Wave 6）与 `crawlers/`（收尾迁移）都已从
+代码中移除，由**存在性断言**钉死（`test_legacy_ssr_layer_is_gone` /
+`test_legacy_crawlers_layer_is_gone`）。import 层面无需再禁 —— 包不存在时
+import 本就会失败；把它们留在禁用表里会读起来像"它们还活着"。
 """
 
 from __future__ import annotations
@@ -27,11 +32,10 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "hunter1"
 
 # 每层禁止的顶层包前缀（迁移期规则；见模块 docstring）
 FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
-    "platform": ("hunter1.slices", "hunter1.application", "hunter1.crawlers", "hunter1.main"),
-    "domain": ("hunter1.application", "hunter1.crawlers", "hunter1.slices", "hunter1.main"),
+    "platform": ("hunter1.slices", "hunter1.application", "hunter1.main"),
+    "domain": ("hunter1.application", "hunter1.slices", "hunter1.main"),
     "application": (
         "hunter1.platform",
-        "hunter1.crawlers",
         "hunter1.slices",
         "hunter1.main",
     ),
@@ -137,7 +141,7 @@ def test_legacy_ssr_layer_is_gone() -> None:
 
 
 def test_slices_respect_boundaries() -> None:
-    """切片不得 import web / crawlers；对旧层的依赖必须登记在册。
+    """切片不得 import 组装根；对旧层的依赖必须登记在册。
 
     登记制而不是全禁：迁移期允许**显式登记**的过渡依赖（可审计、有期限），
     比「悄悄放行」或「一律禁止导致迁移停摆」都更可控。
@@ -147,7 +151,7 @@ def test_slices_respect_boundaries() -> None:
         allowed = SLICE_LEGACY_ALLOW.get(slice_dir.name, ())
         for path in sorted(slice_dir.rglob("*.py")):
             for module in _imported_modules(path):
-                if module.startswith(("hunter1.main", "hunter1.crawlers")):
+                if module.startswith("hunter1.main"):
                     offenders.append(f"{_rel(path)} imports {module}")
                 elif module == SHARED_PORT_MODULE:
                     continue  # 进程边界协议：见 SHARED_PORT_MODULE 的说明
