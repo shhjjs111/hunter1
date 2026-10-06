@@ -7,15 +7,11 @@ on:
 
 jobs:
   quality:
-    name: 质量门禁 (lint + type + test)
+    name: 质量门禁（后端 + 前端 + 契约）
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.12"]
-    defaults:
-      run:
-        # Python 工程根在 backend/（仓库根是 monorepo 组装点，不放工程配置）
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -24,20 +20,27 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: 安装依赖
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装后端依赖
         # 测试横跨 db / crawler / web 三层，必须把它们都装上：
         # 只装 .[dev] 的话，test_repository（sqlalchemy）、test_static_html（bs4）、
         # 以及 web 路由测试都会在收集阶段就 ImportError。
         run: pip install -e ".[dev,web,db,crawler]"
+        working-directory: backend
 
-      - name: 格式检查
-        run: ruff format --check .
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
 
-      - name: 静态检查
-        run: ruff check .
-
-      - name: 类型检查
-        run: pyright
-
-      - name: 测试
-        run: pytest
+      - name: 全量门禁（ruff / pyright / pytest / 前端 check / 契约漂移）
+        # 直接调用本地同款脚本 —— CI 与开发机不可能再漂移。
+        # 之前这里手写后端五步，漏了前端 `npm run check` 与 `contracts.sh --check`：
+        # 「后端改了 API 模型忘了重跑 contracts.sh」能一路绿灯合入，契约静默断开。
+        # check.sh 按目录存在性自动纳入各端检查，新增端时无需再改本文件。
+        run: bash scripts/check.sh
