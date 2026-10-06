@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, TypeDecorator
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, TypeDecorator
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -82,8 +82,9 @@ class ConversationRow(Base):
 
 class ConversationMessageRow(Base):
     __tablename__ = "conversation_messages"
-    __table_args__ = (Index("ix_conv_messages_conv_seq", "conversation_id", "sequence"),)
-
+    # 注：(conversation_id, sequence) 的唯一性由 `Database.initialize()` 建的唯一索引
+    # 强制，刻意不写在这里 —— `create_all` 只对**新表**生效，老库的约束不会被补上，
+    # 而并发 append 恰恰在老库上也要能撞号（详见 database.py 的说明）。
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(
         String(128), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False

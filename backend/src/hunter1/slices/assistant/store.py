@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from hunter1.domain.assistant import Message
 from hunter1.platform.db import Database
 from hunter1.platform.db.conversations import Conversation
@@ -30,6 +32,10 @@ class ConversationStore:
 
     def append(self, conversation_id: str, message: Message) -> None:
         self._db.conversations().append(conversation_id, message)
+
+    def append_many(self, conversation_id: str, messages: Sequence[Message]) -> None:
+        """原子追加一批消息（一轮对话的两条同事务落库，不留半截）。"""
+        self._db.conversations().append_many(conversation_id, messages)
 
     def messages(self, conversation_id: str, *, limit: int | None = None) -> list[Message]:
         return self._db.conversations().messages(conversation_id, limit=limit)

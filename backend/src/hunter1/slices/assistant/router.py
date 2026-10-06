@@ -92,14 +92,20 @@ def _persist(
     user_message: Message,
     reply: str,
 ) -> str:
-    """成功才落库：新建会话（如果还没有）+ 追加用户消息与助手回复。"""
+    """成功才落库：新建会话（如果还没有）+ 追加用户消息与助手回复。
+
+    两条消息经 `append_many` **同事务**写入 —— 否则第二条失败会留下「有问无答」
+    的半截对话，下次把失败那句当上下文再问一遍。
+    """
     conversation = store.get(conversation_id) if conversation_id else None
     if conversation is None:
         conversation = store.create(title=title[:40])
-    store.append(conversation.id, user_message)
-    store.append(
+    store.append_many(
         conversation.id,
-        Message(role=Role.ASSISTANT, content=reply.strip() or FALLBACK_REPLY),
+        [
+            user_message,
+            Message(role=Role.ASSISTANT, content=reply.strip() or FALLBACK_REPLY),
+        ],
     )
     return conversation.id
 

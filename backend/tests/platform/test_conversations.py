@@ -139,3 +139,88 @@ class TestMessages:
             repo.append(conv.id, Message(Role.USER, f"m{index}"))
         recent = repo.messages(conv.id, limit=3)
         assert [m.content for m in recent] == ["m7", "m8", "m9"]
+
+
+class FakeClockAdvance(FakeClock):
+    """每次调用**不**推进的时钟（append_many 内部只取一次时间）。"""
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class TestSequenceIntegrity:
+    """(conversation_id, sequence) 必须唯一 —— 并发 append 撞号要被数据库拒绝。
+
+    报告里的一类竞态：两个 append 各自 `max(sequence)+1` 得到同一个号，插进去两条
+    同号消息，读回顺序错乱、历史被静默污染。修法：数据库层唯一索引兜底 + 写入侧
+    撞号重试。
+    """
+
+    def test_duplicate_sequence_is_rejected(self, db: Database) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        from hunter1.platform.db.schema import ConversationMessageRow
+
+        repo = db.conversations()
+        conv = repo.create(title="t")
+        repo.append(conv.id, Message(Role.USER, "第一条"))  # sequence = 1
+
+        with pytest.raises(IntegrityError), db.session() as session:
+            session.add(
+                ConversationMessageRow(
+                    id="dup",
+                    conversation_id=conv.id,
+                    sequence=1,  # 撞号
+                    role=str(Role.USER),
+                    content="撞号",
+                    tool_calls=[],
+                    tool_call_id=None,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+
+    def test_sequences_are_contiguous(self, db: Database) -> None:
+        from sqlalchemy import select
+
+        from hunter1.platform.db.schema import ConversationMessageRow
+
+        repo = db.conversations()
+        conv = repo.create(title="t")
+        for index in range(5):
+            repo.append(conv.id, Message(Role.USER, f"m{index}"))
+        with db.session() as session:
+            seqs = list(
+                session.scalars(
+                    select(ConversationMessageRow.sequence)
+                    .where(ConversationMessageRow.conversation_id == conv.id)
+                    .order_by(ConversationMessageRow.sequence)
+                )
+            )
+        assert seqs == [1, 2, 3, 4, 5]
+
+
+class TestAppendMany:
+    def test_saves_all_in_order(self, db: Database) -> None:
+        repo = db.conversations()
+        conv = repo.create(title="t")
+        repo.append_many(conv.id, [Message(Role.USER, "问"), Message(Role.ASSISTANT, "答")])
+        assert [m.content for m in repo.messages(conv.id)] == ["问", "答"]
+
+    def test_is_atomic_on_missing_conversation(self, db: Database) -> None:
+        """一轮对话的用户消息与回复要么都落库，要么都不落 —— 不留半截对话。"""
+        repo = db.conversations()
+        with pytest.raises(KeyError):
+            repo.append_many("ghost", [Message(Role.USER, "a"), Message(Role.ASSISTANT, "b")])
+        assert repo.messages("ghost") == []
+
+    def test_touches_updated_at_once(self, db: Database) -> None:
+        clock = FakeClockAdvance()
+        repo = _repo(db, clock)
+        conv = repo.create(title="t")
+        before = repo.get(conv.id)
+        assert before is not None
+        repo.append_many(conv.id, [Message(Role.USER, "问"), Message(Role.ASSISTANT, "答")])
+        after = repo.get(conv.id)
+        assert after is not None
+        assert after.updated_at >= before.updated_at
