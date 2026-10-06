@@ -90,4 +90,9 @@ typeCheckingMode = "standard"
 # 与 check.sh 的关系：check.sh 用 `--pythonpath` 显式传解释器，本项对它是冗余的
 # 双保险。本项的价值在于让**裸跑 `pyright` 与 IDE** 也能得到正确结果，避免
 # 开发者把 39 条假错当成噪音而习惯性忽略真错误。
-extraPaths = ["../.tools/python/Lib/site-packages"]
+#
+# `"src"` 这一项是给 **scripts/** 用的（见 check.sh 里那条对 scripts 的 pyright）：
+# 脚本都在运行时 `sys.path.insert(.../backend/src)` 才能 import hunter1，pyright
+# 读不懂那句动态插入，不给它搜索路径就会把 `from hunter1 import ...` 全报成
+# `reportMissingImports`（实测 9 条假错）。对 backend 自身的检查无影响。
+extraPaths = ["src", "../.tools/python/Lib/site-packages"]

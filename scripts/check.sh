@@ -51,6 +51,15 @@ echo "== 脚本：格式检查 (ruff format) =="
 echo "== 脚本：静态检查 (ruff check) =="
 "$PY" -m ruff check --config "$ROOT/backend/pyproject.toml" "$ROOT/scripts"
 
+# 脚本的类型检查。两处讲究：
+# 1. 必须从 backend/ 跑并显式传 scripts 路径 —— 试过在 pyproject 里用
+#    `include = ["src", "../scripts"]`，pyright **静默忽略**了 `..`（实测：
+#    往 scripts/ 放一个类型错误文件，仍报 0 errors）。所以只能 CLI 传路径。
+# 2. 依赖 backend/pyproject.toml 的 extraPaths 含 "src"，否则脚本里
+#    `from hunter1 import ...` 会被报成 9 条 reportMissingImports 假错。
+echo "== 脚本：类型检查 (pyright) =="
+(cd "$ROOT/backend" && "$PY" -m pyright --pythonpath "$PY" "$ROOT/scripts")
+
 echo "== 后端：测试 (pytest) =="
 (cd "$ROOT/backend" && "$PY" -m pytest)
 
