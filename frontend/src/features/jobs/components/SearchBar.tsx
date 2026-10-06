@@ -20,14 +20,16 @@ export function SearchBar({
       }}
     >
       <input
-        className="w-80 rounded border border-slate-300 bg-white px-3 py-2"
+        // 窄屏自适应：固定 w-80（320px）在 390px 宽的窗口里会连同按钮一起溢出。
+        // 用 flex-1 + max-w 让它随容器收缩，按钮 shrink-0 保证不被挤没。
+        className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-3 py-2 sm:max-w-80"
         placeholder="按岗位名搜索，如：产品经理"
         value={value}
         onChange={(event) => setValue(event.target.value)}
       />
       <button
         type="submit"
-        className="rounded bg-slate-900 px-4 py-2 text-white hover:bg-slate-700"
+        className="shrink-0 rounded bg-slate-900 px-4 py-2 text-white hover:bg-slate-700"
       >
         搜索
       </button>

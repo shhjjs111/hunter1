@@ -113,8 +113,10 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="flex gap-6">
-      <aside className="w-56 shrink-0">
+    // 窄屏堆叠（会话列表在上、对话区在下），宽屏恢复左侧栏。
+    // 224px 的固定侧栏在 390px 窗口里会吃掉近六成宽度。
+    <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+      <aside className="md:w-56 md:shrink-0">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-medium text-slate-700">会话</h2>
           <Button
