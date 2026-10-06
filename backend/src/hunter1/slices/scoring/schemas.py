@@ -44,9 +44,14 @@ class ProfileView(BaseModel):
 
     「没配过」用 `profile: null` 表达，而不是 404：未配置是**初始状态**，不是错误。
     界面据此渲染空表单。
+
+    `warning` 用于「存储里的画像不合法」（例如按旧规则存下的超大画像，或数据被
+    改坏）：此时 `profile` 给 `null` **并**说明原因 —— 既不让用户撞上 500 而无法
+    打开配置页去修，也不静默假装没配过（那会掩盖损坏、让用户填过的内容无声消失）。
     """
 
     profile: CandidateProfile | None = None
+    warning: str | None = None
 
 
 class ScoreView(BaseModel):

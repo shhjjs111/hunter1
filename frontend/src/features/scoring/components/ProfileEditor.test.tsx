@@ -92,4 +92,32 @@ describe("ProfileEditor", () => {
     fireEvent.click(await screen.findByRole("button", { name: /保存画像/ }));
     expect(await screen.findByText(/画像至少要有一项信号/)).toBeDefined();
   });
+
+  it("存储里的画像不可用时：说明原因，且表单仍可填（能修）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ profile: null, warning: "已保存的画像不可用，请重新填写：太长" }),
+      ),
+    );
+    renderEditor();
+    // 不静默：必须把损坏原因说出来
+    expect(await screen.findByText(/已保存的画像不可用/)).toBeDefined();
+    // 不死锁：表单仍在，用户能重填覆盖
+    expect(screen.getByLabelText(/目标关键词/)).toBeDefined();
+  });
+
+  it("超限的 422 原因（含具体上限）原样透出", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        (input as Request).method === "PUT"
+          ? jsonResponse({ detail: "画像不合法：至少要有一项信号…单条 100 字符…" }, 422)
+          : jsonResponse({ profile: null }),
+      ),
+    );
+    renderEditor();
+    fireEvent.click(await screen.findByRole("button", { name: /保存画像/ }));
+    expect(await screen.findByText(/单条 100 字符/)).toBeDefined();
+  });
 });

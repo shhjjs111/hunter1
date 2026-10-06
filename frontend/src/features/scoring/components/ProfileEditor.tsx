@@ -1,6 +1,11 @@
 import { Button, Card, ErrorNotice, SuccessNotice } from "../../../shared/ui";
 import { useProfile, useSaveProfile } from "../api";
 
+// 与后端 models.py 的上限保持一致（后端是**闸门**，这里只是提前告知，免得白填一遍）
+const MAX_KEYWORDS = 50;
+const MAX_DIRECTIONS = 20;
+const MAX_SUMMARY_CHARS = 2000;
+
 /** 三行文本 ↔ 列表：接口收 `string[]`，界面按「一行一条」编辑更顺手。 */
 export function splitLines(value: string): string[] {
   return value
@@ -26,7 +31,8 @@ export function ProfileEditor() {
     return <ErrorNotice message={(profile.error as Error).message} />;
   }
 
-  const current = profile.data;
+  const current = profile.data?.profile ?? null;
+  const warning = profile.data?.warning ?? null;
 
   return (
     <Card className="max-w-2xl p-6">
@@ -36,6 +42,13 @@ export function ProfileEditor() {
           ? "评分会拿它跟岗位对照。改了立刻生效，不必重启。"
           : "还没配画像 —— 评分要用它，配好之后就能给岗位打分了。"}
       </p>
+
+      {/* 存储里的画像不可用：说明原因，表单仍可用，用户直接重填覆盖即可 */}
+      {warning && (
+        <div className="mb-4">
+          <ErrorNotice message={warning} />
+        </div>
+      )}
 
       <form
         className="space-y-4"
@@ -58,6 +71,9 @@ export function ProfileEditor() {
             placeholder={"一行一条，如：\nAI产品经理\n大模型应用"}
             className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
+          <span className="mt-1 block text-xs text-slate-500">
+            一行一条，最多 {MAX_KEYWORDS} 条 —— 它会原样进评分提示词，太长会顶掉模型额度
+          </span>
         </label>
 
         <label className="block">
@@ -69,6 +85,7 @@ export function ProfileEditor() {
             placeholder={"一行一条，如：\nAgent 产品\nLLM 应用"}
             className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
+          <span className="mt-1 block text-xs text-slate-500">一行一条，最多 {MAX_DIRECTIONS} 条</span>
         </label>
 
         <label className="block">
@@ -76,10 +93,12 @@ export function ProfileEditor() {
           <textarea
             name="summary"
             rows={4}
+            maxLength={MAX_SUMMARY_CHARS}
             defaultValue={current?.summary ?? ""}
             placeholder="一段话讲清你的背景与偏好，评分时会作为判断依据。"
             className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
           />
+          <span className="mt-1 block text-xs text-slate-500">最多 {MAX_SUMMARY_CHARS} 字符</span>
         </label>
 
         <div className="flex items-center gap-3 pt-2">

@@ -206,3 +206,74 @@ class TestProfileEndpoints:
         reloaded = db.jobs().get(JOB_ID)
         assert reloaded is not None
         assert reloaded.match_score == 88
+
+    def test_oversized_keywords_rejected(self, db: Database) -> None:
+        """画像会被原样拼进提示词 —— 无上限时一次评分就是数十万 token。
+
+        实测（修复前）：5000 个关键词 + 10 万字符摘要 → 200 且入库，
+        生成的提示词 119,085 字符。这不是「有点大」，是拿用户的额度去撞厂商上限。
+        """
+        with self._client(db, FakeLLM()) as client:
+            response = client.put("/api/scoring/profile", json={"keywords": ["AI"] * 5000})
+            assert response.status_code == 422, "超量关键词必须被挡在入库之前"
+            assert "上限" in response.json()["detail"]
+
+    def test_oversized_summary_rejected(self, db: Database) -> None:
+        with self._client(db, FakeLLM()) as client:
+            response = client.put("/api/scoring/profile", json={"summary": "x" * 100_000})
+            assert response.status_code == 422
+
+    def test_oversized_single_item_rejected(self, db: Database) -> None:
+        """单条关键词也不能无限长 —— 「一条」不等于「很短」。"""
+        with self._client(db, FakeLLM()) as client:
+            response = client.put("/api/scoring/profile", json={"keywords": ["x" * 10_000]})
+            assert response.status_code == 422
+
+    def test_rejection_does_not_overwrite_stored_profile(self, db: Database) -> None:
+        """被拒的请求不得把已存画像改坏 —— 校验必须在写入之前。"""
+        with self._client(db, FakeLLM()) as client:
+            assert (
+                client.put("/api/scoring/profile", json={"keywords": ["保留我"]}).status_code == 200
+            )
+            assert (
+                client.put("/api/scoring/profile", json={"keywords": ["x"] * 5000}).status_code
+                == 422
+            )
+            got = client.get("/api/scoring/profile").json()
+            assert got["profile"]["keywords"] == ["保留我"]
+
+    def test_broken_stored_profile_is_repairable_not_500(self, db: Database) -> None:
+        """存储里的画像不合法时，要能打开配置页去修 —— 不能 500。
+
+        触发场景是真实的：用户按旧规则存过一个超大画像，随后上限生效，那条数据
+        就变成「非法」。若 GET 直接 500，用户拿不到表单，**永远修不了**。
+        也不能静默当成「没配过」—— 那会掩盖损坏。故：空画像 + 可读原因。
+        """
+        from hunter1.slices.scoring.store import PROFILE_KEY
+
+        db.settings().set_raw(PROFILE_KEY, {"keywords": ["x" * 10_000]})
+
+        with self._client(db, FakeLLM()) as client:
+            response = client.get("/api/scoring/profile")
+
+        assert response.status_code == 200, f"期望可修复（200），实际 {response.status_code}"
+        body = response.json()
+        assert body["profile"] is None
+        assert body["warning"], "必须说明「已存的画像有问题」，不能静默当作没配过"
+
+    def test_scoring_with_broken_stored_profile_is_409_not_500(self, db: Database) -> None:
+        """存储里的画像不合法时，评分给 409 + 可行动原因，不是 500。
+
+        与 GET 的处理**刻意不同**：GET 要能打开表单（200 + warning），
+        评分要明确拒绝（409）—— 状态未就绪就不该往下走。
+        两处若有一处漏了，用户就看到 500 而非「去重填画像」。
+        """
+        from hunter1.slices.scoring.store import PROFILE_KEY
+
+        db.settings().set_raw(PROFILE_KEY, {"keywords": ["x" * 10_000]})
+
+        with self._client(db, FakeLLM()) as client:
+            response = client.post(f"/api/scoring/{JOB_ID}")
+
+        assert response.status_code == 409, f"期望 409，实际 {response.status_code}：{response.text[:120]}"
+        assert "画像" in response.json()["detail"]

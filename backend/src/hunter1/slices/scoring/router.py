@@ -33,7 +33,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
 from hunter1.application.ports import LLMProvider
-from hunter1.slices.scoring.models import CandidateProfile, ScoringError
+from hunter1.slices.scoring.models import (
+    MAX_PROFILE_DIRECTIONS,
+    MAX_PROFILE_ITEM_CHARS,
+    MAX_PROFILE_KEYWORDS,
+    MAX_PROFILE_SUMMARY_CHARS,
+    CandidateProfile,
+    ScoringError,
+)
 from hunter1.slices.scoring.schemas import ProfileForm, ProfileView, ScoreView
 from hunter1.slices.scoring.service import score_job
 from hunter1.slices.scoring.store import ScoreStore
@@ -41,6 +48,14 @@ from hunter1.slices.scoring.store import ScoreStore
 #: 未配置画像时的对外说明 —— 写清楚「缺什么」与「去哪里补」。
 PROFILE_MISSING_DETAIL = (
     "候选人画像未配置：请先在「配置」页填写画像（关键词 / 方向 / 背景摘要），再发起评分"
+)
+
+#: 画像不合法的通用说明。带上具体上限，用户才知道该改什么；
+#: 只说「至少要有一项信号」在「超长」的情况下是**误导**（信号有，是太多）。
+PROFILE_INVALID_DETAIL = (
+    "画像不合法：至少要有一项信号（关键词 / 方向 / 背景摘要），且不得超出上限"
+    f"（关键词 {MAX_PROFILE_KEYWORDS} 条、方向 {MAX_PROFILE_DIRECTIONS} 条、"
+    f"单条 {MAX_PROFILE_ITEM_CHARS} 字符、摘要 {MAX_PROFILE_SUMMARY_CHARS} 字符）"
 )
 
 
@@ -57,25 +72,49 @@ def build_router(
     """
     router = APIRouter()
 
+    def _load_profile_or_409() -> CandidateProfile | None:
+        """取当前画像；存储损坏时报 409 + 原因（**不是 500**）。
+
+        与 `read_profile` 的处理刻意不同：GET 要能打开表单去修（200 + warning），
+        评分则必须明确拒绝（409）—— 状态未就绪就不该往下走。两处共用「损坏」
+        这个概念，但对外行为按各自职责取舍。
+        """
+        try:
+            return profile_provider()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"已保存的画像不可用，请到「配置」页重新填写：{exc}",
+            ) from exc
+
     @router.get("/scoring/profile", summary="读候选人画像（未配置时为 null）")
     def read_profile() -> ProfileView:
-        return ProfileView(profile=profile_provider())
+        try:
+            profile = profile_provider()
+        except ValueError as exc:
+            # 存储里的画像不合法。**不能 500** —— 那会让用户连配置页都打不开，
+            # 拿不到表单就永远修不了这条数据。也不能静默当成「没配过」——
+            # 那会掩盖损坏，用户填过的内容无声消失。
+            # 所以：空画像（表单可用）+ 可读原因（用户知道要去重填）。
+            return ProfileView(profile=None, warning=f"已保存的画像不可用，请重新填写：{exc}")
+        return ProfileView(profile=profile)
 
     @router.put("/scoring/profile", summary="保存候选人画像")
     def save_profile(form: ProfileForm) -> ProfileView:
         try:
             profile = form.to_profile()
         except (ValidationError, ValueError) as exc:
+            # 校验必须在写入之前 —— 被拒的请求不许动已存画像
             raise HTTPException(
                 status_code=422,
-                detail=f"画像至少要有一项信号（关键词 / 方向 / 背景摘要）：{exc}",
+                detail=f"{PROFILE_INVALID_DETAIL}。具体原因：{exc}",
             ) from exc
         store.save_profile(profile)
         return ProfileView(profile=profile)
 
     @router.post("/scoring/{job_id}", summary="给一个岗位评分并写回")
     def score(job_id: str) -> ScoreView:
-        profile = profile_provider()
+        profile = _load_profile_or_409()
         if profile is None:
             raise HTTPException(status_code=409, detail=PROFILE_MISSING_DETAIL)
 

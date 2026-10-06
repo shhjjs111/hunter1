@@ -8,13 +8,14 @@ export type ProfileForm = components["schemas"]["ProfileForm"];
 export type ProfileView = components["schemas"]["ProfileView"];
 export type ScoreView = components["schemas"]["ScoreView"];
 
-async function fetchProfile(): Promise<CandidateProfile | null> {
+async function fetchProfile(): Promise<ProfileView> {
   const { data, error } = await api.GET("/api/scoring/profile");
   if (error) {
     throw new Error(`加载画像失败：${JSON.stringify(error)}`);
   }
-  // 「没配过」是 null，不是错误 —— 初始状态
-  return data?.profile ?? null;
+  // 返回整个视图而不是只取 profile：`warning` 要说清「存储里的画像不可用」，
+  // 只取 profile 会把它丢掉，变成静默的「没配过」。
+  return data ?? { profile: null, warning: null };
 }
 
 export function useProfile() {

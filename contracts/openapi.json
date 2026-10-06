@@ -95,20 +95,25 @@
         "properties": {
           "directions": {
             "items": {
+              "maxLength": 100,
               "type": "string"
             },
+            "maxItems": 20,
             "title": "Directions",
             "type": "array"
           },
           "keywords": {
             "items": {
+              "maxLength": 100,
               "type": "string"
             },
+            "maxItems": 50,
             "title": "Keywords",
             "type": "array"
           },
           "summary": {
             "default": "",
+            "maxLength": 2000,
             "title": "Summary",
             "type": "string"
           }
@@ -461,7 +466,7 @@
         "type": "object"
       },
       "ProfileView": {
-        "description": "`GET` / `PUT /api/scoring/profile` 的响应。\n\n「没配过」用 `profile: null` 表达，而不是 404：未配置是**初始状态**，不是错误。\n界面据此渲染空表单。",
+        "description": "`GET` / `PUT /api/scoring/profile` 的响应。\n\n「没配过」用 `profile: null` 表达，而不是 404：未配置是**初始状态**，不是错误。\n界面据此渲染空表单。\n\n`warning` 用于「存储里的画像不合法」（例如按旧规则存下的超大画像，或数据被\n改坏）：此时 `profile` 给 `null` **并**说明原因 —— 既不让用户撞上 500 而无法\n打开配置页去修，也不静默假装没配过（那会掩盖损坏、让用户填过的内容无声消失）。",
         "properties": {
           "profile": {
             "anyOf": [
@@ -472,6 +477,17 @@
                 "type": "null"
               }
             ]
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
           }
         },
         "title": "ProfileView",
