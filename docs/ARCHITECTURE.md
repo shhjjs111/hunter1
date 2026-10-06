@@ -158,16 +158,19 @@ flowchart LR
    快照却声称它有 —— 前端照契约写会拿到 405（SPA 回落的 GET 拦下了 POST）。
    现画像存库、`GET/PUT /api/scoring/profile` 可读写、未配置时给 409 + 指引。
    教训：**「端点不存在」不是一种诚实的失败**——它让契约与运行时静默分叉。
+7. **前端 TS 已降级到 6.0.3**（为装上 `typescript-eslint`；TS 7 尚无它所需的 JS API）。
+   升回条件见上文「前端 lint 与 TS 版本」：`typescript-eslint` 支持 TS ≥ 7.1 即可直接升回。
+   登记在此是为了避免「降级靠惯性变成永久态」。
 
 ## 验证矩阵
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 678 项 |
+| 后端全量 | `cd backend && pytest` | 704 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
-| 前端 | `cd frontend && npm run check` | 类型 + lint + 55 项（含整体渲染验收） |
+| 前端 | `cd frontend && npm run check` | 类型 + lint + 58 项（含整体渲染验收） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
 | 全门禁 | `bash scripts/check.sh` | 以上全部 |
 | 打包 | `python scripts/build.py` | 布局 + 冒烟（SPA 外壳 + API） |
