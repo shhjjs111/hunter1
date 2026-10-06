@@ -1,8 +1,9 @@
 """scoring 切片的持久化门面 —— 本切片唯一接触数据库的地方。
 
-读写都走平台仓储；写回时**走一次 model_validate**（不是 model_copy）：
-`match_score` 带 ge=0/le=100 约束，model_copy 不重跑校验器，越界值会被
-静默写库（与 crawl 切片合并不变量是同一个教训）。
+写分走**定向列更新**（只写 match_score）：整行读-改-写会与抓取线程的整行写
+互相覆盖 —— 抓取的旧快照会把刚打的分回滚掉（丢更新竞态，见 `save_score`）。
+代价是绕过了 pydantic 的字段约束，故写库前在 `save_score` 里显式兜住取值域
+（与 `Job.match_score` 的 ge=0/le=100 一致）—— 否则越界值会被静默写库。
 """
 
 from __future__ import annotations
@@ -17,6 +18,10 @@ from hunter1.slices.scoring.models import CandidateProfile
 # 落在这里才能被界面改写后立刻生效，而不必改装配代码重启。
 PROFILE_KEY = "candidate_profile"
 
+#: match_score 的取值域，与 `Job.match_score` 的约束一致。
+SCORE_MIN = 0
+SCORE_MAX = 100
+
 
 class ScoreStore:
     """岗位评分与候选人画像的读写。"""
@@ -28,15 +33,17 @@ class ScoreStore:
         return self._db.jobs().get(job_id)
 
     def save_score(self, job_id: str, score: int) -> Job | None:
-        """把分数写回岗位；岗位不存在时返回 None（调用方据此报 404）。"""
-        job = self._db.jobs().get(job_id)
-        if job is None:
+        """把分数写回岗位；岗位不存在时返回 None（调用方据此报 404）。
+
+        **定向只写 match_score 一列**，不是整行读-改-写：否则抓取线程用它的旧快照
+        整行回写时，会把这里刚打的分覆盖回 None（丢更新竞态）。代价是绕过 pydantic
+        约束，故写库前显式校验取值域。
+        """
+        if not (SCORE_MIN <= score <= SCORE_MAX):
+            raise ValueError(f"match_score 越界：{score}（应在 {SCORE_MIN}..{SCORE_MAX}）")
+        if not self._db.jobs().set_match_score(job_id, score):
             return None
-        payload = job.model_dump(exclude_computed_fields=True)
-        payload["match_score"] = score
-        updated = Job.model_validate(payload)
-        self._db.jobs().upsert(updated)
-        return updated
+        return self._db.jobs().get(job_id)
 
     # ---- 候选人画像 ----
 

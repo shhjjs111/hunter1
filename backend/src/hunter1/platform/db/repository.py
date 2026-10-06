@@ -75,6 +75,25 @@ class SqliteCompanyRepository:
             return int(total or 0)
 
 
+def _assign_facts(row: JobRow, job: Job) -> None:
+    """把岗位的**事实列**写进行对象（不含 match_score）。
+
+    match_score 由评分切片单独拥有（见 `set_match_score`），抓取路径不得在此写它。
+    """
+    row.company_id = job.company_id
+    row.title = job.title
+    row.title_key = job.title_key
+    row.detail_url = job.detail_url
+    row.source = job.source
+    row.source_ref = job.source_ref
+    row.company_name = job.company_name
+    row.city = job.city
+    row.jd_raw = job.jd_raw
+    row.capture_status = job.capture_status.value
+    row.first_seen_at = job.first_seen_at
+    row.last_seen_at = job.last_seen_at
+
+
 class SqliteJobRepository:
     """岗位仓储。"""
 
@@ -82,25 +101,48 @@ class SqliteJobRepository:
         self._db = database
 
     def upsert(self, job: Job) -> None:
+        """全字段 upsert（**含** match_score）。
+
+        仅供创建、种子与测试使用。抓取路径请用 `upsert_facts`：整行写入会把评分
+        并发写下的 match_score 覆盖回旧值（读-改-写丢更新竞态）。
+        """
         with self._db.session() as session:
             row = session.get(JobRow, job.id)
             if row is None:
                 row = JobRow(id=job.id)
                 session.add(row)
-            row.company_id = job.company_id
-            row.title = job.title
-            row.title_key = job.title_key
-            row.detail_url = job.detail_url
-            row.source = job.source
-            row.source_ref = job.source_ref
-            row.company_name = job.company_name
-            row.city = job.city
-            row.jd_raw = job.jd_raw
+            _assign_facts(row, job)
             row.match_score = job.match_score
-            row.capture_status = job.capture_status.value
-            row.first_seen_at = job.first_seen_at
-            row.last_seen_at = job.last_seen_at
             session.commit()
+
+    def upsert_facts(self, job: Job) -> None:
+        """抓取路径的写入：只写事实列，**不触碰 match_score**。
+
+        这样 crawl 与 scoring 各写各的列，二者并发的读-改-写不再互相覆盖。
+        岗位不存在时照常插入（match_score 保持默认 NULL，由评分填充）。
+        """
+        with self._db.session() as session:
+            row = session.get(JobRow, job.id)
+            if row is None:
+                row = JobRow(id=job.id)
+                session.add(row)
+            _assign_facts(row, job)
+            session.commit()
+
+    def set_match_score(self, job_id: str, score: int) -> bool:
+        """只更新 match_score 一列；返回是否有行被更新（False = 岗位不存在）。
+
+        ORM 只把**变更过的属性**写进 UPDATE，所以这里读一行再改属性，落到 SQL 仍是
+        单列 `UPDATE ... SET match_score=? WHERE id=?` —— 不会像整行 upsert 那样把
+        抓取线程同时更新的标题/城市/JD 回滚掉。
+        """
+        with self._db.session() as session:
+            row = session.get(JobRow, job_id)
+            if row is None:
+                return False
+            row.match_score = score
+            session.commit()
+            return True
 
     def get(self, job_id: str) -> Job | None:
         with self._db.session() as session:

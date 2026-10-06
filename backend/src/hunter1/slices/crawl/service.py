@@ -88,10 +88,10 @@ def crawl_company(
         job_id = job_identity(detail_url=raw.detail_url, company=raw.company, title=raw.title)
         existing = jobs.get(job_id)
         if existing is None:
-            jobs.upsert(_new_job(job_id, raw, timestamp))
+            jobs.upsert_facts(_new_job(job_id, raw, timestamp))
             result.created += 1
         else:
-            jobs.upsert(_merge(existing, raw, timestamp))
+            jobs.upsert_facts(_merge(existing, raw, timestamp))
             result.updated += 1
 
     return result
@@ -135,6 +135,8 @@ def _merge(existing: Job, raw: RawJob, timestamp: datetime) -> Job:
             # 也保证 first_seen <= last_seen 的不变量在正常路径上不被破坏
             "last_seen_at": _later(existing.last_seen_at, timestamp),
             "capture_status": existing.capture_status,
+            # match_score 保留在合并结果里（供调用方读），但 `upsert_facts` 不把它写库
+            # —— 分数归评分切片所有，抓取路径不得覆盖（见 platform/db/repository.py）。
             "match_score": existing.match_score,
         }
     )

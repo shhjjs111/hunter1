@@ -182,3 +182,50 @@ class TestJobSearch:
             _job(id="new", title="产品经理B", last_seen_at=datetime(2026, 10, 1, tzinfo=UTC))
         )
         assert [j.id for j in repo.search(keyword="产品经理")] == ["new", "old"]
+
+
+class TestJobScoreIsolation:
+    """评分（scoring）与抓取（crawl）各写各的列，读-改-写不得互相覆盖。
+
+    真实竞态：crawl 线程读到旧快照（match_score=None）→ scoring 写入 80 →
+    crawl 把整行旧快照写回，把 80 覆盖成 None（分数被静默回滚）。修法是让抓取
+    路径只写它拥有的事实列，评分路径只写 match_score 一列。
+    """
+
+    def test_upsert_facts_preserves_existing_score(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(_job(match_score=80))
+        # crawl 在评分之前读到的快照（其 match_score 还是 None），回写时不得清掉 80
+        repo.upsert_facts(_job(match_score=None, title="改名后的标题"))
+        loaded = repo.get("j1")
+        assert loaded is not None
+        assert loaded.match_score == 80
+        assert loaded.title == "改名后的标题"  # 事实列照常更新
+
+    def test_upsert_facts_updates_other_columns(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(_job(title="旧标题", city=None, match_score=40))
+        repo.upsert_facts(_job(title="新标题", city="上海", match_score=None))
+        loaded = repo.get("j1")
+        assert loaded is not None
+        assert loaded.title == "新标题"
+        assert loaded.city == "上海"
+        assert loaded.match_score == 40
+
+    def test_upsert_facts_inserts_when_absent(self, db: Database) -> None:
+        """抓取到新岗位时走同一函数 —— 新行照常插入。"""
+        db.jobs().upsert_facts(_job(id="fresh"))
+        assert db.jobs().get("fresh") is not None
+
+    def test_set_match_score_is_targeted(self, db: Database) -> None:
+        repo = db.jobs()
+        repo.upsert(_job(title="原标题", city="北京"))
+        assert repo.set_match_score("j1", 88) is True
+        loaded = repo.get("j1")
+        assert loaded is not None
+        assert loaded.match_score == 88
+        assert loaded.title == "原标题"  # 其它列不被整行覆盖
+        assert loaded.city == "北京"
+
+    def test_set_match_score_missing_job_returns_false(self, db: Database) -> None:
+        assert db.jobs().set_match_score("ghost", 50) is False
