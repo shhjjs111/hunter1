@@ -2,6 +2,7 @@
 """把 v<版本> 推到 GitHub 并建 Release —— 发布流程的「远端」那一步。
 
     ./.tools/python/python.exe scripts/gh_publish.py <owner/repo> [--create-repo] [--dry-run]
+    ./.tools/python/python.exe scripts/gh_publish.py <owner/repo> --reupload
 
 设计要点（每条都有来由，别随手改）：
 
@@ -17,6 +18,13 @@
    留在进程列表。
 4. **Release 附件里的 manifest 必须用真实 URL 重新生成**：url 是绝对地址，上传前
    无从得知；忘了替换就是把一份指向占位符的清单永久挂在 Release 上。
+   **推论：账号/仓库改名后，已发布的清单就过时了**（改名不会更新发布物里的
+   绝对地址），要用 `--reupload` 重传一份 —— 详见 5。
+5. **`--reupload` 放宽 tag 校验，但换上一道更贴切的阀门**：产物没重新构建时，
+   「tag 是否指向 HEAD」并不能说明什么；真正要证的是「重传的是同一份产物」。
+   所以它比对本地产物与**线上清单里的 sha256**，不一致就拒绝 —— 否则这个开关
+   就等于「关掉安全检查」。实测场景：GitHub 账号改名后，旧版 exe 靠 301 重定向
+   还能更新，但旧用户名一旦被别人注册，重定向就断。
 """
 
 from __future__ import annotations
@@ -37,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from hunter1 import __version__  # noqa: E402
+from hunter1.platform.update import file_sha256  # noqa: E402
 from hunter1.platform.update.rules import ReleaseManifest  # noqa: E402
 
 API = "https://api.github.com"
@@ -445,6 +454,62 @@ def regenerate_manifest(owner: str, repo: str, tag: str) -> Path:
     return out
 
 
+def fetch_published_manifest(owner: str, repo: str, tag: str) -> dict | None:
+    """取线上已发布的清单。取不到返回 None。
+
+    公开仓库不需要令牌。用途见 `--reupload`：**账号/仓库改名后，清单里那个
+    绝对地址就过时了**（清单是发布物，改名不会自动更新它），需要重传一份。
+    重传前必须证明「重传的是同一份产物」—— 就靠这里取回的 sha256。
+    """
+    url = f"https://github.com/{owner}/{repo}/releases/download/{tag}/manifest.json"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def published_sha256(manifest: dict | None, platform: str) -> str | None:
+    """从清单里取出某个平台的 sha256；没有则 None。"""
+    for asset in (manifest or {}).get("assets", []) or []:
+        if isinstance(asset, dict) and asset.get("platform") == platform:
+            value = asset.get("sha256")
+            return value if isinstance(value, str) else None
+    return None
+
+
+def check_reupload_is_same_artifact(owner: str, repo: str, tag: str, zip_path: Path) -> str | None:
+    """确认「重传的是同一份产物」。通过则返回本地 sha256，否则打印原因并返回 None。
+
+    `--reupload` 宽免了「tag 指向 HEAD」那一条（产物没重新构建，那条校验说明不了
+    什么），代价必须由这里顶上 —— **没有这道阀门，`--reupload` 就等于关掉安全
+    检查**。所以这里 fail-closed：拿不到线上清单、或清单里没有对应平台，都算不通过。
+    """
+    published = fetch_published_manifest(owner, repo, tag)
+    published_hash = published_sha256(published, "win32")
+    if published_hash is None:
+        print(
+            "✗ 取不到线上清单（或里面没有 win32 产物），无法确认「重传的是同一份产物」。\n"
+            f"  试过：https://github.com/{owner}/{repo}/releases/download/{tag}/manifest.json\n"
+            "  若 Release 或附件还不存在，请正常发布一次（去掉 --reupload）。",
+            file=sys.stderr,
+        )
+        return None
+    local_hash = file_sha256(zip_path)
+    if local_hash != published_hash:
+        print(
+            "✗ 本地产物与线上不一致，拒绝重传：\n"
+            f"  本地：{local_hash}\n"
+            f"  线上：{published_hash}\n"
+            "  这说明 dist/ 里的 zip 不是已发布的那一份。要发布新产物，请正常"
+            "发布一次（去掉 --reupload，它会同时校验 tag）。",
+            file=sys.stderr,
+        )
+        return None
+    return local_hash
+
+
 def main(argv: list[str] | None = None) -> int:
     _enable_utf8_output()
     parser = argparse.ArgumentParser(prog="gh_publish.py", description="推送并建 Release")
@@ -458,6 +523,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default="hunter1", help="仓库名（省略 owner_repo 时用）")
     parser.add_argument("--create-repo", action="store_true", help="仓库不存在时自动创建")
     parser.add_argument("--dry-run", action="store_true", help="只打印将要做什么，不改远端")
+    parser.add_argument(
+        "--reupload",
+        action="store_true",
+        help="刷新已有 Release 的附件（不改版本、不校验 tag==HEAD）；"
+        "要求本地产物与线上 sha256 一致",
+    )
     args = parser.parse_args(argv)
 
     # owner/repo 的确定顺序：位置参数 → --owner/--repo → 令牌账号。
@@ -479,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"✗ 缺少产物：{f}（先跑 scripts/build.py --zip）", file=sys.stderr)
             return 1
 
-    # 工作区干净 + tag 指向 HEAD：与 release.sh 同一套前置条件。
+    # 工作区干净：产物与某个 commit 的对应关系才说得清。
     dirty = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=ROOT,
@@ -490,15 +561,9 @@ def main(argv: list[str] | None = None) -> int:
     if dirty:
         print(f"✗ 工作区有未提交改动，产物会与 tag 对不上：\n{dirty}", file=sys.stderr)
         return 1
+
     tag_commit = subprocess.run(
         ["git", "rev-parse", f"{tag}^{{commit}}"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -507,13 +572,30 @@ def main(argv: list[str] | None = None) -> int:
     if tag_commit.returncode != 0:
         print(f"✗ tag {tag} 不存在。先打：git tag -a {tag} -m '…'", file=sys.stderr)
         return 1
-    if tag_commit.stdout.strip() != head.stdout.strip():
-        # 先取出短 sha 再拼消息：直接内联会让这一行超过 100 列
-        # （ruff 的 E501 按东亚宽字符算 2 列，中文串很容易超）。
-        tag_sha, head_sha = tag_commit.stdout.strip()[:7], head.stdout.strip()[:7]
-        print(f"✗ tag {tag} 未指向 HEAD（{tag_sha} vs {head_sha}）", file=sys.stderr)
-        return 1
-    print("  ✓ 工作区干净，tag 指向 HEAD")
+
+    if args.reupload:
+        # 重传模式：产物**没有重新构建**，所以「tag 是否指向 HEAD」无关紧要
+        # （账号改名后要修的只是清单里的绝对地址）。宽免它的代价由
+        # check_reupload_is_same_artifact 顶上：必须证明重传的是同一份产物。
+        local_hash = check_reupload_is_same_artifact(owner, repo, tag, zip_path)
+        if local_hash is None:
+            return 1
+        print(f"  ✓ 本地产物与线上 sha256 一致（{local_hash[:12]}…）→ 确认只是刷新地址")
+    else:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tag_commit.stdout.strip() != head.stdout.strip():
+            # 先取出短 sha 再拼消息：直接内联会让这一行超过 100 列
+            # （ruff 的 E501 按东亚宽字符算 2 列，中文串很容易超）。
+            tag_sha, head_sha = tag_commit.stdout.strip()[:7], head.stdout.strip()[:7]
+            print(f"✗ tag {tag} 未指向 HEAD（{tag_sha} vs {head_sha}）", file=sys.stderr)
+            return 1
+        print("  ✓ 工作区干净，tag 指向 HEAD")
 
     if args.dry_run:
         # 省略 owner 时（dry-run 不读令牌）显示占位 —— 否则 "/hunter1" 看起来
@@ -521,9 +603,14 @@ def main(argv: list[str] | None = None) -> int:
         target = f"{owner or '「令牌对应账号」'}/{repo}"
         print("\n[dry-run] 将执行：")
         print(f"  1. 确保仓库 {target} 存在" + ("（不存在则创建）" if args.create_repo else ""))
-        print(f"  2. git push origin HEAD:refs/heads/main 与 refs/tags/{tag}")
-        print(f"  3. 建 Release {tag}")
-        print("  4. 重新生成清单（真实地址）并上传 hunter1-win32.zip + manifest.json")
+        if args.reupload:
+            print("  2. 【重传模式】跳过 git push；只刷 Release 的附件")
+            print(f"  3. 复用已有 Release {tag}")
+            print("  4. 重新生成清单（用新账号的真实地址）并覆盖上传 manifest.json + zip")
+        else:
+            print(f"  2. git push origin HEAD:refs/heads/main 与 refs/tags/{tag}")
+            print(f"  3. 建 Release {tag}")
+            print("  4. 重新生成清单（真实地址）并上传 hunter1-win32.zip + manifest.json")
         print("\n[dry-run] 结束 —— 未做任何改动。")
         return 0
 
@@ -538,7 +625,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ✓ 令牌有效，账号：{login}")
 
         ensure_repo(owner, repo, token, create=args.create_repo)
-        push(owner, repo, token)
+        if args.reupload:
+            # 远端 git 内容与本次目的无关（产物没变，要修的只是清单里的地址）。
+            # 顺带避免把本地未发布的提交顺手推上去 —— 那是另一个决定。
+            print("  ✓ 重传模式：跳过 git push")
+        else:
+            push(owner, repo, token)
         release_id = ensure_release(
             owner, repo, token, tag, notes=f"hunter1 {tag}\n\n见仓库 README 与 docs/。"
         )

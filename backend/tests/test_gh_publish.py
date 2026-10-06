@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 from types import ModuleType
 
@@ -172,6 +174,123 @@ class TestPromptForToken:
             gh.prompt_for_token()
 
         assert "终端" in str(excinfo.value)  # 指引，而非堆栈
+
+
+class TestPublishedSha256:
+    """从线上清单里取某个平台的 sha256 —— --reupload 的阀门就靠它。"""
+
+    def test_picks_matching_platform(self) -> None:
+        manifest = {
+            "assets": [
+                {"platform": "darwin", "sha256": "aaa"},
+                {"platform": "win32", "sha256": "bbb"},
+            ]
+        }
+        assert gh.published_sha256(manifest, "win32") == "bbb"
+
+    def test_missing_platform_is_none(self) -> None:
+        assert (
+            gh.published_sha256({"assets": [{"platform": "darwin", "sha256": "aaa"}]}, "win32")
+            is None
+        )
+
+    @pytest.mark.parametrize("manifest", [None, {}, {"assets": []}, {"assets": None}])
+    def test_missing_or_broken_manifest_is_none(self, manifest) -> None:
+        """取不到线上清单时必须返回 None —— 调用方据此**拒绝**重传，不能放行。"""
+        assert gh.published_sha256(manifest, "win32") is None
+
+    def test_ignores_non_dict_assets(self) -> None:
+        assert (
+            gh.published_sha256(
+                {"assets": ["nonsense", {"platform": "win32", "sha256": "ok"}]}, "win32"
+            )
+            == "ok"
+        )
+
+    def test_non_string_sha256_is_none(self) -> None:
+        assert (
+            gh.published_sha256({"assets": [{"platform": "win32", "sha256": 123}]}, "win32") is None
+        )
+
+
+class TestFetchPublishedManifest:
+    def test_returns_parsed_dict(self, monkeypatch) -> None:
+        payload = json.dumps({"version": "0.1.0", "assets": []}).encode()
+
+        class FakeResponse:
+            def read(self):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(gh.urllib.request, "urlopen", lambda *a, **k: FakeResponse())
+        assert gh.fetch_published_manifest("acme", "hunter1", "v0.1.0") == {
+            "version": "0.1.0",
+            "assets": [],
+        }
+
+    @pytest.mark.parametrize(
+        "boom",
+        [
+            urllib.error.URLError("no network"),
+            urllib.error.HTTPError("u", 404, "nope", None, None),
+            ValueError("bad json"),
+        ],
+    )
+    def test_failures_return_none(self, monkeypatch, boom) -> None:
+        """任何失败都返回 None —— 调用方据此拒绝重传（fail-closed）。"""
+
+        def raiser(*a, **k):
+            raise boom
+
+        monkeypatch.setattr(gh.urllib.request, "urlopen", raiser)
+        assert gh.fetch_published_manifest("acme", "hunter1", "v0.1.0") is None
+
+
+class TestReuploadGuard:
+    """`--reupload` 宽免了 tag 校验，就必须由 sha256 一致性顶上。
+
+    这组测试守的是：**任何一条拿不到「同一份产物」证据的路径都不能放行**。
+    """
+
+    def _call(self, monkeypatch, *, published, local_hash: str):
+        monkeypatch.setattr(gh, "fetch_published_manifest", lambda *a, **k: published)
+        monkeypatch.setattr(gh, "file_sha256", lambda _p: local_hash)
+        return gh.check_reupload_is_same_artifact("acme", "hunter1", "v0.1.0", Path("x.zip"))
+
+    def test_passes_when_hash_matches(self, monkeypatch) -> None:
+        result = self._call(
+            monkeypatch,
+            published={"assets": [{"platform": "win32", "sha256": "AAA"}]},
+            local_hash="AAA",
+        )
+        assert result == "AAA"
+
+    def test_refuses_when_hash_differs(self, monkeypatch, capsys) -> None:
+        result = self._call(
+            monkeypatch,
+            published={"assets": [{"platform": "win32", "sha256": "AAA"}]},
+            local_hash="BBB",
+        )
+        assert result is None
+        assert "拒绝重传" in capsys.readouterr().err
+
+    def test_refuses_when_published_manifest_unavailable(self, monkeypatch, capsys) -> None:
+        """拿不到线上清单 → 无法证明是同一份产物 → fail-closed 拒绝。"""
+        assert self._call(monkeypatch, published=None, local_hash="BBB") is None
+        assert "无法确认" in capsys.readouterr().err
+
+    def test_refuses_when_published_lacks_the_platform(self, monkeypatch) -> None:
+        result = self._call(
+            monkeypatch,
+            published={"assets": [{"platform": "darwin", "sha256": "AAA"}]},
+            local_hash="AAA",
+        )
+        assert result is None
 
 
 class TestReadTokenInteractiveGate:
