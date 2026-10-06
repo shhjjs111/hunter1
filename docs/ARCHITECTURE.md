@@ -127,8 +127,16 @@ flowchart LR
    `Message/Role/ToolCall` 归 `platform/llm`（它们描述的是模型消息协议）。
    现在保留是因为 `platform/db` 与 `platform/llm` 都要用 —— 归位切片会让
    platform 反向依赖 slices。已在各 `SLICE.md` 记录。
-2. **`application/` 与 `crawlers/` 是并存期残留**。切片已自足（旧模块 0 引用），
-   但删除前需确认 `test_architecture` 的登记项一并清理。当前保留作对照。
+2. **`application/` 是并存期残留**。`crawlers/` 已随收尾迁移删除（抓取能力归
+   `slices/crawl`；旧包、旧测试目录一并移除，快照归位到
+   `tests/slices/crawl/fixtures/`，有架构测试钉死它不得复活）。
+   `application/ports.py` 是共享的进程边界协议（见下条）；其余模块
+   （assistant / tools / crawl / applications / job_tools / score）**生产代码 0 引用**，
+   仅被 `tests/application/` 与 `examples/` 引用 —— 即那两处测/演示的是并存期旧实现。
+   ⚠️ `slices/jobs/service.py` 仍经 `application.applications` 取 `new_application`
+   （登记在 `SLICE_LEGACY_ALLOW`）。**不能**直接改指 `slices.applications`：那会引入
+   `jobs → applications` 反向依赖（白名单是 `applications → jobs` 单向）。清理前需先
+   决定「投递」这一动作归属哪个切片。
 3. **`application/ports.py` 是共享协议模块**（架构测试显式豁免）。
    它是进程边界的抽象，不属于任何切片 —— 但位置不理想（在 `application` 包下）。
 4. **无 no-JS 回退**：SPA 的取舍。旧 SSR 版本有表单回退，v2 放弃。
@@ -140,11 +148,11 @@ flowchart LR
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 812 项 |
+| 后端全量 | `cd backend && pytest` | 757 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
-| 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 |
-| 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层清零 |
-| 前端 | `cd frontend && npm run check` | 类型 + 27 项（含整体渲染验收） |
+| 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
+| 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
+| 前端 | `cd frontend && npm run check` | 类型 + 29 项（含整体渲染验收） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
 | 全门禁 | `bash scripts/check.sh` | 以上全部 |
 | 打包 | `python scripts/build.py` | 布局 + 冒烟（SPA 外壳 + API） |
