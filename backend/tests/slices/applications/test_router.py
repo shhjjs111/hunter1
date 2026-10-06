@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from hunter1.domain.models import Application, ApplicationStage, Job
 from hunter1.platform.db import Database
@@ -178,3 +179,51 @@ class TestDeleteEndpoint:
 
     def test_delete_missing_is_204(self, client: TestClient) -> None:
         assert client.delete("/api/applications/zzzz").status_code == 204
+
+
+class TestApplicationIsASnapshotNotAChildOfJob:
+    """`job_id` 是弱引用，**刻意不是外键** —— 这两条测试守住这条设计。
+
+    投递记录是「我申请了什么」的历史事实，`company` / `title` 在投递那一刻从岗位
+    复制下来。若有人「顺手补上」`ForeignKey(..., ondelete="CASCADE")`，删掉一个
+    岗位就会连带删掉投递历史 —— 那是数据丢失，不是完整性修复。
+
+    一条注释拦不住这种改动（而且看起来像「补齐约束」的善举），所以从**结构**和
+    **行为**两侧各钉一颗钉子。
+    """
+
+    def test_applications_table_has_no_foreign_keys(self, db: Database) -> None:
+        with db.engine.connect() as connection:
+            create_sql = connection.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='table' AND name='applications'")
+            ).scalar_one()
+        assert "FOREIGN KEY" not in create_sql.upper(), (
+            "applications 不该有外键：投递记录是岗位信息的快照，加 CASCADE 会在"
+            f"删岗位时连带删掉投递历史。实际建表语句：\n{create_sql}"
+        )
+
+    def test_snapshot_survives_the_job_row_disappearing(
+        self, client: TestClient, db: Database
+    ) -> None:
+        """岗位行从库里消失后，投递记录仍能读出来，且快照字段完好。
+
+        直接删行（而不是走 API）是**故意**的：现在没有「删岗位」接口，但库里的行
+        可能被任何方式移除；这条测试问的是「投递记录是否依赖岗位行还在」。
+        """
+        _seed_job(db)
+        application_id = client.post("/api/applications", json={"job_id": JOB_FULL}).json()[
+            "application_id"
+        ]
+
+        with db.engine.begin() as connection:
+            connection.execute(text("DELETE FROM jobs WHERE id = :job_id"), {"job_id": JOB_FULL})
+        assert db.jobs().get(JOB_FULL) is None, "前置条件：岗位行确实没了"
+
+        # 没有 GET-by-id 路由，走公开的 list 面读回（这本来也是 router 测试）。
+        response = client.get("/api/applications")
+        assert response.status_code == 200
+        items = [item for item in response.json()["items"] if item["id"] == application_id]
+        assert len(items) == 1, "投递记录应仍在"
+        assert items[0]["company"] == "字节跳动"
+        assert items[0]["title"] == "AI产品经理"
+        assert items[0]["job_id"] == JOB_FULL

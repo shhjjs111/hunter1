@@ -99,7 +99,16 @@ class ConversationMessageRow(Base):
 
 class ApplicationRow(Base):
     __tablename__ = "applications"
-
+    # 注：`job_id` **刻意不加外键**，且 `company` / `title` 是投递那一刻从岗位
+    # **复制**下来的快照（见 applications/service.py 的 `company=…, title=…`）。
+    #
+    # 理由：投递记录是「我申请了什么」的历史事实，不该随岗位库变动。
+    # 若改成 `ForeignKey("jobs.id", ondelete="CASCADE")`，删掉一个岗位就会连带
+    # 删掉投递记录 —— 那是数据丢失，不是完整性修复。SET NULL 也不对：快照字段
+    # 本来就是为「岗位已不存在」准备的。
+    #
+    # 所以 `job_id` 只是个**弱引用**（便于回溯原岗位），不是完整性约束。
+    # 改这里之前先想清楚：你要的是「投递历史」还是「岗位的附属记录」。
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     company: Mapped[str] = mapped_column(String(255), nullable=False)
