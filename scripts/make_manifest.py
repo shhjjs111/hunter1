@@ -1,0 +1,191 @@
+"""生成自更新清单（`manifest.json`）—— 发布流程的一步。
+
+    ./.tools/python/python.exe scripts/make_manifest.py \
+        --asset win32=dist/hunter1-win32.zip \
+        --url-base https://github.com/OWNER/REPO/releases/download/v0.1.0 \
+        --out dist/manifest.json
+
+三条不能错的约定（都有测试钉住）：
+
+1. **`version` 取自包本身**（`hunter1.__version__`），不是命令行传进来的 ——
+   清单版本与二进制版本不一致时，`is_newer` 的比较会长期失准而**不报任何错**。
+   `--version` 只用于「断言一致」，不一致就拒绝生成。
+2. **`platform` 用 `sys.platform` 词汇**（`win32` / `darwin` / `linux`）。
+   `asset_for()` 是精确匹配，写 `windows` 不会报错、只会永远匹配不上 ——
+   即「有产物却永远收不到更新」。已知的错词直接拒绝，不留给发布日去发现。
+3. **产物必须真算 sha256**（分块读，大包不吃内存）—— 清单里 `sha256` 缺失或
+   格式不对，`ReleaseManifest` 解析就会拒；生成端先算对，别把问题推给用户端。
+
+最后一步用 `ReleaseManifest` 回读自己产出的 JSON：**生成物必须能被消费端的
+模型接受**，否则清单发出去也没人能用。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# 脚本在仓库根、包在 backend/src —— 显式加路径，不依赖安装状态
+# （本机解释器是 Python embeddable，不走 PYTHONPATH）。
+sys.path.insert(0, str(ROOT / "backend" / "src"))
+
+from hunter1 import __version__  # noqa: E402
+from hunter1.platform.update import ReleaseManifest, file_sha256  # noqa: E402
+
+#: 与更新链的 `asset_for()` 输入对齐 —— 这份词汇表是 `sys.platform` 的值。
+PLATFORM_VOCAB = ("win32", "darwin", "linux")
+
+#: 容易写错、且错了不报错的词。`paths.py` 用的是另一套（windows/macos），
+#: 混淆两者的后果是「有产物但永远匹配不上」。在这里挡住，而非留给发布日。
+_PLATFORM_TRAPS = {
+    "windows": "win32",
+    "macos": "darwin",
+    "mac": "darwin",
+    "osx": "darwin",
+    "win64": "win32",
+    "linux2": "linux",
+}
+
+
+class ManifestError(RuntimeError):
+    """生成清单失败（输入不合法）。"""
+
+
+def parse_asset_spec(spec: str) -> tuple[str, Path]:
+    """把 `[platform=]path` 解析成 (platform, 路径)。
+
+    省略 platform 时用当前解释器的 `sys.platform` —— 你就是在为当前平台构建
+    产物，这是最不容易错的默认值。
+    """
+    raw = (spec or "").strip()
+    if not raw:
+        raise ManifestError("--asset 不能为空")
+    platform, sep, path_text = raw.partition("=")
+    if not sep:
+        return sys.platform, Path(raw)
+    platform = platform.strip()
+    if not platform:
+        raise ManifestError(f"--asset 的平台名为空：{spec!r}")
+    return platform, Path(path_text.strip())
+
+
+def _check_platform(platform: str) -> str:
+    cleaned = (platform or "").strip()
+    if not cleaned:
+        raise ManifestError("平台名不能为空")
+    if cleaned in _PLATFORM_TRAPS:
+        raise ManifestError(
+            f"平台名 {cleaned!r} 是更新链词汇表之外的值（那是 paths.py 的词汇）。"
+            f"清单必须用 sys.platform 词汇：{' / '.join(PLATFORM_VOCAB)} —— "
+            f"应为 {_PLATFORM_TRAPS[cleaned]!r}。写错不会报错，只会永远匹配不上。"
+        )
+    if cleaned not in PLATFORM_VOCAB:
+        # 未知值不直接拒绝（可能是别的平台），但说出来，避免默默发出去。
+        print(
+            f"提示：平台名 {cleaned!r} 不在已知词汇 {' / '.join(PLATFORM_VOCAB)} 里，"
+            f"请确认它与 update 端的 sys.platform 值一致。",
+            file=sys.stderr,
+        )
+    return cleaned
+
+
+def build_manifest(
+    *,
+    version: str,
+    assets: Sequence[tuple[str, Path]],
+    url_for: Callable[[str, str], str],
+    notes: str | None = None,
+) -> ReleaseManifest:
+    """组装并**回读验证**清单。
+
+    `url_for(platform, filename)` 给出每个产物的绝对下载地址 —— 上传后的真实
+    地址只有调用方知道（GitHub Release 是
+    `…/releases/download/v0.1.0/<文件名>`）。
+    """
+    if not assets:
+        raise ManifestError("至少要有一个产物（--asset）")
+
+    entries: list[dict[str, object]] = []
+    for platform, path in assets:
+        canonical = _check_platform(platform)
+        if not path.is_file():
+            raise ManifestError(f"产物不存在：{path}")
+        entries.append(
+            {
+                "platform": canonical,
+                "url": url_for(canonical, path.name),
+                "sha256": file_sha256(path),
+                "size": path.stat().st_size,
+            }
+        )
+
+    payload: dict[str, object] = {"version": version, "assets": entries}
+    if notes:
+        payload["notes"] = notes
+
+    # 回读：生成物必须能被消费端模型接受。字段形状、url 协议、sha256 格式
+    # 都在这一句里被真正校验一次（而不是等用户端拒绝）。
+    return ReleaseManifest.model_validate(payload)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="make_manifest.py", description="生成自更新清单")
+    parser.add_argument(
+        "--asset",
+        action="append",
+        default=[],
+        metavar="[platform=]PATH",
+        help="产物文件；省略 platform 时用当前 sys.platform。可重复",
+    )
+    parser.add_argument(
+        "--url-base",
+        required=True,
+        help="下载地址前缀（如 …/releases/download/v0.1.0），产物名会拼在其后",
+    )
+    parser.add_argument("--out", default=str(ROOT / "dist" / "manifest.json"), help="输出路径")
+    parser.add_argument("--version", default="", help="断言与此值一致（默认取包内 %s）" % __version__)
+    parser.add_argument("--notes", default="", help="版本说明（可选）")
+    args = parser.parse_args(argv)
+
+    if args.version and args.version.strip() != __version__:
+        print(
+            f"版本不一致：命令行给的是 {args.version!r}，包内是 {__version__!r}。"
+            "清单版本与二进制版本不一致时，更新判断会长期失准且不报错 —— 拒绝生成。",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        assets = [parse_asset_spec(spec) for spec in args.asset]
+        base = args.url_base.rstrip("/")
+        manifest = build_manifest(
+            version=__version__,
+            assets=assets,
+            url_for=lambda _platform, filename: f"{base}/{filename}",
+            notes=args.notes.strip() or None,
+        )
+    except ManifestError as exc:
+        print(f"生成清单失败：{exc}", file=sys.stderr)
+        return 2
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(manifest.model_dump(exclude_none=True), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    print(f"== 清单已生成：{out} ==")
+    print(f"  version：{manifest.version}")
+    for asset in manifest.assets:
+        size_mb = (asset.size or 0) / 1024 / 1024
+        print(f"  {asset.platform:<8} {asset.url}  ({size_mb:.1f}MB, {asset.sha256[:12]}…)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
