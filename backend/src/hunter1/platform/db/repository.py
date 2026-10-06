@@ -75,6 +75,16 @@ class SqliteCompanyRepository:
             return int(total or 0)
 
 
+def _escape_like(text: str) -> str:
+    """转义 LIKE 通配符。
+
+    SQLite 的 LIKE 默认把 `%`（任意串）与 `_`（任意单字符）当通配符；标题归一化
+    不剥离标点，所以标题里含这些字符、或用户拿它们搜索时，会匹配到意料之外的行。
+    显式转义后按**字面**匹配（配合 `escape="\\\\"`）。
+    """
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _assign_facts(row: JobRow, job: Job) -> None:
     """把岗位的**事实列**写进行对象（不含 match_score）。
 
@@ -158,7 +168,7 @@ class SqliteJobRepository:
         """
         if not prefix:
             return []
-        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        escaped = _escape_like(prefix)
         with self._db.session() as session:
             statement = (
                 select(JobRow)
@@ -174,7 +184,9 @@ class SqliteJobRepository:
             if company_id is not None:
                 statement = statement.where(JobRow.company_id == company_id)
             if keyword is not None and (normalized := normalize_job_title(keyword)):
-                statement = statement.where(JobRow.title_key.contains(normalized))
+                statement = statement.where(
+                    JobRow.title_key.like(f"%{_escape_like(normalized)}%", escape="\\")
+                )
             total = session.scalar(statement)
             return int(total or 0)
 
@@ -194,7 +206,9 @@ class SqliteJobRepository:
         with self._db.session() as session:
             statement = select(JobRow).order_by(JobRow.last_seen_at.desc())
             if normalized:
-                statement = statement.where(JobRow.title_key.contains(normalized))
+                statement = statement.where(
+                    JobRow.title_key.like(f"%{_escape_like(normalized)}%", escape="\\")
+                )
             statement = statement.limit(limit).offset(offset)
             return [_to_job(row) for row in session.scalars(statement)]
 

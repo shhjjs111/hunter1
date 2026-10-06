@@ -173,6 +173,23 @@ class TestJobSearch:
         self._seed(db)
         assert len(db.jobs().search(keyword="产品经理", limit=2)) == 2
 
+    def test_wildcard_chars_are_matched_literally(self, db: Database) -> None:
+        """`%` / `_` 是 LIKE 通配符 —— 必须转义成字面匹配，否则搜索命中意外行。
+
+        标题归一化不剥离标点，所以岗位标题里可能有这些字符；不转义时搜「100%」
+        会把「100A远程」也捞出来（`%` 匹配任意串）。
+        """
+        repo = db.jobs()
+        repo.upsert(_job(id="j1", title="100%远程"))
+        repo.upsert(_job(id="j2", title="100A远程"))
+        repo.upsert(_job(id="j3", title="a_b工程师"))
+        repo.upsert(_job(id="j4", title="axb工程师"))
+
+        assert {j.id for j in repo.search(keyword="100%")} == {"j1"}
+        assert repo.count(keyword="100%") == 1
+        assert {j.id for j in repo.search(keyword="a_b")} == {"j3"}
+        assert repo.count(keyword="a_b") == 1
+
     def test_orders_by_last_seen_desc(self, db: Database) -> None:
         repo = db.jobs()
         repo.upsert(
