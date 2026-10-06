@@ -18,6 +18,7 @@ const SETTINGS = {
   configured: true,
   temperature: 0.7,
   max_tokens: null,
+  broken: false,
 };
 
 function renderPage() {
@@ -100,8 +101,7 @@ describe("SettingsPage", () => {
     );
   });
 
-  it("保存成功后才清空 API Key 输入框", async () => {
-    vi.stubGlobal(
+  it("保存成功后才清空 API Key 输入框", async () => {    vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const req = input as Request;
@@ -120,5 +120,28 @@ describe("SettingsPage", () => {
     await waitFor(() => {
       expect((screen.getByLabelText(/API Key/) as HTMLInputElement).value).toBe("");
     });
+  });
+
+  it("配置损坏时：说明原因，且表单可填（能自救）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          base_url: "",
+          model: "",
+          masked_key: "",
+          configured: false,
+          broken: true,
+        }),
+      ),
+    );
+
+    renderPage();
+
+    // 不静默：必须说清「已保存的配置不可用」，而不是当成「还没配过」
+    expect(await screen.findByText(/已保存的模型配置不合法/)).toBeDefined();
+    // 不死锁：表单仍在，用户重填即可覆盖
+    expect(screen.getByLabelText(/Base URL/)).toBeDefined();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDefined();
   });
 });

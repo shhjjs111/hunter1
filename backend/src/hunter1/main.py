@@ -143,8 +143,20 @@ def create_app(context: AppContext) -> FastAPI:
 
         运行时可变的配置（用户在配置页换 key / 换模型）必须**每次请求重读** ——
         启动时缓存一个客户端会让改配置要重启才生效。
+
+        两种失败都归到 `ModelNotConfiguredError`（→ 409 + 指引），**不能 500**：
+
+        - 没配过：`get_llm()` 返回 None；
+        - 配坏了：`get_llm()` 抛 `ValueError`（区分「没配」与「配坏了」是它的刻意设计）。
+          不接就会绕过异常处理器直穿成 500 —— 而「去配置页重填」是唯一出路，
+          错误信息必须指向那里。
         """
-        settings = context.db.settings().get_llm()
+        try:
+            settings = context.db.settings().get_llm()
+        except ValueError as exc:
+            raise ModelNotConfiguredError(
+                f"已保存的模型配置不可用，请到「配置」页重新填写：{exc}"
+            ) from exc
         if settings is None or not settings.is_configured:
             raise ModelNotConfiguredError(
                 "模型未配置：请先在「配置」页填好 base_url / 模型 / API Key"

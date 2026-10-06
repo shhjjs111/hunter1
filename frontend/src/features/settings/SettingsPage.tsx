@@ -41,10 +41,25 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="配置"
-        subtitle={settings.data?.configured ? "模型已配置" : "还没配好模型 —— 助手与评分要用它"}
+        subtitle={
+          settings.data?.broken
+            ? "已保存的配置不可用 —— 请重新填写并保存"
+            : settings.data?.configured
+              ? "模型已配置"
+              : "还没配好模型 —— 助手与评分要用它"
+        }
       />
 
       {settings.isError && <ErrorNotice message={(settings.error as Error).message} />}
+
+      {/* 配置损坏：说清原因，表单仍可填（用户直接重填覆盖即可自救）。
+          后端为此刻意给 200 而不是 500 —— 500 会让这个页面打不开，
+          而这里恰恰是唯一的修复入口。 */}
+      {settings.data?.broken && (
+        <div className="mb-4">
+          <ErrorNotice message="已保存的模型配置不合法（可能被改坏或来自旧版本）。下方表单已留空，重新填写并保存即可恢复。" />
+        </div>
+      )}
 
       <Card className="max-w-2xl p-6">
         <form

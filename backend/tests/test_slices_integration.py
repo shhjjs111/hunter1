@@ -440,3 +440,30 @@ class TestScoringReachableInProduction:
         )
         assert "配置" in response.json()["detail"]
         app.state.context.db.dispose()
+
+    def test_corrupted_model_config_is_409_not_500(self, tmp_path: Path) -> None:
+        """配置**损坏**时同样给 409 + 指引，不是 500。
+
+        `get_llm()` 对损坏数据抛 `ValueError`（这是对的：区分「没配」与「配坏了」）。
+        若 `_runtime_llm` 不接，它会绕过 `ModelNotConfiguredError` 的处理器直穿成
+        500 —— 而「去配置页重填」恰好是唯一出路，错误信息必须指向那里。
+        """
+        from hunter1.platform.db.settings import LLM_KEY
+        from hunter1.slices.scoring import CandidateProfile
+        from hunter1.slices.scoring.store import ScoreStore
+
+        app = _production_context(tmp_path, "prod-brokenmodel.db")
+        app.state.context.db.jobs().upsert(_seeded_job())
+        # 必须**先配好画像**：否则 409 来自「画像未配置」，请求根本走不到读模型配置，
+        # 测试会因断言里恰好含「配置」二字而假绿（这版就是踩了这个坑）。
+        ScoreStore(app.state.context.db).save_profile(CandidateProfile(keywords=["集成"]))
+        app.state.context.db.settings().set_raw(LLM_KEY, {"base_url": 123, "model": None})
+
+        with TestClient(app) as test_client:
+            response = test_client.post(f"/api/scoring/{JOB_ID}")
+
+        assert response.status_code == 409, f"期望 409，实际 {response.status_code}"
+        detail = response.json()["detail"]
+        # 收紧断言：必须说的是**模型配置**损坏，不是「画像未配置」蒙混过关
+        assert "模型" in detail and "画像" not in detail, f"要指出是模型配置问题，实际：{detail}"
+        app.state.context.db.dispose()

@@ -31,14 +31,22 @@ class SettingsForm(BaseModel):
 
 
 class SettingsView(BaseModel):
-    """回给界面的配置（密钥只给掩码）。"""
+    """回给界面的配置（密钥只给掩码）。
 
-    base_url: str
-    model: str
-    masked_key: str
+    字段都带默认值，是为了容纳**配置已损坏**这一形状：此时没有任何可信值可回显，
+    给一组空值 + `broken=True`，让表单直接空白可填（用户重填即可自救）。
+    正常路径由 `_view()` 唯一构造，字段一定齐全。
+    """
+
+    base_url: str = ""
+    model: str = ""
+    masked_key: str = ""
     temperature: float | None = None
     max_tokens: int | None = None
-    configured: bool
+    configured: bool = False
+    #: 已保存的配置不合法（数据损坏 / 旧版本遗留）。界面据此提示「请重新填写」，
+    #: 而不是把它当成「还没配过」——那会让用户填过的内容无声消失。
+    broken: bool = False
 
 
 def _view(settings: LLMSettings) -> SettingsView:
@@ -70,12 +78,28 @@ def build_router(
 
     @router.get("/settings", response_model=SettingsView | None, summary="读取 LLM 配置")
     def read_settings() -> SettingsView | None:
-        settings = store.get_llm()
+        try:
+            settings = store.get_llm()
+        except ValueError:
+            # 数据损坏 —— 必须给 200 + 标记，**不能 500**。
+            #
+            # `get_llm()` 抛错是对的（区分「没配过」与「配过但坏了」），但路由不接
+            # 就变成 500，而配置页是用户**唯一**能重填覆盖的地方 —— 500 等于自锁，
+            # 用户被自己的坏数据永久挡在门外。（scoring 切片对同一场景已按
+            # 「GET 200 + warning」处理，理由写在那里；这里补同一课。）
+            #
+            # 也不能静默当成「没配过」：那会掩盖损坏，用户填过的内容无声消失。
+            return SettingsView(broken=True)
         return _view(settings) if settings is not None else None
 
     @router.put("/settings", response_model=SettingsView, summary="保存 LLM 配置")
     def save_settings(form: SettingsForm) -> SettingsView:
-        existing = store.get_llm()
+        try:
+            existing = store.get_llm()
+        except ValueError:
+            # 破损数据里没有「原值」可保留 —— 空 key 就只能当空，让用户重填。
+            # 这里若让它抛出去，修复路径同样被堵死（PUT 也 500），与 GET 同一课。
+            existing = None
         # 空 key = 「不改」而不是「清空」（界面只回显掩码，读不到原值）
         key = form.api_key.strip() or (existing.api_key if existing else "")
         try:

@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from hunter1.domain.llm import LLMResponse
 from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db import Database
+from hunter1.platform.db.settings import LLM_KEY
 from hunter1.slices.settings.router import build_router
 from hunter1.slices.settings.store import SettingsStore
 
@@ -137,3 +138,51 @@ def test_api_key_input_must_not_leak_through_settings_view(db: Database) -> None
     """掩码函数的形态与其他测试一致：前缀 + 末四位。"""
     settings = LLMSettings(**FORM)
     assert settings.masked_key() == "sk-…1234"
+
+
+class TestCorruptedConfigIsRepairable:
+    """配置数据损坏时，配置页必须能打开、能修 —— 不能 500 自锁。
+
+    `platform/db/settings.py` 的 `get_llm()` 在数据损坏时抛错是**对的**设计
+    （区分「没配过」与「配过但坏了」）。但 settings 路由不接这个错，后果是
+    用户唯一的重填路径（在配置页覆盖保存）被自己的 500 堵死：
+
+        GET /settings  → 500
+        PUT /settings  → 500（为「空 key = 保留原值」也要先读 existing）
+
+    scoring 切片对同一问题已按「GET 给 200 + warning、评分给 409」处理过
+    （理由写在那里：不能 500，那会让用户连配置页都打不开）。这里补上同一课。
+    """
+
+    def _corrupt(self, db: Database) -> None:
+        """往配置键里塞一个 LLMSettings 校验不过的值（模拟数据损坏/旧版本遗留）。"""
+        db.settings().set_raw(LLM_KEY, {"base_url": 123, "model": None})
+
+    def test_get_returns_200_not_500(self, db: Database) -> None:
+        self._corrupt(db)
+        for client in _client(db):
+            response = client.get("/api/settings")
+        assert response.status_code == 200, f"配置页打不开就没法修，实际 {response.status_code}"
+
+    def test_get_says_it_is_broken_not_unconfigured(self, db: Database) -> None:
+        """必须与「从没配过」区分 —— 否则用户填过的内容无声消失。"""
+        self._corrupt(db)
+        for client in _client(db):
+            body = client.get("/api/settings").json()
+        assert body is not None and body.get("broken"), f"要明确告知配置已损坏，实际 {body}"
+
+    def test_put_can_repair(self, db: Database) -> None:
+        """关键：用户能靠重填把自己救出来。"""
+        self._corrupt(db)
+        for client in _client(db):
+            response = client.put("/api/settings", json=FORM)
+            assert response.status_code == 200, f"修复路径被堵死，实际 {response.status_code}"
+            # 修好后 GET 应回到正常视图
+            assert client.get("/api/settings").json()["model"] == "m"
+
+    def test_put_with_empty_key_on_broken_config_still_works(self, db: Database) -> None:
+        """破损数据里没有可保留的 key —— 空 key 不能再要求「先读出原值」。"""
+        self._corrupt(db)
+        for client in _client(db):
+            response = client.put("/api/settings", json={**FORM, "api_key": ""})
+        assert response.status_code == 200

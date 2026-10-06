@@ -540,17 +540,38 @@ export interface components {
         /**
          * SettingsView
          * @description 回给界面的配置（密钥只给掩码）。
+         *
+         *     字段都带默认值，是为了容纳**配置已损坏**这一形状：此时没有任何可信值可回显，
+         *     给一组空值 + `broken=True`，让表单直接空白可填（用户重填即可自救）。
+         *     正常路径由 `_view()` 唯一构造，字段一定齐全。
          */
         SettingsView: {
-            /** Base Url */
+            /**
+             * Base Url
+             * @default
+             */
             base_url: string;
-            /** Configured */
+            /**
+             * Broken
+             * @default false
+             */
+            broken: boolean;
+            /**
+             * Configured
+             * @default false
+             */
             configured: boolean;
-            /** Masked Key */
+            /**
+             * Masked Key
+             * @default
+             */
             masked_key: string;
             /** Max Tokens */
             max_tokens?: number | null;
-            /** Model */
+            /**
+             * Model
+             * @default
+             */
             model: string;
             /** Temperature */
             temperature?: number | null;
