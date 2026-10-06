@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
+import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type JobSummary = components["schemas"]["JobSummary"];
@@ -9,11 +10,11 @@ export type JobListResponse = components["schemas"]["JobListResponse"];
 export const PAGE_SIZE = 20;
 
 async function fetchJobs(keyword: string, page: number): Promise<JobListResponse> {
-  const { data, error } = await api.GET("/api/jobs", {
+  const { data, error, response } = await api.GET("/api/jobs", {
     params: { query: { q: keyword, page, page_size: PAGE_SIZE } },
   });
   if (error || !data) {
-    throw new Error(`加载岗位失败：${JSON.stringify(error ?? "无响应")}`);
+    throw new Error(apiErrorMessage(error, "加载岗位失败", response));
   }
   return data;
 }

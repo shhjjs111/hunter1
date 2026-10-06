@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
+import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type CandidateProfile = components["schemas"]["CandidateProfile"];
@@ -9,9 +10,9 @@ export type ProfileView = components["schemas"]["ProfileView"];
 export type ScoreView = components["schemas"]["ScoreView"];
 
 async function fetchProfile(): Promise<ProfileView> {
-  const { data, error } = await api.GET("/api/scoring/profile");
+  const { data, error, response } = await api.GET("/api/scoring/profile");
   if (error) {
-    throw new Error(`加载画像失败：${JSON.stringify(error)}`);
+    throw new Error(apiErrorMessage(error, "加载画像失败", response));
   }
   // 返回整个视图而不是只取 profile：`warning` 要说清「存储里的画像不可用」，
   // 只取 profile 会把它丢掉，变成静默的「没配过」。
@@ -29,8 +30,7 @@ export function useSaveProfile() {
       const { data, error, response } = await api.PUT("/api/scoring/profile", { body: form });
       if (error || !data) {
         // 后端在 422 里给了可读原因（画像不能为空），原样交给用户
-        const detail = (error as { detail?: string } | undefined)?.detail;
-        throw new Error(detail ?? `保存画像失败（HTTP ${response.status}）`);
+        throw new Error(apiErrorMessage(error, "保存画像失败", response));
       }
       return data;
     },
@@ -54,8 +54,7 @@ export function useScoreJob() {
         params: { path: { job_id: jobId } },
       });
       if (error || !data) {
-        const detail = (error as { detail?: string } | undefined)?.detail;
-        throw new Error(detail ?? `评分失败（HTTP ${response.status}）`);
+        throw new Error(apiErrorMessage(error, "评分失败", response));
       }
       return data;
     },

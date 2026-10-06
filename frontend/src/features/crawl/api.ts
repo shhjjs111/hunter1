@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
+import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type CrawlStatus = components["schemas"]["CrawlStatusResponse"];
@@ -8,9 +9,9 @@ export type CrawlStatus = components["schemas"]["CrawlStatusResponse"];
 const POLL_MS = 1000;
 
 async function fetchStatus(): Promise<CrawlStatus> {
-  const { data, error } = await api.GET("/api/crawl/status");
+  const { data, error, response } = await api.GET("/api/crawl/status");
   if (error || !data) {
-    throw new Error(`读取抓取进度失败：${JSON.stringify(error ?? "无响应")}`);
+    throw new Error(apiErrorMessage(error, "读取抓取进度失败", response));
   }
   return data;
 }
