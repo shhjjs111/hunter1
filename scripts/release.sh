@@ -78,10 +78,10 @@ echo "  ✓ tag 指向 HEAD（${HEAD_COMMIT:0:7}）"
 
 # 4) 生成清单（真实地址）。
 #
-# 先写**临时文件**，检查通过才落到 dist/manifest.json —— 因为镜像改写发生在
-# **参数传递层**：bash 里 URL_BASE 还是 github.com，但 python 收到的 argv 已被
-# /mirror china 改成 gitcode.com/gh_mirror（实测）。所以没法在 bash 侧提前查，
-# 只能生成后查文件；但查之前不应该让可疑内容落到正式路径上。
+# 先写**临时文件**，检查通过才落到 dist/manifest.json：污染检查只能基于**生成
+# 结果**（URL 长什么样，要看写出来的文件），而生成后直接落盘会让可疑内容留在
+# 正式路径上 —— 用户若没细看退出码，就会把那份清单传上去。所以先落到临时位置，
+# 检查通过再 mv；异常路径由 trap 清理。
 URL_BASE="https://github.com/$OWNER_REPO/releases/download/$TAG"
 TMP_MANIFEST="dist/.manifest.tmp.json"
 trap 'rm -f "$TMP_MANIFEST"' EXIT
@@ -91,12 +91,22 @@ trap 'rm -f "$TMP_MANIFEST"' EXIT
   --url-base "$URL_BASE" \
   --out "$TMP_MANIFEST"
 
-# 5) 地址污染检查。
+# 5) 地址污染检查（双保险）。
+#
+# 事实边界（都实测过，别推错）：
+#   - `/mirror china` 的改写发生在「**命令文本**」这一层：命令行里写死的
+#     github.com 会被换成 gitcode.com/gh_mirror，`python -c` 里的字符串字面量
+#     同样会（`argv` 收到的是改写后的值）。
+#   - 但**脚本文件内部**的字符串**不受影响** —— 本脚本上面构造的 URL_BASE 是
+#     真的 github.com，实测生成的清单地址正确、无需关镜像。
+# 所以这道检查平时不会触发；它的价值在于兜住「将来 URL 改成从参数传入」或
+# 「改写机制扩展到文件内容」这两种变化 —— 那时会静默发出一份指向镜像的清单。
 if grep -q "gitcode.com\|gh_mirror" "$TMP_MANIFEST"; then
   echo "" >&2
-  echo "⚠ 清单里的地址被镜像改写了（含 gitcode.com/gh_mirror）。" >&2
-  echo "  你现在开着 /mirror china —— 它会改写命令行里的 github.com。" >&2
-  echo "  要发到 GitHub 官方地址：先 /mirror default，再重跑本脚本。" >&2
+  echo "⚠ 清单里的地址被改写了（含 gitcode.com/gh_mirror）。" >&2
+  echo "  原因通常是 URL 经由**命令行参数**传入：/mirror china 会改写命令文本里的" >&2
+  echo "  github.com（实测，连 python 源码里的字面量也改）。" >&2
+  echo "  处理：先 /mirror default 再重跑；或确认真实下载地址本就走镜像。" >&2
   echo "  （dist/manifest.json 未被改动，仍是上一次的内容。）" >&2
   exit 1
 fi
