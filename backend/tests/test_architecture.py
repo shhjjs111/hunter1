@@ -119,6 +119,29 @@ def test_layers_exist() -> None:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
 
 
+def test_tests_dir_mirrors_src() -> None:
+    """`tests/` 的子目录必须镜像 `src/hunter1/`（AGENTS.md 的「镜像 src 结构」约定）。
+
+    这条守卫来自两次真实的漂移：
+
+    - `tests/infrastructure/` 有 10 个文件，但生产层的 `infrastructure/` 早在
+      Wave 6 就被 `platform/` 取代 —— 目录名指向一个**已不存在的层**，
+      新 Agent 照它找代码会扑空；
+    - `tests/application/test_update.py` 测的其实是 `platform.update`，
+      位置错了。
+
+    名字错位的代价不在"不好看"：它让「测试放哪」需要靠记忆而非结构推导，
+    而结构本来就能自证。
+    """
+    src_dirs = {p.name for p in SRC.iterdir() if p.is_dir() and p.name != "__pycache__"}
+    tests_root = SRC.parent.parent / "tests"
+    test_dirs = {p.name for p in tests_root.iterdir() if p.is_dir() and p.name != "__pycache__"}
+    orphans = test_dirs - src_dirs
+    assert not orphans, (
+        f"tests/ 下的目录在 src/hunter1/ 没有对应物（层已改名或删除？）：{sorted(orphans)}"
+    )
+
+
 def test_application_layer_is_minimal() -> None:
     """`application/` 只允许两个模块 —— 并存期拷贝不得重新长出来。
 
