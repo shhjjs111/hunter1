@@ -245,6 +245,34 @@ class TestRepairOfLegacyDuplicates:
             repaired = Database._repair_duplicate_message_sequences(conn)
         assert repaired == 1
 
+    def test_stale_non_unique_index_is_dropped(self, db: Database) -> None:
+        """升级后旧的非唯一索引要被清掉 —— 否则同列留下两个索引（冗余）。
+
+        真实旧库的形态：`ix_conv_messages_conv_seq`（CREATE INDEX，非唯一）。
+        升级演练在 backend/.data/hunter1.db 上确认过它会残留。
+        """
+        import sqlalchemy as sa
+
+        with db.engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "CREATE INDEX IF NOT EXISTS ix_conv_messages_conv_seq "
+                    "ON conversation_messages (conversation_id, sequence)"
+                )
+            )
+        db.initialize()
+        with db.session() as session:
+            names = set(
+                session.scalars(
+                    sa.text(
+                        "SELECT name FROM sqlite_master WHERE type='index' "
+                        "AND tbl_name='conversation_messages'"
+                    )
+                )
+            )
+        assert "uq_conv_messages_conv_seq" in names
+        assert "ix_conv_messages_conv_seq" not in names
+
     def test_sequences_become_unique_and_ordered(self, db: Database) -> None:
         import sqlalchemy as sa
 

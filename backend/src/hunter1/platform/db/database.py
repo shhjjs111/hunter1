@@ -75,6 +75,10 @@ class Database:
                     "ON conversation_messages (conversation_id, sequence)"
                 )
             )
+            # 清掉被取代的旧非唯一索引（旧代码建在 ORM 的 __table_args__ 里；升级后
+            # 它与上面的唯一索引同列冗余 —— 多一份索引既占空间也拖慢写入，且两个索引
+            # 描述同一组列会让读代码的人困惑）。IF EXISTS 兼顾从未建过它的库。
+            connection.execute(text("DROP INDEX IF EXISTS ix_conv_messages_conv_seq"))
 
     @staticmethod
     def _repair_duplicate_message_sequences(connection: Connection) -> int:
