@@ -23,7 +23,6 @@ from hunter1.domain.llm import LLMResponse
 from hunter1.domain.models import Job
 from hunter1.main import AppContext, create_app
 from hunter1.platform.db import Database
-from hunter1.slices.scoring.models import CandidateProfile
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 JOB_ID = "i" * 32
@@ -80,14 +79,18 @@ def client(tmp_path: Path) -> Iterator[tuple[TestClient, Database]]:
         fetcher=_FakeFetcher(),
         llm_factory=lambda _settings: _FakeLLM(),  # type: ignore[arg-type,return-value]
         clock=lambda: NOW,
-        candidate_profile=CandidateProfile(keywords=["集成"], summary="集成测试画像"),
     )
-    # 让评分端点有可用的「模型配置」（否则 _slice_llm 会抛「模型未配置」）
+    # 让评分端点有可用的「模型配置」与「候选人画像」
+    # （否则 _slice_llm 抛「模型未配置」、scoring 报 409 画像未配置）
     from hunter1.domain.settings import LLMSettings
 
     db.settings().save_llm(
         LLMSettings(base_url="https://api.example.com/v1", model="m", api_key="sk-x")
     )
+    from hunter1.slices.scoring import CandidateProfile
+    from hunter1.slices.scoring.store import ScoreStore
+
+    ScoreStore(db).save_profile(CandidateProfile(keywords=["集成"], summary="集成测试画像"))
 
     app = create_app(context)
     # 抓取 runner 的工厂指向假抓取器（真链路，只换站点）
@@ -353,3 +356,45 @@ class TestSpaFallbackSecurity:
         ok_status, ok_body = _raw_asgi_get(test_client.app, "/favicon.svg")
         assert ok_status == 200 and b"<svg/>" in ok_body
         db.dispose()
+
+
+def _production_context(tmp_path: Path, name: str) -> Any:
+    """按 **cli.py 的生产装配方式** 构造 app：只给 db_path 与 site_keys。
+
+    照抄 `cli.py` 的 `AppContext.default(db_path=..., site_keys=...)` —— 不注入
+    任何替身。凡是"只有测试里才成立"的能力，这个装配会如实暴露。
+    """
+    from hunter1.main import AppContext, create_app
+
+    context = AppContext.default(db_path=tmp_path / name, site_keys=[])
+    return create_app(context)
+
+
+class TestScoringReachableInProduction:
+    """评分必须在**生产装配**下可达 —— 这是契约与运行时的一致性判据。
+
+    `cli.py` 不注入候选人画像。若 scoring 路由只在「画像非 None」时挂载，
+    成品里 `/api/scoring/*` 根本不存在，而 `contracts/openapi.json` 却声称它有
+    （导出时传了占位画像）：前端照契约写代码会拿到 404。
+    「契约声明了的能力必须在运行时真的可用」—— 否则契约不是契约，是愿望。
+    """
+
+    def test_scoring_routes_exist_without_injected_profile(self, tmp_path: Path) -> None:
+        app = _production_context(tmp_path, "prod-reach.db")
+        paths = set(app.openapi()["paths"])
+        assert "/api/scoring/{job_id}" in paths, "生产装配下评分端点缺失 —— 前端会 404"
+        assert "/api/scoring/profile" in paths, "画像读写端点缺失 —— 用户无从配置"
+        app.state.context.db.dispose()
+
+    def test_scoring_without_profile_is_actionable(self, tmp_path: Path) -> None:
+        """未配画像 → 可操作的错误，而不是 404（端点不存在）或 500（崩了）。"""
+        app = _production_context(tmp_path, "prod-noprofile.db")
+        app.state.context.db.jobs().upsert(_seeded_job())
+
+        with TestClient(app) as test_client:
+            response = test_client.post(f"/api/scoring/{JOB_ID}")
+
+        assert response.status_code == 409, f"期望 409（状态未就绪），实际 {response.status_code}"
+        detail = response.json()["detail"]
+        assert "画像" in detail, f"错误信息要指出缺什么，实际：{detail}"
+        app.state.context.db.dispose()

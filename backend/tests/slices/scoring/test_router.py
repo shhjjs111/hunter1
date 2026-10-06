@@ -57,10 +57,16 @@ def db(tmp_path: Path) -> Database:
     return database
 
 
-def _client(db: Database, llm: FakeLLM) -> Iterator[TestClient]:
+def _client(
+    db: Database, llm: FakeLLM, *, profile: CandidateProfile | None = PROFILE
+) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(
-        build_router(store=ScoreStore(db), llm_factory=lambda: llm, profile=PROFILE),
+        build_router(
+            store=ScoreStore(db),
+            llm_factory=lambda: llm,
+            profile_provider=lambda: profile,
+        ),
         prefix="/api",
     )
     with TestClient(app) as test_client:
@@ -122,8 +128,81 @@ class TestUnexpectedFailure:
 
         app = FastAPI()
         app.include_router(
-            build_router(store=ScoreStore(db), llm_factory=BrokenLLM, profile=PROFILE),
+            build_router(
+                store=ScoreStore(db),
+                llm_factory=BrokenLLM,
+                profile_provider=lambda: PROFILE,
+            ),
             prefix="/api",
         )
         with TestClient(app, raise_server_exceptions=False) as client:
             assert client.post(f"/api/scoring/{JOB_ID}").status_code == 500
+
+
+class TestProfileEndpoints:
+    """候选人画像的读写 —— 用户能自己配置，且改动立刻对评分生效。
+
+    这里**不注入固定画像**，provider 就是 `store.load_profile`（与生产装配同款），
+    因此覆盖的是真实持久化路径，而不是测试替身。
+    """
+
+    def _client(self, db: Database, llm: FakeLLM) -> TestClient:
+        store = ScoreStore(db)
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                store=store,
+                llm_factory=lambda: llm,
+                profile_provider=store.load_profile,
+            ),
+            prefix="/api",
+        )
+        return TestClient(app)
+
+    def test_starts_unconfigured_not_404(self, db: Database) -> None:
+        """未配置是**初始状态**，用 200 + null 表达；404 会让人以为是路由错了。"""
+        with self._client(db, FakeLLM()) as client:
+            response = client.get("/api/scoring/profile")
+            assert response.status_code == 200
+            assert response.json()["profile"] is None
+
+    def test_save_then_read_back(self, db: Database) -> None:
+        with self._client(db, FakeLLM()) as client:
+            saved = client.put(
+                "/api/scoring/profile",
+                json={"keywords": ["AI产品经理"], "directions": ["大模型"], "summary": "三年经验"},
+            )
+            assert saved.status_code == 200
+            assert saved.json()["profile"]["keywords"] == ["AI产品经理"]
+
+            got = client.get("/api/scoring/profile")
+            assert got.json()["profile"]["summary"] == "三年经验"
+
+    def test_empty_profile_rejected_actionably(self, db: Database) -> None:
+        """三项全空等于没给信号 —— 拒绝并说清缺什么，而不是存一个空画像。"""
+        with self._client(db, FakeLLM()) as client:
+            response = client.put(
+                "/api/scoring/profile",
+                json={"keywords": [], "directions": [], "summary": ""},
+            )
+            assert response.status_code == 422
+            assert "画像" in response.json()["detail"]
+
+    def test_score_without_profile_is_409_not_405(self, db: Database) -> None:
+        """端点**必须存在**：画像没配时也给 409 + 指引，不能是「端点不存在」。"""
+        with self._client(db, FakeLLM()) as client:
+            response = client.post(f"/api/scoring/{JOB_ID}")
+            assert response.status_code == 409
+            assert "画像" in response.json()["detail"]
+
+    def test_score_works_after_profile_saved(self, db: Database) -> None:
+        """端到端可达：写画像 → 评分 → 分数落到岗位上。"""
+        with self._client(db, FakeLLM({"score": 88})) as client:
+            assert client.put("/api/scoring/profile", json={"keywords": ["AI"]}).status_code == 200
+            response = client.post(f"/api/scoring/{JOB_ID}")
+            assert response.status_code == 200
+            assert response.json()["score"] == 88
+
+        reloaded = db.jobs().get(JOB_ID)
+        assert reloaded is not None
+        assert reloaded.match_score == 88
