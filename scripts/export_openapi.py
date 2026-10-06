@@ -23,19 +23,12 @@ sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 def build_spec() -> dict[str, object]:
     from hunter1.main import AppContext, create_app
-    from hunter1.slices.scoring.models import CandidateProfile
 
-    # 传一个**占位画像**：契约描述的是「接口形状」，不是「当前配置下是否可用」。
-    # 不传的话评分端点会因「画像未配置」而不挂载，契约里就少了这个能力 ——
-    # 前端会以为它不存在。
-    placeholder_profile = CandidateProfile(summary="__contract_export_placeholder__")
-
+    # 不再需要「占位画像」那类补丁：评分的端点**始终挂载**，画像未配置只是运行时的
+    # 状态（调用时给 409），不影响路由表。契约因此与运行时**按构造一致** ——
+    # 而不是靠导出时塞一个假数据去凑出一份「比现实更好看」的接口清单。
     with tempfile.TemporaryDirectory(prefix="hunter1-openapi-") as tmp:
-        context = AppContext.default(
-            db_path=Path(tmp) / "openapi.db",
-            site_keys=[],
-            candidate_profile=placeholder_profile,
-        )
+        context = AppContext.default(db_path=Path(tmp) / "openapi.db", site_keys=[])
         try:
             app = create_app(context)
             return app.openapi()
