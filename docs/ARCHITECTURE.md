@@ -183,4 +183,5 @@ flowchart LR
 | 前端 | `cd frontend && npm run check` | 类型 + lint + 58 项（含整体渲染验收） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
 | 全门禁 | `bash scripts/check.sh` | 以上全部 |
+| 视觉 | 无头浏览器截图（见 DEVELOPMENT 检查单第 7 步） | 多分辨率布局（**单测覆盖不到**：jsdom 无布局引擎） |
 | 打包 | `python scripts/build.py` | 布局 + 冒烟（SPA 外壳 + API） |

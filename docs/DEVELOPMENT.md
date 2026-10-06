@@ -288,8 +288,27 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    <旧版本 exe> update --source … --dest <dir> --download               # 期望「可更新」+ 解压
    # 把清单里 sha256 改一个字符再跑 → 期望 checksum_mismatch 且目标目录为空
    ```
-7. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
-8. **上传 + 打 tag**：exe + zip + manifest.json 传 Release，tag = `v` + `__version__`
+7. **多分辨率视觉验收**（必做，别省）：布局问题**单元测试抓不到** —— jsdom 没有布局
+   引擎，组件测试全绿也不代表窄屏不塌。用 Edge/Chrome 无头截图逐个分辨率看：
+   ```bash
+   EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+   "$EDGE" --headless=new --disable-gpu --hide-scrollbars \
+     --virtual-time-budget=4000 --window-size=700,900 \
+     --screenshot=shot.png "http://127.0.0.1:8000/jobs"
+   ```
+   必测宽度与理由：
+   | 宽度 | 对应真实场景 |
+   |---|---|
+   | 1440 | 常见桌面全屏（基线，确认无回归） |
+   | 911 | **1366 屏 + 150% 缩放**（Windows 笔记本默认档） |
+   | 700 | 175% 缩放 / 并排窗口 |
+   | 390 | 极窄（窗口缩到最小） |
+   每页都要看（岗位库 / 抓取 / 投递记录 / 求职助手 / 配置）。判据：文字不竖排、
+   按钮不折行、关键列不被裁掉、可横向滚动的内容能滑到。
+   > 加 `--virtual-time-budget=4000` 等页面加载完再截，否则会截到「加载中」。
+
+8. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
+9. **上传 + 打 tag**：exe + zip + manifest.json 传 Release，tag = `v` + `__version__`
    （`rules.py` 容忍 `v` 前缀）。**上传后用真实地址重新生成一次清单**——`manifest.json`
    里的 `url` 是绝对地址，上传前无法知道。
 
