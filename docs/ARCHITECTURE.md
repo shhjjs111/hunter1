@@ -153,7 +153,7 @@ flowchart LR
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 764 项 |
+| 后端全量 | `cd backend && pytest` | 766 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
