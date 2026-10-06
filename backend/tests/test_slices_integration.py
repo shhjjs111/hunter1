@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -287,3 +288,68 @@ class TestFrontendServing:
 
         package_dir = Path(hunter1.__file__).resolve().parent
         assert not (package_dir / "web").exists()
+
+
+def _raw_asgi_get(app: Any, raw_path: str) -> tuple[int | None, bytes]:
+    """以**原始 ASGI scope** 直接调用应用，绕开 TestClient/httpx 的 URL 规范化。
+
+    攻击者（原始 socket、`curl --path-as-is`、浏览器发百分号编码 `%2e%2e%2f`）
+    能让 `..` 原样抵达服务端；httpx/TestClient 会在客户端把路径规范化掉，用它
+    测不出这条缺陷。「服务端是否守住边界」必须在 ASGI 层验证。
+    """
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": raw_path,
+        "raw_path": raw_path.encode("ascii"),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"127.0.0.1:8000")],
+        "server": ("127.0.0.1", 8000),
+        "client": ("127.0.0.1", 12345),
+    }
+    messages: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    asyncio.run(app(scope, receive, send))
+
+    status = next((m["status"] for m in messages if m["type"] == "http.response.start"), None)
+    body = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+    return status, body
+
+
+class TestSpaFallbackSecurity:
+    """SPA 回落是**手工**拼路径（`dist / path`）—— 不做边界校验就能穿越到 dist 之外。
+
+    `/assets` 走 StaticFiles，Starlette 内部有边界保护；这条手工路径没有。
+    修复：候选路径解析后必须落在 dist 之内（`is_relative_to`），否则回落 index。
+    """
+
+    def test_traversal_does_not_escape_dist(self, tmp_path: Path) -> None:
+        # 布局镜像真实仓库：<base>/frontend/dist 与 <base>/SECRET.txt（dist 上溯两级即根）
+        dist = tmp_path / "frontend" / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text("<html>SPA-ROOT</html>", encoding="utf-8")
+        (dist / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+        (tmp_path / "SECRET.txt").write_text("TOP-SECRET-CONTENT", encoding="utf-8")
+
+        test_client, db = _make_app(tmp_path, frontend=dist)
+
+        # 恶意客户端构造的穿越路径，原样抵达 ASGI 层
+        status, body = _raw_asgi_get(test_client.app, "/../../SECRET.txt")
+        assert status == 200
+        assert b"TOP-SECRET" not in body, "路径穿越：读到了 dist 之外的文件"
+        assert b"SPA-ROOT" in body  # 越界请求回落 index，而不是泄露文件
+
+        # 修复不能把正常服务一起关掉：dist 内的真实文件仍照常返回
+        ok_status, ok_body = _raw_asgi_get(test_client.app, "/favicon.svg")
+        assert ok_status == 200 and b"<svg/>" in ok_body
+        db.dispose()

@@ -223,19 +223,26 @@ def _mount_frontend(app: FastAPI) -> None:
 
         return
 
-    assets = dist / "assets"
+    dist_root = dist.resolve()
+    assets = dist_root / "assets"
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
 
-    index = dist / "index.html"
+    index = dist_root / "index.html"
 
     @app.get("/", include_in_schema=False)
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str = "") -> FileResponse:
-        # 真实文件优先（favicon 等），其余交给 SPA
-        candidate = dist / path if path else None
-        if candidate is not None and candidate.is_file():
-            return FileResponse(candidate)
+        # 真实文件优先（favicon 等），其余交给 SPA。
+        #
+        # 边界校验：`path` 直取自 URL，可含 `..`（原始 socket / `curl --path-as-is` /
+        # 浏览器发百分号编码 `%2e%2e%2f` 都能让它原样抵达）。解析后必须仍在 dist
+        # 之内，否则这条**手工**拼路径会穿越到 dist 之外读到仓库文件。
+        # （`/assets` 走 StaticFiles，Starlette 内部有保护；这条手工路径没有。）
+        if path:
+            candidate = (dist_root / path).resolve()
+            if candidate.is_relative_to(dist_root) and candidate.is_file():
+                return FileResponse(candidate)
         return FileResponse(index)
 
 
