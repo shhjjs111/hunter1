@@ -55,6 +55,25 @@ class ManifestError(RuntimeError):
     """生成清单失败（输入不合法）。"""
 
 
+#: URL 前缀里出现这些词，几乎一定是没替换的模板占位符。清单本身是合法的
+#: （http 地址 + 正确 sha256），所以**不会报任何错** —— 只会让所有用户的
+#: 更新请求打到一个不存在的地址。发布前必须替换。
+_PLACEHOLDER_TOKENS = ("OWNER", "REPO", "CHANGE-ME", "CHANGEME", "TODO", "YOUR-ORG")
+
+
+def warn_if_placeholder(url_base: str) -> str | None:
+    """URL 前缀像模板占位符时返回提示语，否则 None。"""
+    upper = (url_base or "").upper()
+    hit = [token for token in _PLACEHOLDER_TOKENS if token in upper]
+    if not hit:
+        return None
+    return (
+        f"url-base 里还有占位符 {hit}：{url_base}\n"
+        "  清单本身合法（地址是 http、sha256 正确），所以不会报错 —— 但所有用户的"
+        "更新请求会打到一个不存在的地址。上传后请用真实地址重新生成。"
+    )
+
+
 def parse_asset_spec(spec: str) -> tuple[str, Path]:
     """把 `[platform=]path` 解析成 (platform, 路径)。
 
@@ -178,6 +197,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         json.dumps(manifest.model_dump(exclude_none=True), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+    warning = warn_if_placeholder(args.url_base)
+    if warning is not None:
+        print(f"警告：{warning}", file=sys.stderr)
 
     print(f"== 清单已生成：{out} ==")
     print(f"  version：{manifest.version}")

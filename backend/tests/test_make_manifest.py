@@ -175,3 +175,40 @@ class TestCli:
         )
         assert code == 2
         assert not out.exists()
+
+
+class TestPlaceholderWarning:
+    """清单合法（http + 正确 sha256）所以不报错 —— 但地址指向不存在的地方。"""
+
+    def test_detects_owner_repo_placeholder(self) -> None:
+        warning = make_manifest.warn_if_placeholder(
+            "https://github.com/OWNER/REPO/releases/download/v0.1.0"
+        )
+        assert warning is not None
+        assert "占位符" in warning
+
+    def test_real_url_is_not_flagged(self) -> None:
+        assert (
+            make_manifest.warn_if_placeholder(
+                "https://github.com/acme/hunter1/releases/download/v0.1.0"
+            )
+            is None
+        )
+
+    def test_cli_still_writes_file_but_warns(self, artifact: Path, tmp_path: Path, capsys) -> None:
+        """告警不阻断生成（占位符清单仍有价值：sha256/size 是真的），
+        但必须说出来，不能让人以为可以直接发。"""
+        out = tmp_path / "manifest.json"
+        code = make_manifest.main(
+            [
+                "--asset",
+                f"win32={artifact}",
+                "--url-base",
+                "https://github.com/OWNER/REPO/releases/download/v0.1.0",
+                "--out",
+                str(out),
+            ]
+        )
+        assert code == 0
+        assert out.exists()
+        assert "占位符" in capsys.readouterr().err
