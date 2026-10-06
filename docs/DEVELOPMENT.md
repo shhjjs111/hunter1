@@ -68,7 +68,8 @@ cd backend
 
 ```bash
 cd frontend
-npm run check    # tsc --noEmit + vitest
+npm run check    # tsc --noEmit + eslint + vitest
+npm run lint     # 只跑 eslint
 npm run build    # 产出 dist/（交付形态由后端服务它）
 ```
 
@@ -201,7 +202,7 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 CI 用 `contracts.sh --check` 拦截漏导出。
 
 生成器跑在 `frontend/tools/contract-codegen` 的独立依赖树里：
-`openapi-typescript` 声明 peer `typescript@^5.x`，而主工程用 TS 7 ——
+`openapi-typescript` 声明 peer `typescript@^5.x`，而主工程用 TS 6 —— 仍不在范围内，
 生成器只产出 `.d.ts` 文本，两边编译器版本互不影响。
 
 ### 更新

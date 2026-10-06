@@ -7,7 +7,7 @@
 #
 # 覆盖范围按目录存在性**自动纳入**（迁移期友好，不需要改脚本）：
 #   backend/     总是检查：ruff format / ruff check / pyright / pytest
-#   frontend/    有 package.json 时检查：npm run check（类型 + 测试）
+#   frontend/    有 package.json 时检查：npm run check（类型 + lint + 测试）
 #   contracts/   有 openapi.json 时检查：契约漂移门禁
 #
 # 解释器探测顺序：$PY → 项目自带 .tools/python → PATH 上的 python。
@@ -41,7 +41,7 @@ echo "== 后端：测试 (pytest) =="
 (cd "$ROOT/backend" && "$PY" -m pytest)
 
 if [[ -f "$ROOT/frontend/package.json" ]]; then
-  echo "== 前端：类型检查 + 测试 (npm run check) =="
+  echo "== 前端：类型检查 + lint + 测试 (npm run check) =="
   (cd "$ROOT/frontend" && npm run --silent check)
 fi
 

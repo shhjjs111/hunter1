@@ -113,8 +113,15 @@ flowchart LR
 
 - **契约与类型**：`scripts/contracts.sh`（导出 + `--check` 漂移门禁）。
   生成器跑在 `frontend/tools/contract-codegen` 的**独立依赖树**里
-  （openapi-typescript 的 peer 限 TS5，主工程用 TS7 —— 生成器只产出 `.d.ts` 文本，
-  两边编译器版本互不影响）。
+  （openapi-typescript 的 peer 是 `typescript@^5.x`，主工程用 TS 6 —— 仍不在范围内；
+  生成器只产出 `.d.ts` 文本，两边编译器版本互不影响）。
+- **前端 lint 与 TS 版本**：主工程原用 TS 7，但 `typescript-eslint` 的 peer 是
+  `>=4.8.4 <6.1.0`（TS7 尚无 JS API），导致整个前端缺 lint 这一环。
+  已**降级到 TS 6.0.3**（v2 计划的选型表本就写明「异常则实查回退」），
+  lint 随之可装。不用"为 lint 另建一棵依赖树"的做法 —— 那会让 lint 与 typecheck
+  跑在两个 TS 版本上，新造一个"lint 判断与 typecheck 不一致"的漂移面
+  （`contract-codegen` 的独立树是另一回事：它是独立生成器，不需要理解主工程）。
+  等 typescript-eslint 支持 TS 7.1 后可直接升回。
 - **SPA 回落**：`main.py` 在 API 路由**之后**注册 `/api/*` 之外的兜底路由，返回
   `index.html`（前端路由自己解析路径）。顺序反了会把 API 吞掉。
 - **产物缺失时**：给 503 + 可行动提示（`hint` 里写明怎么构建），而不是 500 或白屏。
@@ -160,7 +167,7 @@ flowchart LR
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
-| 前端 | `cd frontend && npm run check` | 类型 + 54 项（含整体渲染验收） |
+| 前端 | `cd frontend && npm run check` | 类型 + lint + 54 项（含整体渲染验收） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
 | 全门禁 | `bash scripts/check.sh` | 以上全部 |
 | 打包 | `python scripts/build.py` | 布局 + 冒烟（SPA 外壳 + API） |
