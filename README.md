@@ -77,10 +77,12 @@ hunter1 update --source <版本清单 URL>            # 只看有没有新版
 hunter1 update --source <版本清单 URL> --download # 下好并解压到 updates/<版本>/
 ```
 
-也可以把地址放进环境变量，省去每次传参：
+也可以把地址放进环境变量，省去每次传参。**用 `releases/latest/download/` 这个
+稳定地址**——它永远指向「最新 Release 的 manifest.json」，设一次终身有效，
+以后每发一版只要把新的 manifest.json 放进 Release 即可：
 
 ```bash
-export HUNTER1_UPDATE_SOURCE=https://…/manifest.json
+export HUNTER1_UPDATE_SOURCE=https://github.com/<owner>/<repo>/releases/latest/download/manifest.json
 hunter1 update --download
 ```
 
