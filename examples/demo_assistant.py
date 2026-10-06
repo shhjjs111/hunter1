@@ -26,7 +26,7 @@ from hunter1.application.job_tools import build_tools
 from hunter1.domain.assistant import Message, Role, ToolCall
 from hunter1.domain.llm import LLMResponse
 from hunter1.domain.models import CaptureStatus, Job
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 class ScriptedLLM:
@@ -92,7 +92,7 @@ def main(argv: list[str]) -> int:
     print(f"岗位库已就绪：{db.jobs().count()} 条岗位\n")
 
     if live:
-        from hunter1.infrastructure.llm import resolve_preset
+        from hunter1.platform.llm import resolve_preset
 
         api_key = os.environ.get("HUNTER1_API_KEY", "")
         if not api_key:

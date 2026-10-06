@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.domain.models import CaptureStatus, Company, Job
-from hunter1.infrastructure.db import Database
+from hunter1.platform.db import Database
 
 
 def main() -> int:

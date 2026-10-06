@@ -30,7 +30,7 @@ from bs4 import BeautifulSoup
 from hunter1.crawlers.guards import ensure_not_blocked
 from hunter1.crawlers.registry import SITES, available_sites
 from hunter1.crawlers.static_html import parse_list_page
-from hunter1.infrastructure.crawler.http import HttpFetcher
+from hunter1.platform.fetch.http import HttpFetcher
 
 ROOT = Path(__file__).resolve().parent.parent
 KEEP = 3
