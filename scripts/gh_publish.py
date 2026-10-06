@@ -71,8 +71,101 @@ class PublishError(RuntimeError):
     pass
 
 
-def read_token() -> str:
-    """从环境变量或令牌文件取令牌；两者都没有则报错并给出设置方法。"""
+def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
+    """决定往哪个仓库发。
+
+    `owner_repo` 给了就用它（`owner/repo` 形式）；否则用 `owner` + `repo`。
+    返回的 owner 可能为空串 —— 表示「稍后用令牌账号补上」，这是双击入口的
+    默认路径（用户不必事先知道自己的账号名）。
+    """
+    if owner_repo:
+        if "/" not in owner_repo:
+            raise PublishError("owner/repo 格式不对（应形如 acme/hunter1）")
+        head, tail = owner_repo.split("/", 1)
+        return head.strip(), tail.strip()
+    return owner.strip(), repo.strip()
+
+
+def verify_token(token: str) -> str | None:
+    """令牌有效时返回账号名，否则 None。"""
+    try:
+        return api_request("GET", "/user", token).get("login") or None
+    except PublishError:
+        return None
+
+
+def save_token(token: str) -> Path:
+    """存到仓库外的文件。
+
+    Windows 下不靠权限位（`chmod` 在 NTFS 上基本无效），而是靠**用户主目录本身
+    的 ACL** —— 默认只有本账号能读 `C:\\Users\\<你>`。先写临时文件再替换，
+    避免中断留下半截令牌。
+    """
+    path = DEFAULT_TOKEN_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(token, encoding="utf-8")
+    tmp.replace(path)
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+    return path
+
+
+def prompt_for_token() -> str:
+    """交互式要令牌：不回显、当场校验、通过才落盘。
+
+    这是双击入口的主要路径（`release.cmd` → 本脚本）。用 `getpass` 而非
+    `input`：令牌不回显，旁人看不到屏幕；也不进 shell 历史（这是双击运行，
+    根本没有 shell）。
+    """
+    import getpass
+
+    print("需要 GitHub 令牌 —— 输入一次，之后会自动复用。")
+    print("  生成：https://github.com/settings/tokens")
+    print("  勾选：repo（classic）；或 Contents: Read and write（fine-grained）")
+    print()
+    # 空回车**不**计入尝试次数：手滑敲了三次回车就被锁在外面，是很糟的体验。
+    # 只有「令牌被 GitHub 拒绝」才算一次失败。
+    attempts = 0
+    while attempts < 3:
+        try:
+            token = getpass.getpass("粘贴令牌后回车（输入不回显）：").strip()
+        except EOFError:
+            # 没有可读的输入（stdin 被重定向/关闭）。不接的话这里会吐一整段
+            # traceback —— 对一个「双击就能用」的工具来说是最差的失败姿态。
+            raise PublishError(
+                "读取输入被中断（stdin 不是终端）。请在终端里运行，"
+                "或改用 GITHUB_TOKEN 环境变量 / scripts/gh_setup.sh。"
+            ) from None
+        if not token:
+            print("  没读到内容，再试一次。")
+            continue
+        for prefix in ("GITHUB_TOKEN=", "github_token="):
+            if token.startswith(prefix):
+                token = token[len(prefix) :]
+                print("  （已去掉开头的 GITHUB_TOKEN= 前缀）")
+                break
+        # 粘贴常带尾随空格/换行；令牌内部不含空白。
+        token = "".join(token.split())
+        login = verify_token(token)
+        if login is None:
+            attempts += 1
+            print(f"  ✗ GitHub 拒绝了它（还剩 {3 - attempts} 次）。", file=sys.stderr)
+            print("    常见原因：已过期 / 已被撤销 / 复制时漏了字符。", file=sys.stderr)
+            continue
+        path = save_token(token)
+        print(f"  ✓ 令牌有效，账号：{login}")
+        print(f"  ✓ 已存到 {path}（仓库外，不会被提交）")
+        return token
+    raise PublishError("连续 3 次都没通过校验 —— 先到 GitHub 确认令牌是否有效。")
+
+
+def read_token(*, interactive: bool = True) -> str:
+    """取令牌：环境变量 → 令牌文件 → （交互式）当场输入。
+
+    交互询问只在**真的连着终端**时发生（`isatty`）。CI 里没有终端，所以不会
+    卡在一个永远等不到输入的提示上 —— 而是明确报错，让人去配 `GITHUB_TOKEN`。
+    """
     env = os.environ.get("GITHUB_TOKEN", "").strip()
     if env:
         return env
@@ -80,9 +173,11 @@ def read_token() -> str:
         token = DEFAULT_TOKEN_FILE.read_text(encoding="utf-8").strip()
         if token:
             return token
+    if interactive and sys.stdin.isatty():
+        return prompt_for_token()
     raise PublishError(
-        "没有找到令牌。先跑一次 `bash scripts/gh_setup.sh`（安全地把令牌存到仓库外），"
-        "或设 GITHUB_TOKEN 环境变量。"
+        "没有找到令牌，且当前不是交互式终端（无法提示输入）。"
+        "请设 GITHUB_TOKEN 环境变量，或先跑一次 `bash scripts/gh_setup.sh`。"
     )
 
 
@@ -274,18 +369,29 @@ def regenerate_manifest(owner: str, repo: str, tag: str) -> Path:
 def main(argv: list[str] | None = None) -> int:
     _enable_utf8_output()
     parser = argparse.ArgumentParser(prog="gh_publish.py", description="推送并建 Release")
-    parser.add_argument("owner_repo", help="owner/repo")
+    parser.add_argument(
+        "owner_repo",
+        nargs="?",
+        default="",
+        help="owner/repo；省略时用「令牌对应账号 + --repo」",
+    )
+    parser.add_argument("--owner", default="", help="所属账号/组织（默认取令牌账号）")
+    parser.add_argument("--repo", default="hunter1", help="仓库名（省略 owner_repo 时用）")
     parser.add_argument("--create-repo", action="store_true", help="仓库不存在时自动创建")
     parser.add_argument("--dry-run", action="store_true", help="只打印将要做什么，不改远端")
     args = parser.parse_args(argv)
 
-    if "/" not in args.owner_repo:
-        print("owner/repo 格式不对（应形如 acme/hunter1）", file=sys.stderr)
+    # owner/repo 的确定顺序：位置参数 → --owner/--repo → 令牌账号。
+    # 令牌账号放最后，是为了让「双击运行」不必事先知道自己的账号名叫什么 ——
+    # 令牌一问，账号自明。
+    try:
+        owner, repo = resolve_target(args.owner_repo, args.owner, args.repo)
+    except PublishError as exc:
+        print(exc, file=sys.stderr)
         return 2
-    owner, repo = args.owner_repo.split("/", 1)
-    tag = f"v{__version__}"
 
-    print(f"== 发布 {tag} 到 {owner}/{repo} ==")
+    tag = f"v{__version__}"
+    print(f"== 发布 {tag} 到 {owner or '<令牌对应账号>'}/{repo} ==")
 
     zip_path = ROOT / "dist" / "hunter1-win32.zip"
     exe_path = ROOT / "dist" / "hunter1" / "hunter1.exe"
@@ -342,8 +448,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         token = read_token()
-        who = api_request("GET", "/user", token)
-        print(f"  ✓ 令牌有效，账号：{who.get('login')}")
+        login = api_request("GET", "/user", token).get("login") or ""
+        if not owner:
+            if not login:
+                print("无法确定仓库归属，请显式给出 owner/repo 或 --owner", file=sys.stderr)
+                return 2
+            owner = login  # 省略 owner 时用令牌账号 —— 双击场景的默认路径
+        print(f"  ✓ 令牌有效，账号：{login}")
 
         ensure_repo(owner, repo, token, create=args.create_repo)
         push(owner, repo, token)

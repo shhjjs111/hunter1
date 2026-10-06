@@ -1,6 +1,13 @@
 # 统一行尾为 LF，避免跨平台协作时的行尾噪声（旧系统曾因行尾转换踩坑）
 * text=auto eol=lf
 
+# Windows 批处理必须保持 CRLF —— cmd.exe 在 LF-only 的 .cmd 里会错位解析行边界。
+# 实测：把 release.cmd 转成 LF 后，rem 注释与中文字符串被拼成非法命令，
+# 整个脚本连启动都做不到（报「'…rem' 不是内部或外部命令」）。
+# 这条写在 `* eol=lf` 之后，覆盖它。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 # 二进制文件不做行尾转换
 *.png binary
 *.jpg binary
