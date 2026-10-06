@@ -70,9 +70,16 @@ def find_job(store: JobStore, job_id: str) -> tuple[Job | None, int]:
 def apply_to_job(*, store: JobStore, job: Job, now: datetime) -> Application:
     """记录一条投递（公司名与标题快照下来，见 application.applications）。
 
+    **幂等**：同一岗位已投递过则返回既有记录，不新建 —— 重复点击不该堆出多条
+    投递（旧实现每次都 `new_application`，重复点击即重复记录）。
+
     迁移注：`new_application` 目前来自旧 application 层；Wave 4 后改经
     applications 切片的公开面（依赖已在 test_architecture 的白名单登记）。
     """
+    existing = store.find_application_by_job(job.id)
+    if existing is not None:
+        return existing
+
     from hunter1.application.applications import new_application
 
     application = new_application(job=job, now=now)

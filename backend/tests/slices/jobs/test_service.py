@@ -147,3 +147,12 @@ class TestApply:
         assert job is not None
         application = apply_to_job(store=store, job=job, now=NOW)
         assert store._db.applications().get(application.id) is not None
+
+    def test_repeat_apply_is_idempotent(self, store: JobStore) -> None:
+        """重复投递同一岗位只产生一条记录 —— 重复点击不该堆出多条投递。"""
+        job, _ = find_job(store, FULL_A)
+        assert job is not None
+        first = apply_to_job(store=store, job=job, now=NOW)
+        second = apply_to_job(store=store, job=job, now=NOW)
+        assert second.id == first.id
+        assert len(store._db.applications().by_job(FULL_A)) == 1

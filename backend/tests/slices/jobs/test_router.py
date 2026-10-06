@@ -143,3 +143,10 @@ class TestApplyEndpoint:
 
     def test_missing_job_is_404(self, client: TestClient) -> None:
         assert client.post("/api/jobs/zzzz/apply").status_code == 404
+
+    def test_repeat_apply_returns_same_id(self, client: TestClient, store: JobStore) -> None:
+        """重复点击投递：响应幂等（同一 application_id），且库里只有一条记录。"""
+        first = client.post(f"/api/jobs/{FULL_A}/apply").json()["application_id"]
+        second = client.post(f"/api/jobs/{FULL_A}/apply").json()["application_id"]
+        assert second == first
+        assert len(store._db.applications().by_job(FULL_A)) == 1
