@@ -200,6 +200,86 @@ class TestSequenceIntegrity:
         assert seqs == [1, 2, 3, 4, 5]
 
 
+class TestRepairOfLegacyDuplicates:
+    """老库在索引落地前撞过号留下重复行时，启动自愈而不是把应用挡在门外。"""
+
+    def _make_dirty(self, db: Database) -> None:
+        import sqlalchemy as sa
+
+        with db.engine.begin() as conn:
+            conn.execute(sa.text("DROP INDEX IF EXISTS uq_conv_messages_conv_seq"))
+            conn.execute(
+                sa.text(
+                    "INSERT INTO conversations (id,title,created_at,updated_at) "
+                    "VALUES ('c1','t','2026-01-01 00:00:00','2026-01-01 00:00:00')"
+                )
+            )
+            for mid in ("m1", "m2"):
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO conversation_messages "
+                        "(id,conversation_id,sequence,role,content,tool_calls,"
+                        "tool_call_id,created_at) "
+                        "VALUES (:mid,'c1',1,'user',:mid,'[]',NULL,'2026-01-01 00:00:00')"
+                    ),
+                    {"mid": mid},
+                )
+
+    def test_initialize_heals_instead_of_crashing(self, db: Database) -> None:
+        self._make_dirty(db)
+        db.initialize()  # 不应抛裸 IntegrityError
+        assert len(db.conversations().messages("c1")) == 2
+
+    def test_sequences_become_unique_and_ordered(self, db: Database) -> None:
+        import sqlalchemy as sa
+
+        self._make_dirty(db)
+        db.initialize()
+        with db.session() as session:
+            seqs = list(
+                session.scalars(
+                    sa.text(
+                        "SELECT sequence FROM conversation_messages "
+                        "WHERE conversation_id='c1' ORDER BY sequence"
+                    )
+                )
+            )
+        assert seqs == [1, 2]
+
+    def test_unique_index_present_after_healing(self, db: Database) -> None:
+        import sqlalchemy as sa
+
+        self._make_dirty(db)
+        db.initialize()
+        with db.session() as session:
+            found = list(
+                session.scalars(
+                    sa.text(
+                        "SELECT name FROM sqlite_master WHERE type='index' "
+                        "AND name='uq_conv_messages_conv_seq'"
+                    )
+                )
+            )
+        assert found == ["uq_conv_messages_conv_seq"]
+
+
+class TestSequenceConflictClassification:
+    def test_only_unique_conflicts_are_retryable(self) -> None:
+        """FK 之类的完整性错误不该被当成撞号重试（否则误报「并发冲突过多」）。"""
+        import sqlite3
+
+        from sqlalchemy.exc import IntegrityError
+
+        from hunter1.platform.db.conversations import _is_sequence_conflict
+
+        unique = IntegrityError("stmt", {}, sqlite3.IntegrityError("UNIQUE constraint failed: a.b"))
+        foreign_key = IntegrityError(
+            "stmt", {}, sqlite3.IntegrityError("FOREIGN KEY constraint failed")
+        )
+        assert _is_sequence_conflict(unique) is True
+        assert _is_sequence_conflict(foreign_key) is False
+
+
 class TestAppendMany:
     def test_saves_all_in_order(self, db: Database) -> None:
         repo = db.conversations()

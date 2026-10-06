@@ -22,6 +22,15 @@ if TYPE_CHECKING:
     from hunter1.platform.db.database import Database
 
 
+def _is_sequence_conflict(exc: IntegrityError) -> bool:
+    """该完整性错误是否由 `(conversation_id, sequence)` 撞号引起。
+
+    只对撞号重试。FK 失败（如会话被并发删除）等其它完整性错误必须**直接抛出** ——
+    否则会被误报成「并发写入冲突过多」，把真实原因埋掉。
+    """
+    return "UNIQUE constraint failed" in str(exc.orig)
+
+
 @dataclass
 class Conversation:
     """一段对话的元信息。"""
@@ -146,6 +155,8 @@ class SqliteConversationRepository:
                     session.commit()
                 return
             except IntegrityError as exc:
+                if not _is_sequence_conflict(exc):
+                    raise
                 last_error = exc
                 continue
         raise RuntimeError(

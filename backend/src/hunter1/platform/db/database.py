@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from hunter1.platform.db.applications import SqliteApplicationRepository
@@ -55,12 +56,53 @@ class Database:
         # 顺序错乱。放在这里而不是模型里 —— `create_all` 只对**新表**生效，老库补不上
         # 约束，而这条守卫对老库同样必要。`IF NOT EXISTS` 让本语句幂等。
         with self.engine.begin() as connection:
+            # **先修脏数据再建索引**：索引落地前撞过号的老库会存在重复行，
+            # 直接 `CREATE UNIQUE INDEX` 会抛裸 IntegrityError —— 而本方法在
+            # `AppContext.default` 的启动路径上，后果是应用起不来、用户无从自救。
+            # 重排（而非删除）能保住全部消息并恢复顺序。
+            self._repair_duplicate_message_sequences(connection)
             connection.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_conv_messages_conv_seq "
                     "ON conversation_messages (conversation_id, sequence)"
                 )
             )
+
+    @staticmethod
+    def _repair_duplicate_message_sequences(connection: Connection) -> None:
+        """把存在重复序号的会话整体重排为 1..N，为建唯一索引扫清障碍。
+
+        只处理确有重复的会话（干净库上这条查询只做一次 GROUP BY），避免无谓写入。
+        排序键用 (sequence, created_at, id)：先按原序号，再按时间与 id 稳定化 ——
+        保证重排结果确定，且大体保持原有先后顺序。
+        """
+        duplicated = (
+            connection.execute(
+                text(
+                    "SELECT conversation_id FROM conversation_messages "
+                    "GROUP BY conversation_id, sequence HAVING COUNT(*) > 1"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for conversation_id in set(duplicated):
+            message_ids = (
+                connection.execute(
+                    text(
+                        "SELECT id FROM conversation_messages WHERE conversation_id = :cid "
+                        "ORDER BY sequence, created_at, id"
+                    ),
+                    {"cid": conversation_id},
+                )
+                .scalars()
+                .all()
+            )
+            for sequence, message_id in enumerate(message_ids, start=1):
+                connection.execute(
+                    text("UPDATE conversation_messages SET sequence = :seq WHERE id = :mid"),
+                    {"seq": sequence, "mid": message_id},
+                )
 
     @contextmanager
     def session(self) -> Iterator[Session]:
