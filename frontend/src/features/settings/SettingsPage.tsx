@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { ProfileEditor } from "../scoring/components/ProfileEditor";
 import { Button, Card, ErrorNotice, PageHeader, SuccessNotice } from "../../shared/ui";
 import { useSaveSettings, useSettings, useTestConnection } from "./api";
 
@@ -140,6 +141,10 @@ export function SettingsPage() {
         密钥明文存在本地 SQLite：单机单用户场景下，系统钥匙串会引入平台特有依赖，
         与「零托管、跨平台」冲突。界面只回显掩码，日志不输出完整密钥。
       </p>
+
+      <div className="mt-6">
+        <ProfileEditor />
+      </div>
     </>
   );
 }

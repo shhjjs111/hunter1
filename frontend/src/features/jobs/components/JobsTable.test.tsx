@@ -18,32 +18,47 @@ const JOB: JobSummary = {
 
 describe("JobsTable", () => {
   it("渲染岗位、公司名与匹配分", () => {
-    render(<JobsTable jobs={[JOB]} onApply={() => {}} />);
+    render(<JobsTable jobs={[JOB]} onApply={() => {}} onScore={() => {}} />);
     expect(screen.getByText("AI产品经理")).toBeTruthy();
     expect(screen.getByText("字节跳动")).toBeTruthy();
     expect(screen.getByText("88")).toBeTruthy();
   });
 
   it("未评分的岗位显示「未评分」而不是空白", () => {
-    render(<JobsTable jobs={[{ ...JOB, match_score: null }]} onApply={() => {}} />);
+    render(<JobsTable jobs={[{ ...JOB, match_score: null }]} onApply={() => {}} onScore={() => {}} />);
     expect(screen.getByText("未评分")).toBeTruthy();
   });
 
   it("空列表给出明确提示", () => {
-    render(<JobsTable jobs={[]} onApply={() => {}} />);
+    render(<JobsTable jobs={[]} onApply={() => {}} onScore={() => {}} />);
     expect(screen.getByText(/没有找到岗位/)).toBeTruthy();
   });
 
   it("点击投递回调岗位 id", () => {
     const onApply = vi.fn();
-    render(<JobsTable jobs={[JOB]} onApply={onApply} />);
+    const onScore = vi.fn();
+    render(<JobsTable jobs={[JOB]} onApply={onApply} onScore={onScore} />);
     fireEvent.click(screen.getByRole("button", { name: "记录投递" }));
     expect(onApply).toHaveBeenCalledWith("j1");
   });
 
   it("记录中：按钮禁用并换文案", () => {
-    render(<JobsTable jobs={[JOB]} applyingId="j1" onApply={() => {}} />);
+    render(<JobsTable jobs={[JOB]} applyingId="j1" onApply={() => {}} onScore={() => {}} />);
     const button = screen.getByRole("button", { name: "记录中…" });
     expect(button.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("点击评分回调岗位 id", () => {
+    const onScore = vi.fn();
+    render(<JobsTable jobs={[JOB]} onApply={() => {}} onScore={onScore} />);
+    fireEvent.click(screen.getByRole("button", { name: "评分" }));
+    expect(onScore).toHaveBeenCalledWith("j1");
+  });
+
+  it("评分中：该行按钮禁用并换文案（不误禁投递按钮）", () => {
+    render(<JobsTable jobs={[JOB]} scoringId="j1" onApply={() => {}} onScore={() => {}} />);
+    const scoring = screen.getByRole("button", { name: "评分中…" });
+    expect(scoring.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "记录投递" }).hasAttribute("disabled")).toBe(false);
   });
 });

@@ -7,12 +7,16 @@ export function JobsTable({
   jobs,
   loading = false,
   applyingId,
+  scoringId,
   onApply,
+  onScore,
 }: {
   jobs: JobSummary[];
   loading?: boolean;
   applyingId?: string;
+  scoringId?: string;
   onApply: (jobId: string) => void;
+  onScore: (jobId: string) => void;
 }) {
   if (loading) {
     return <p className="mt-6 text-slate-500">正在加载岗位…</p>;
@@ -60,14 +64,24 @@ export function JobsTable({
               )}
             </td>
             <td className="py-2 text-right">
-              <button
-                type="button"
-                className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
-                disabled={applyingId === job.id}
-                onClick={() => onApply(job.id)}
-              >
-                {applyingId === job.id ? "记录中…" : "记录投递"}
-              </button>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
+                  disabled={scoringId === job.id}
+                  onClick={() => onScore(job.id)}
+                >
+                  {scoringId === job.id ? "评分中…" : "评分"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
+                  disabled={applyingId === job.id}
+                  onClick={() => onApply(job.id)}
+                >
+                  {applyingId === job.id ? "记录中…" : "记录投递"}
+                </button>
+              </div>
             </td>
           </tr>
         ))}

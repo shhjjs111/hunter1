@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { useScoreJob } from "../scoring/api";
 import { useApplyToJob, useJobs } from "./api";
 import { JobsTable } from "./components/JobsTable";
 import { Pager } from "./components/Pager";
@@ -10,6 +11,7 @@ export function JobsPage() {
   const [page, setPage] = useState(1);
   const jobs = useJobs(keyword, page);
   const apply = useApplyToJob();
+  const score = useScoreJob();
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
@@ -37,7 +39,9 @@ export function JobsPage() {
           jobs={jobs.data?.items ?? []}
           loading={jobs.isLoading}
           applyingId={apply.isPending ? apply.variables : undefined}
+          scoringId={score.isPending ? score.variables : undefined}
           onApply={(jobId) => apply.mutate(jobId)}
+          onScore={(jobId) => score.mutate(jobId)}
         />
       )}
 
@@ -51,6 +55,10 @@ export function JobsPage() {
         <p className="mt-2 text-sm text-red-600">{(apply.error as Error).message}</p>
       )}
       {apply.isSuccess && <p className="mt-2 text-sm text-emerald-600">已记录投递。</p>}
+
+      {/* 评分失败原因原样透出：最常见的是「画像未配置」，后端已给可行动指引 */}
+      {score.isError && <p className="mt-2 text-sm text-red-600">{(score.error as Error).message}</p>}
+      {score.isSuccess && <p className="mt-2 text-sm text-emerald-600">已评分并写回。</p>}
     </main>
   );
 }
