@@ -119,6 +119,27 @@ def test_layers_exist() -> None:
         assert (SRC / layer).is_dir(), f"缺少分层目录: {layer}"
 
 
+def test_application_layer_is_minimal() -> None:
+    """`application/` 只允许两个模块 —— 并存期拷贝不得重新长出来。
+
+    这里曾住着 `assistant / crawl / job_tools / tools / score` 五个模块，它们是
+    `slices/` 对应实现的**逐字拷贝**（差异仅 import 前缀：2~4 行），生产代码 0 引用，
+    却各带一套测试（105 项）。后果有两层：一是 ~840 行死代码会与 `slices/` **漂移**
+    （改一边忘另一边，两套测试都绿、只有一套在生产跑）；二是那些「绿」不证明任何
+    生产行为，是假信心。
+
+    现存两个各有理由：
+    - `ports.py`：共享的进程边界协议（见 SHARED_PORT_MODULE 的说明）；
+    - `applications.py`：仍被 `slices/jobs/service.py` 引用（登记在
+      SLICE_LEGACY_ALLOW），清理需先决定「投递」动作归属哪个切片 —— 是架构决策，
+      不是机械搬运。
+    """
+    allowed = {"__init__.py", "ports.py", "applications.py"}
+    actual = {p.name for p in (SRC / "application").glob("*.py")}
+    extra = actual - allowed
+    assert not extra, f"application/ 出现了意料之外的模块（并存期拷贝？）：{sorted(extra)}"
+
+
 def test_legacy_crawlers_layer_is_gone() -> None:
     """旧 `crawlers/` 层必须不存在（收尾迁移完成）：抓取能力归 `slices/crawl`。
 

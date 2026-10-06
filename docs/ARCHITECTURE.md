@@ -127,12 +127,15 @@ flowchart LR
    `Message/Role/ToolCall` 归 `platform/llm`（它们描述的是模型消息协议）。
    现在保留是因为 `platform/db` 与 `platform/llm` 都要用 —— 归位切片会让
    platform 反向依赖 slices。已在各 `SLICE.md` 记录。
-2. **`application/` 是并存期残留**。`crawlers/` 已随收尾迁移删除（抓取能力归
-   `slices/crawl`；旧包、旧测试目录一并移除，快照归位到
-   `tests/slices/crawl/fixtures/`，有架构测试钉死它不得复活）。
-   `application/ports.py` 是共享的进程边界协议（见下条）；其余模块
-   （assistant / tools / crawl / applications / job_tools / score）**生产代码 0 引用**，
-   仅被 `tests/application/` 与 `examples/` 引用 —— 即那两处测/演示的是并存期旧实现。
+2. **`application/` 只剩两个模块**（`ports.py` + `applications.py`，有架构测试钉死）。
+   原先这里住着 `assistant / crawl / job_tools / tools / score` 五个模块 —— 它们是
+   `slices/` 对应实现的**逐字拷贝**（差异仅 import 前缀 2~4 行），生产代码 0 引用，
+   却各带一套测试（105 项）。已随本次清理删除，`examples/` 改指生产路径。
+
+   为什么必须删：一是 840 行死代码会与 `slices/` **漂移** —— 改一边忘另一边，
+   两套测试都绿、只有一套在生产跑；二是那 105 项「绿」不证明任何生产行为，
+   是**假信心**（验证矩阵因此从 772 降到 668，降的是冗余不是覆盖）。
+   `crawlers/` 的删除同理，两者都有存在性断言防止复活。
    ⚠️ `slices/jobs/service.py` 仍经 `application.applications` 取 `new_application`
    （登记在 `SLICE_LEGACY_ALLOW`）。**不能**直接改指 `slices.applications`：那会引入
    `jobs → applications` 反向依赖（白名单是 `applications → jobs` 单向）。清理前需先
@@ -153,7 +156,7 @@ flowchart LR
 
 | 层 | 命令 | 覆盖 |
 |---|---|---|
-| 后端全量 | `cd backend && pytest` | 772 项 |
+| 后端全量 | `cd backend && pytest` | 668 项 |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |

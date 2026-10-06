@@ -20,10 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
-from hunter1.application.crawl import crawl_company
 from hunter1.platform.fetch.http import FetchError, HttpFetcher
 from hunter1.platform.db import Database
-from hunter1.slices.crawl import ListPageSpec, StaticHtmlCrawler
+from hunter1.slices.crawl import ListPageSpec, StaticHtmlCrawler, crawl_company
 
 TARGET_URL = "https://www.yingjiesheng.com/"
 SPEC = ListPageSpec(

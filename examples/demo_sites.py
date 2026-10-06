@@ -20,10 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
-from hunter1.application.crawl import crawl_all
 from hunter1.platform.fetch.http import HttpFetcher
 from hunter1.platform.db import Database
-from hunter1.slices.crawl import SITES, available_sites, build_all
+from hunter1.slices.crawl import SITES, available_sites, build_all, crawl_all
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "backend" / "tests" / "slices" / "crawl" / "fixtures"

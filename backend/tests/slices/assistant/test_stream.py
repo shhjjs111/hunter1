@@ -37,6 +37,36 @@ def _boom() -> str:
 REGISTRY = ToolRegistry([tool(_search, name="search_jobs"), tool(_boom, name="boom")])
 
 
+class ScriptedLLM:
+    """按脚本依次返回响应的假 LLM（同步路径）。
+
+    原先是从 `tests/application/test_assistant_loop.py` 跨目录借来的 —— 那让本文件
+    隐式依赖另一个测试目录（对方一删这边就红）。就地定义，自包含。
+    """
+
+    def __init__(self, script: list[Any]) -> None:
+        self.script = list(script)
+        self.calls: list[dict[str, Any]] = []
+
+    def _next(self) -> LLMResponse:
+        if not self.script:
+            raise AssertionError("LLM 被调用次数超出脚本")
+        item = self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def complete(self, **_kw: Any) -> LLMResponse:
+        raise AssertionError("助手应使用带工具的调用")
+
+    def complete_structured(self, **_kw: Any) -> LLMResponse:
+        raise AssertionError("助手应使用带工具的调用")
+
+    def complete_with_tools(self, **kwargs: Any) -> LLMResponse:
+        self.calls.append(kwargs)
+        return self._next()
+
+
 class StreamingLLM:
     """按脚本产出事件流的假 LLM。
 
@@ -257,7 +287,6 @@ class TestParityWithNonStreaming:
         ]
 
     def test_same_script_yields_same_reply_and_tools(self) -> None:
-        from tests.application.test_assistant_loop import ScriptedLLM
 
         messages = [Message(Role.USER, "找产品岗")]
         sync = run_turn(llm=ScriptedLLM(self._scripted()), registry=REGISTRY, messages=messages)  # type: ignore[arg-type]
@@ -279,7 +308,6 @@ class TestParityWithNonStreaming:
         assert [r.content for r in streamed.tool_results] == [r.content for r in sync.tool_results]
 
     def test_truncation_message_matches(self) -> None:
-        from tests.application.test_assistant_loop import ScriptedLLM
 
         messages = [Message(Role.USER, "循环")]
         sync = run_turn(

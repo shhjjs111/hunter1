@@ -21,12 +21,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
-from hunter1.application.assistant import run_turn
-from hunter1.application.job_tools import build_tools
 from hunter1.domain.assistant import Message, Role, ToolCall
 from hunter1.domain.llm import LLMResponse
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
+from hunter1.slices.assistant import build_tools, run_turn
 
 
 class ScriptedLLM:
