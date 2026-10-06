@@ -19,6 +19,7 @@ from hunter1.platform.llm import (
     PROVIDER_PRESETS,
     LLMError,
     OpenAICompatibleClient,
+    clear_rejected_modes,
     resolve_preset,
 )
 
@@ -296,3 +297,86 @@ class TestPresets:
     def test_unknown_preset_raises(self) -> None:
         with pytest.raises(KeyError):
             resolve_preset("not-a-vendor", api_key="sk-x")
+
+
+SCHEMA = {"type": "object", "properties": {"score": {"type": "integer"}}, "required": ["score"]}
+
+
+def _rejecting_handler(seen: list[object]) -> object:
+    """记录每次请求带的 response_format；带了就 400 拒绝（模拟厂商不支持）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body.get("response_format"))
+        if body.get("response_format") is not None:
+            return httpx.Response(400, json={"error": {"message": "unsupported format"}})
+        return _ok_response('{"score": 7}')
+
+    return handler
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rejected_modes():
+    """每个用例前清空「端点拒绝记忆」。
+
+    那份记忆是**进程级**的（故意的：客户端每请求新建，记忆必须跨实例存活）。
+    代价是模块级状态会跨用例泄漏 —— 不清的话，前面用例发现的「json_schema 被拒」
+    会让后面用例直接从降级后的模式开始试，断言随之错乱。用 autouse 统一隔离，
+    比逐个用例记得清更可靠。
+    """
+    clear_rejected_modes()
+    yield
+    clear_rejected_modes()
+
+
+class TestRejectedModeMemory:
+    """「这个端点拒绝过某格式」必须**跨客户端实例**存活。
+
+    客户端是每请求新建的（`main._runtime_llm`：用户改配置要立刻生效，不能启动时
+    缓存）。若记忆挂在实例上，它活不过一次请求 —— 厂商不支持某格式时每次调用都
+    要重吃一个 400 再降级，白白多打注定失败的付费请求。
+    """
+
+    def test_first_call_discovers_then_degrades(self) -> None:
+        """首次调用：依次试到能用的模式为止。"""
+        seen: list[object] = []
+        client = _client(_rejecting_handler(seen))
+        client.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        client.close()
+        # json_schema → 400，json_object → 400，none → 成功
+        assert [f is not None for f in seen] == [True, True, False], f"实际 {seen}"
+
+    def test_next_client_skips_already_rejected_modes(self) -> None:
+        """**核心断言**：换一个客户端实例（= 下一个请求）不该重试已被拒的模式。"""
+        seen: list[object] = []
+        handler = _rejecting_handler(seen)
+
+        first = _client(handler)
+        first.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        first.close()
+
+        seen.clear()
+        second = _client(handler)  # 新实例，模拟下一个请求
+        second.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        second.close()
+
+        assert seen == [None], f"应直接用 none 模式，一个多余请求都不该发；实际 {seen}"
+
+    def test_memory_is_scoped_to_endpoint(self) -> None:
+        """拒绝记忆按 (base_url, model) 隔离 —— 不能让一家的问题连累另一家。
+
+        某厂商不支持 json_schema，不代表另一家不支持；若共用一个全局集合，
+        后者会被无谓降级掉（能力白丢）。
+        """
+        seen_a: list[object] = []
+        client_a = _client(_rejecting_handler(seen_a), base_url="https://a.example.com/v1")
+        client_a.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        client_a.close()
+
+        seen_b: list[object] = []
+        client_b = _client(_rejecting_handler(seen_b), base_url="https://b.example.com/v1")
+        client_b.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        client_b.close()
+
+        # B 端点应从 json_schema 开始试（它没被拒过）
+        assert seen_b[0] is not None, f"B 端点不该被 A 的拒绝记录连累；实际 {seen_b}"

@@ -144,6 +144,11 @@ def create_app(context: AppContext) -> FastAPI:
         运行时可变的配置（用户在配置页换 key / 换模型）必须**每次请求重读** ——
         启动时缓存一个客户端会让改配置要重启才生效。
 
+        （客户端虽然每请求新建，但「这个端点拒绝过哪些结构化格式」的记忆是
+        **进程级共享**的，按 (base_url, model) 键控 —— 见 `platform/llm` 里的
+        `_rejected_modes_by_endpoint`。所以降级发现只付一次代价，不会每次调用
+        都重吃一遍 400。）
+
         两种失败都归到 `ModelNotConfiguredError`（→ 409 + 指引），**不能 500**：
 
         - 没配过：`get_llm()` 返回 None；

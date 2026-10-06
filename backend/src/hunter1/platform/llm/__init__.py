@@ -16,6 +16,7 @@ import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -27,6 +28,36 @@ from hunter1.platform.llm.streaming import parse_sse_lines
 
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 STRUCTURED_MODES = ("json_schema", "json_object", "none")
+
+# 「这个端点拒绝过哪些结构化格式」—— **进程级**记忆，按 (base_url, model) 键控。
+#
+# 为什么不能放在客户端实例上：客户端是**每请求新建**的（见 `main._runtime_llm`
+# ——用户改配置要立刻生效，不能启动时缓存）。实例级记忆活不过一次请求，于是厂商
+# 不支持某格式时，每次调用都要重吃一个 400 再降级：白白多打 1-2 个注定失败的
+# 付费请求，还多赔一段延迟。
+#
+# 为什么按 (base_url, model) 键控而不是一个全局集合：拒绝情况是**端点特有**的。
+# 用一个全局集合会让 A 厂商不支持的格式连累 B 厂商（它其实支持），把可用能力
+# 无谓地降级掉。键里的 base_url 已归一化（strip + 去尾斜杠）。
+#
+# 线程安全：FastAPI 的同步端点跑在线程池里，可能并发。取用 setdefault 时加锁；
+# 之后的 in / add 是单个原子操作，CPython 下无需额外保护。
+_rejected_modes_by_endpoint: dict[tuple[str, str], set[str]] = {}
+_rejected_modes_lock = Lock()
+
+
+def _shared_rejected_modes(base_url: str, model: str) -> set[str]:
+    """取该端点的共享拒绝记忆（跨客户端实例存活）。"""
+    key = (base_url, model)
+    with _rejected_modes_lock:
+        return _rejected_modes_by_endpoint.setdefault(key, set())
+
+
+def clear_rejected_modes() -> None:
+    """清空记忆。给测试隔离用 —— 生产代码没有调用它的理由。"""
+    with _rejected_modes_lock:
+        _rejected_modes_by_endpoint.clear()
+
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
@@ -86,8 +117,9 @@ class OpenAICompatibleClient:
         self.max_retries = max(1, int(max_retries))
         self._sleep = sleep
         self._client = httpx.Client(timeout=self.timeout, transport=transport)
-        # 记住哪些模式被厂商拒绝过，避免每次都重试一遍
-        self._rejected_modes: set[str] = set()
+        # 记住哪些模式被厂商拒绝过，避免每次都重试一遍。
+        # **跨实例共享**（按端点键控）—— 客户端每请求新建，实例级记忆等于没有。
+        self._rejected_modes = _shared_rejected_modes(self.base_url, self.model)
 
     def close(self) -> None:
         self._client.close()
@@ -502,5 +534,6 @@ __all__ = [
     "LLMResponse",
     "OpenAICompatibleClient",
     "ProviderPreset",
+    "clear_rejected_modes",
     "resolve_preset",
 ]
