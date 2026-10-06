@@ -1,10 +1,12 @@
 import { Button, Card, ErrorNotice, SuccessNotice } from "../../../shared/ui";
 import { useProfile, useSaveProfile } from "../api";
 
-// 与后端 models.py 的上限保持一致（后端是**闸门**，这里只是提前告知，免得白填一遍）
-const MAX_KEYWORDS = 50;
-const MAX_DIRECTIONS = 20;
-const MAX_SUMMARY_CHARS = 2000;
+// 与后端 models.py 的上限保持一致（后端是**闸门**，这里只是提前告知，免得白填一遍）。
+// 导出是为了让测试拿契约快照逐条比对 —— 这四个值是复制来的，会漂移。
+export const MAX_KEYWORDS = 50;
+export const MAX_DIRECTIONS = 20;
+export const MAX_ITEM_CHARS = 100;
+export const MAX_SUMMARY_CHARS = 2000;
 
 /** 三行文本 ↔ 列表：接口收 `string[]`，界面按「一行一条」编辑更顺手。 */
 export function splitLines(value: string): string[] {
@@ -72,7 +74,8 @@ export function ProfileEditor() {
             className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
           <span className="mt-1 block text-xs text-slate-500">
-            一行一条，最多 {MAX_KEYWORDS} 条 —— 它会原样进评分提示词，太长会顶掉模型额度
+            一行一条，最多 {MAX_KEYWORDS} 条、每条不超过 {MAX_ITEM_CHARS} 字符 ——
+            它会原样进评分提示词，太长会顶掉模型额度
           </span>
         </label>
 
@@ -85,7 +88,9 @@ export function ProfileEditor() {
             placeholder={"一行一条，如：\nAgent 产品\nLLM 应用"}
             className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
-          <span className="mt-1 block text-xs text-slate-500">一行一条，最多 {MAX_DIRECTIONS} 条</span>
+          <span className="mt-1 block text-xs text-slate-500">
+            一行一条，最多 {MAX_DIRECTIONS} 条、每条不超过 {MAX_ITEM_CHARS} 字符
+          </span>
         </label>
 
         <label className="block">

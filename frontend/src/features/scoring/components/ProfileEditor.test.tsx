@@ -2,7 +2,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ProfileEditor, splitLines } from "./ProfileEditor";
+import contract from "../../../../../contracts/openapi.json";
+import {
+  MAX_DIRECTIONS,
+  MAX_ITEM_CHARS,
+  MAX_KEYWORDS,
+  MAX_SUMMARY_CHARS,
+  ProfileEditor,
+  splitLines,
+} from "./ProfileEditor";
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({
@@ -32,6 +40,34 @@ describe("splitLines", () => {
   });
 });
 
+describe("前端上限与契约一致", () => {
+  // 后端是闸门，前端这四个常量只是提前告知 —— 但它们是**复制**来的，会漂移。
+  // 漂移的后果不对称：前端比后端松 → 用户白填一遍才吃 422；
+  //                前端比后端紧 → 用户被界面挡住，而后端其实能收。
+  // 所以拿契约快照逐条比对，而不是靠人工记得同步。
+  const props = (
+    contract as {
+      components: {
+        schemas: {
+          CandidateProfile: {
+            properties: Record<
+              string,
+              { maxItems?: number; maxLength?: number; items?: { maxLength?: number } }
+            >;
+          };
+        };
+      };
+    }
+  ).components.schemas.CandidateProfile.properties;
+  it("条数与字符上限逐条对齐", () => {
+    expect(props.keywords.maxItems).toBe(MAX_KEYWORDS);
+    expect(props.directions.maxItems).toBe(MAX_DIRECTIONS);
+    expect(props.keywords.items?.maxLength).toBe(MAX_ITEM_CHARS);
+    expect(props.directions.items?.maxLength).toBe(MAX_ITEM_CHARS);
+    expect(props.summary.maxLength).toBe(MAX_SUMMARY_CHARS);
+  });
+});
+
 describe("ProfileEditor", () => {
   it("未配画像时说明「还没配」，而不是显示一个像配过的空表单", async () => {
     vi.stubGlobal(
@@ -40,6 +76,18 @@ describe("ProfileEditor", () => {
     );
     renderEditor();
     expect(await screen.findByText(/还没配画像/)).toBeDefined();
+  });
+
+  it("提示里写明「每条不超过 100 字符」—— 单条超限也会被后端拒", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ profile: null })),
+    );
+    renderEditor();
+    // 只写「最多 50 条」是不够的：用户填一条 300 字符的关键词照样吃 422。
+    // 关键词与方向两处都要写（故用 findAll，且断言恰好两处）。
+    const hints = await screen.findAllByText(/每条不超过 100 字符/);
+    expect(hints).toHaveLength(2);
   });
 
   it("已配画像时回填到表单", async () => {
