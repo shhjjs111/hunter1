@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -155,8 +155,8 @@ def create_app(context: AppContext) -> FastAPI:
             raise RuntimeError("模型未配置：请先在「配置」页填好 base_url / 模型 / API Key")
         return context.llm_factory(settings)
 
-    def _mount(router_factory_result, prefix: str = API_PREFIX) -> None:  # type: ignore[no-untyped-def]
-        app.include_router(router_factory_result, prefix=prefix)
+    def _mount(router: APIRouter, prefix: str = API_PREFIX) -> None:
+        app.include_router(router, prefix=prefix)
 
     runner = _build_runner(context)
     # 暴露给外部观察与测试注入（app.state 是 ASGI 约定的挂载点）：
