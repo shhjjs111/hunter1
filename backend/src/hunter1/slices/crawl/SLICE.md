@@ -51,11 +51,11 @@ cd backend && <python> -m pytest tests/slices/crawl -q
 
 - **未做 SSE 进度推流**：保留轮询语义（与旧界面 `setInterval` 对快照的用法一致）。
   改成服务端推流是独立改进，不在结构迁移范围内。
-- 站点快照 fixtures **保留在原位**（`backend/tests/crawlers/fixtures/`），
-  不搬进本切片 —— 它们同时被旧测试引用，搬家会制造无谓的耦合波。切换完成后
-  可一并归位。
-- 旧文件 `application/crawl.py`、`crawlers/*`、`web/crawl_runner.py`
-  待本切片接入组装处后下线；下线的同一提交里要清空
-  `tests/test_architecture.py` 中无用的登记项。
+- 站点快照 fixtures 已归位到本切片内（`backend/tests/slices/crawl/fixtures/`），
+  与测试同处一节。
+- 旧文件 `crawlers/*`、`web/crawl_runner.py` **已下线**（收尾迁移）；
+  `tests/test_architecture.py` 中对应的无用登记项已一并清空。
+  **仍待处理**：`application/crawl.py` 等并存期模块生产代码已 0 引用，但
+  `examples/` 与 `tests/application/` 仍用它们 —— 清理需连同那两处一起改。
 - `JobRepository` 目前由 `platform.db` 提供；jobs 切片将来若自带 store，
   可改为经其公开面注入（协议不变，只换实现）。
