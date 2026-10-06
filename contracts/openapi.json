@@ -89,6 +89,33 @@
         "title": "ApplyResponse",
         "type": "object"
       },
+      "CandidateProfile": {
+        "additionalProperties": false,
+        "description": "候选人画像。至少要有一项信号，否则评分无从谈起。",
+        "properties": {
+          "directions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Directions",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "title": "CandidateProfile",
+        "type": "object"
+      },
       "ConversationMessageView": {
         "description": "会话里的一条消息。",
         "properties": {
@@ -404,6 +431,102 @@
           "detail_url"
         ],
         "title": "JobSummary",
+        "type": "object"
+      },
+      "ProfileForm": {
+        "additionalProperties": false,
+        "description": "`PUT /api/scoring/profile` 的请求体。",
+        "properties": {
+          "directions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Directions",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Keywords",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "title": "ProfileForm",
+        "type": "object"
+      },
+      "ProfileView": {
+        "description": "`GET` / `PUT /api/scoring/profile` 的响应。\n\n「没配过」用 `profile: null` 表达，而不是 404：未配置是**初始状态**，不是错误。\n界面据此渲染空表单。",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ProfileView",
+        "type": "object"
+      },
+      "ScoreView": {
+        "description": "`POST /api/scoring/{job_id}` 的响应。",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Version"
+          },
+          "score": {
+            "title": "Score",
+            "type": "integer"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          }
+        },
+        "required": [
+          "job_id",
+          "score"
+        ],
+        "title": "ScoreView",
         "type": "object"
       },
       "SettingsForm": {
@@ -1126,6 +1249,60 @@
         "summary": "记录投递"
       }
     },
+    "/api/scoring/profile": {
+      "get": {
+        "operationId": "read_profile_api_scoring_profile_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "读候选人画像（未配置时为 null）"
+      },
+      "put": {
+        "operationId": "save_profile_api_scoring_profile_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "保存候选人画像"
+      }
+    },
     "/api/scoring/{job_id}": {
       "post": {
         "operationId": "score_api_scoring__job_id__post",
@@ -1145,9 +1322,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Score Api Scoring  Job Id  Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ScoreView"
                 }
               }
             },

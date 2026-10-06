@@ -38,7 +38,6 @@ from hunter1.slices.crawl.router import build_router as build_crawl_router
 from hunter1.slices.crawl.runner import CrawlRunner
 from hunter1.slices.jobs.router import build_router as build_jobs_router
 from hunter1.slices.jobs.store import JobStore
-from hunter1.slices.scoring.models import CandidateProfile
 from hunter1.slices.scoring.router import build_router as build_scoring_router
 from hunter1.slices.scoring.store import ScoreStore
 from hunter1.slices.settings.router import build_router as build_settings_router
@@ -100,9 +99,6 @@ class AppContext:
     site_keys: list[str] | None = None
     assistant_history_limit: int = 20
     page_size: int = 20
-    # 候选画像：评分的输入。为 None 时 scoring 的端点不挂载
-    # （「没接线」表现为「端点不存在」，而不是「端点存在但总是报错」）。
-    candidate_profile: CandidateProfile | None = None
 
     def crawler_factory(self) -> list[Crawler]:
         """构造本轮要跑的抓取器（默认全部注册站点）。"""
@@ -117,7 +113,6 @@ class AppContext:
         db_path: str | Path,
         site_keys: list[str] | None = None,
         fetcher: TextFetcher | None = None,
-        candidate_profile: CandidateProfile | None = None,
     ) -> AppContext:
         """按本机默认配置装配（真实 SQLite + 真实 HTTP 抓取器）。"""
         database = Database(db_path)
@@ -130,7 +125,6 @@ class AppContext:
             db=database,
             fetcher=fetcher,
             site_keys=site_keys,
-            candidate_profile=candidate_profile,
         )
 
 
@@ -177,14 +171,17 @@ def create_app(context: AppContext) -> FastAPI:
             history_limit=context.assistant_history_limit,
         )
     )
-    if context.candidate_profile is not None:
-        _mount(
-            build_scoring_router(
-                store=ScoreStore(context.db),
-                llm_factory=_runtime_llm,
-                profile=context.candidate_profile,
-            )
+    # 评分：**始终挂载**。画像从库里读（用户在「配置」页写），未配置时端点
+    # 返回 409 + 修复指引 —— 而不是干脆不挂载：那样前端照契约发出的 POST 会
+    # 落进下面 SPA 回落的 GET 路由，收到 405（method not allowed），与真实原因无关。
+    scoring_store = ScoreStore(context.db)
+    _mount(
+        build_scoring_router(
+            store=scoring_store,
+            llm_factory=_runtime_llm,
+            profile_provider=scoring_store.load_profile,
         )
+    )
 
     # ---- 前端构建产物（交付形态）----
     _mount_frontend(app)

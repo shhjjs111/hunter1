@@ -208,6 +208,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scoring/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读候选人画像（未配置时为 null） */
+        get: operations["read_profile_api_scoring_profile_get"];
+        /** 保存候选人画像 */
+        put: operations["save_profile_api_scoring_profile_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scoring/{job_id}": {
         parameters: {
             query?: never;
@@ -307,6 +325,21 @@ export interface components {
         ApplyResponse: {
             /** Application Id */
             application_id: string;
+        };
+        /**
+         * CandidateProfile
+         * @description 候选人画像。至少要有一项信号，否则评分无从谈起。
+         */
+        CandidateProfile: {
+            /** Directions */
+            directions?: string[];
+            /** Keywords */
+            keywords?: string[];
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
         };
         /**
          * ConversationMessageView
@@ -420,6 +453,47 @@ export interface components {
             source: string;
             /** Title */
             title: string;
+        };
+        /**
+         * ProfileForm
+         * @description `PUT /api/scoring/profile` 的请求体。
+         */
+        ProfileForm: {
+            /** Directions */
+            directions?: string[];
+            /** Keywords */
+            keywords?: string[];
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+        };
+        /**
+         * ProfileView
+         * @description `GET` / `PUT /api/scoring/profile` 的响应。
+         *
+         *     「没配过」用 `profile: null` 表达，而不是 404：未配置是**初始状态**，不是错误。
+         *     界面据此渲染空表单。
+         */
+        ProfileView: {
+            profile?: components["schemas"]["CandidateProfile"] | null;
+        };
+        /**
+         * ScoreView
+         * @description `POST /api/scoring/{job_id}` 的响应。
+         */
+        ScoreView: {
+            /** Job Id */
+            job_id: string;
+            /** Model */
+            model?: string | null;
+            /** Prompt Version */
+            prompt_version?: string | null;
+            /** Score */
+            score: number;
+            /** Summary */
+            summary?: string | null;
         };
         /**
          * SettingsForm
@@ -891,6 +965,59 @@ export interface operations {
             };
         };
     };
+    read_profile_api_scoring_profile_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileView"];
+                };
+            };
+        };
+    };
+    save_profile_api_scoring_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileForm"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     score_api_scoring__job_id__post: {
         parameters: {
             query?: never;
@@ -908,9 +1035,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ScoreView"];
                 };
             };
             /** @description Validation Error */
