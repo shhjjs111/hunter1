@@ -183,10 +183,10 @@ class TestVerify:
 class TestCheckPages:
     """真正能兑现 docstring 那句承诺的一层：起服务、请求页面、看内容。
 
-    `--help` 走的是 argparse，**早于模板加载** —— 所以模板缺失、`_internal`
-    路径错位这类最典型的打包事故，它一个都测不出来。实测过：把 templates
-    目录删掉（保留 `_internal/`），`--help` 仍 exit 0，而实际起服务后
-    4 个页面全是 500（TemplateNotFound）。
+    `--help` 走的是 argparse，**早于静态资源挂载** —— 所以前端产物缺失、
+    `_internal` 路径错位这类最典型的打包事故，它一个都测不出来。实测过：把
+    前端产物目录删掉（保留 `_internal/`），`--help` 仍 exit 0，而实际起服务后
+    根路径只会给「前端产物未构建」的 503。
     """
 
     def _serve(self, handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:

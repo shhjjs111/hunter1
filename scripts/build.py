@@ -3,8 +3,9 @@
     ./.tools/python/python.exe scripts/build.py          # 构建 + 校验
     ./.tools/python/python.exe scripts/build.py --zip    # 再打一个 zip
 
-**构建之后一定要校验**：exe 存在不代表能跑。最常见的事故是模板没打进去 ——
-产物能启动、`--help` 也正常，但每个页面都 500。所以门禁分两层：静态看布局，
+**构建之后一定要校验**：exe 存在不代表能跑。最常见的事故是前端产物没打进去 ——
+产物能启动、`--help` 也正常，但根路径只会落进「前端产物未构建」的提示
+（或 SPA 外壳加载不出来）。所以门禁分两层：静态看布局，
 再**真起一次服务请求各页面**。任一层不合格就非零退出，别让一个坏包流出去。
 
 不做的事：不签名、不上传。分发渠道是另一回事（见 DEVELOPMENT-PLAN §6.4）。
@@ -184,9 +185,9 @@ def smoke_help(exe: Path) -> str | None:
     实测：把 exe 单独拿出来（缺 `_internal/`）会 exit 127 并报
     `Failed to load Python DLL`。
 
-    **但抓不到模板类事故**：`--help` 走 argparse，早于模板加载。模板缺失或
-    路径错位时它照样 exit 0，而实际起服务后每个页面都 500。那一层归
-    `smoke_serve()`。
+    **但抓不到前端产物类事故**：`--help` 走 argparse，早于静态资源挂载。
+    前端产物缺失或路径错位时它照样 exit 0，而实际起服务后 `/` 只会给
+    「前端产物未构建」的 503。那一层归 `smoke_serve()`。
     """
     try:
         result = subprocess.run(
@@ -250,9 +251,9 @@ def check_frontend_assets(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_
 def check_pages(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -> list[str]:
     """请求每个页面，返回问题列表（空 = 全好）。
 
-    这是唯一能兑现「产物能跑」这句承诺的做法：文件在、体积对、模板目录存在，
-    都不代表页面渲染得出来。只有真的请求一次才知道 —— 模板路径错位时，
-    目录存在、`--help` 正常、但每个页面 500。
+    这是唯一能兑现「产物能跑」这句承诺的做法：文件在、体积对、前端产物目录存在，
+    都不代表页面服务得出来。只有真的请求一次才知道 —— 产物路径错位时，
+    目录存在、`--help` 正常、但 `/` 只会给 503。
     """
     problems: list[str] = []
     with httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
@@ -276,7 +277,7 @@ def wait_for_http(base_url: str, process: subprocess.Popen[bytes], *, timeout: f
     判据是「**拿到了任何 HTTP 响应**」，而不是「返回 200」。
     收到 500 同样说明服务已经就绪 —— 只是内容有问题，那正是 `check_pages`
     要报的事。若把 200 当就绪判据，一个「页面全 500」的产物会一直等到超时，
-    最后报一句含糊的「未能就绪」，把真正的线索（500 / TemplateNotFound）
+    最后报一句含糊的「未能就绪」，把真正的线索（500 / 前端产物缺失提示）
     埋掉。
     """
     deadline = time.monotonic() + timeout

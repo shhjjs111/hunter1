@@ -28,9 +28,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安装后端依赖
-        # 测试横跨 db / crawler / web 三层，必须把它们都装上：
-        # 只装 .[dev] 的话，test_repository（sqlalchemy）、test_static_html（bs4）、
-        # 以及 web 路由测试都会在收集阶段就 ImportError。
+        # 测试横跨 db / crawler / 各切片三层，必须把它们都装上：
+        # 只装 .[dev] 的话，test_repository（sqlalchemy）、test_adapters（bs4）
+        # 以及各切片的路由测试都会在收集阶段就 ImportError。
         run: pip install -e ".[dev,web,db,crawler]"
         working-directory: backend
 
