@@ -77,22 +77,32 @@ fi
 echo "  ✓ tag 指向 HEAD（${HEAD_COMMIT:0:7}）"
 
 # 4) 生成清单（真实地址）。
+#
+# 先写**临时文件**，检查通过才落到 dist/manifest.json —— 因为镜像改写发生在
+# **参数传递层**：bash 里 URL_BASE 还是 github.com，但 python 收到的 argv 已被
+# /mirror china 改成 gitcode.com/gh_mirror（实测）。所以没法在 bash 侧提前查，
+# 只能生成后查文件；但查之前不应该让可疑内容落到正式路径上。
 URL_BASE="https://github.com/$OWNER_REPO/releases/download/$TAG"
+TMP_MANIFEST="dist/.manifest.tmp.json"
+trap 'rm -f "$TMP_MANIFEST"' EXIT
+
 "$PY" scripts/make_manifest.py \
   --asset "win32=$ZIP" \
   --url-base "$URL_BASE" \
-  --out dist/manifest.json
+  --out "$TMP_MANIFEST"
 
-# 5) 地址污染检查：/mirror china 会在**参数层**把 github.com 改写成
-#    gitcode.com/gh_mirror（实测：Python 收到的 sys.argv 已被改写）。
-#    结果是一份指向镜像的清单被当成官方地址发出去 —— 不报错，只是错了。
-if grep -q "gitcode.com\|gh_mirror" dist/manifest.json; then
+# 5) 地址污染检查。
+if grep -q "gitcode.com\|gh_mirror" "$TMP_MANIFEST"; then
   echo "" >&2
   echo "⚠ 清单里的地址被镜像改写了（含 gitcode.com/gh_mirror）。" >&2
   echo "  你现在开着 /mirror china —— 它会改写命令行里的 github.com。" >&2
   echo "  要发到 GitHub 官方地址：先 /mirror default，再重跑本脚本。" >&2
+  echo "  （dist/manifest.json 未被改动，仍是上一次的内容。）" >&2
   exit 1
 fi
+
+mv "$TMP_MANIFEST" dist/manifest.json
+trap - EXIT
 
 echo ""
 echo "== 本地已就绪。以下步骤需要你的凭据，请手动执行 =="
