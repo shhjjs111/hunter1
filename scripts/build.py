@@ -221,6 +221,23 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def _local_client(base_url: str, *, timeout: float, follow_redirects: bool = True) -> httpx.Client:
+    """构造请求**本地**产物的 client —— 必须禁用环境代理（`trust_env=False`）。
+
+    实测（探针，对照组）：开着系统代理时，httpx 默认 `trust_env=True` 会调
+    `urllib.request.getproxies()`（该函数在 Windows 上**读注册表**），于是连
+    `127.0.0.1` 的请求也被送给代理，拿到 **502**；同一请求改成
+    `trust_env=False` 得到 **200**。后果是冒烟门禁报「产物不完整」，而产物其实
+    是好的 —— 报错把人指向完全错误的方向。本地请求就该直连。
+    """
+    return httpx.Client(
+        base_url=base_url,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        trust_env=False,
+    )
+
+
 def check_frontend_assets(
     base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS
 ) -> list[str]:
@@ -231,7 +248,7 @@ def check_frontend_assets(
     frontend/src/app/App.test.tsx 的整体渲染验收）。
     """
     problems: list[str] = []
-    with httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
+    with _local_client(base_url, timeout=timeout) as client:
         try:
             index = client.get("/")
         except httpx.HTTPError as exc:
@@ -258,7 +275,7 @@ def check_pages(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -
     目录存在、`--help` 正常、但 `/` 只会给 503。
     """
     problems: list[str] = []
-    with httpx.Client(base_url=base_url, timeout=timeout, follow_redirects=True) as client:
+    with _local_client(base_url, timeout=timeout) as client:
         for path, needle in SMOKE_PAGES:
             try:
                 response = client.get(path)
@@ -287,8 +304,8 @@ def wait_for_http(base_url: str, process: subprocess.Popen[bytes], *, timeout: f
         if process.poll() is not None:
             return False  # 已经死了，再等没意义
         try:
-            with httpx.Client(timeout=3.0) as client:
-                client.get(f"{base_url}/")
+            with _local_client(base_url, timeout=3.0, follow_redirects=False) as client:
+                client.get("/")
             return True  # 有响应（哪怕是 500）＝ 服务起来了
         except httpx.HTTPError:
             pass

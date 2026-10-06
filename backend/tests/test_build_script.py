@@ -391,3 +391,73 @@ class TestFindFrontendDist:
 
     def test_returns_none_when_absent(self, tmp_path: Path) -> None:
         assert build.find_frontend_dist(_make_dist(tmp_path, frontend="none")) is None
+
+
+class TestLocalProbesIgnoreProxy:
+    """本地冒烟请求不能被代理劫持。
+
+    实测（探针）：开着系统代理时，httpx 默认 `trust_env=True` 会把
+    `127.0.0.1` 的请求也送给代理，拿到 502 —— 于是 `check_pages` 报
+    「产物不完整」，而产物其实是好的。**关掉代理只是让症状消失，根因还在**：
+    任何开着代理的机器跑 `check.sh` / 打包冒烟，都会看到假的失败。
+
+    这里用**环境变量**模拟代理（不依赖真实的系统代理），所以测试在任何机器上
+    都稳定可复现 —— 指向一个必然连不上的端口，实现若没禁 trust_env 就会被劫持。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _bad_proxy_env(self, monkeypatch) -> None:
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY"):
+            monkeypatch.setenv(name, "http://127.0.0.1:1")
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(name, raising=False)
+
+    def _serve(self, handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def _ok_handler(self) -> type[BaseHTTPRequestHandler]:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = {
+                    "/": '<html><div id="root"></div><script src="/assets/app.js"></script></html>',
+                    "/assets/app.js": "console.log(1)",
+                    "/api/jobs": '{"items": []}',
+                    "/api/crawl/status": '{"running": false}',
+                    "/api/settings": "null",
+                }.get(self.path, "")
+                if not body:
+                    self.send_error(404)
+                    return
+                payload = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        return Handler
+
+    def test_check_pages_ignores_proxy(self) -> None:
+        for base in self._serve(self._ok_handler()):
+            assert build.check_pages(base) == [], "本地页面请求不该走代理"
+
+    def test_check_frontend_assets_ignores_proxy(self) -> None:
+        for base in self._serve(self._ok_handler()):
+            assert build.check_frontend_assets(base) == [], "本地入口脚本请求不该走代理"
+
+    def test_wait_for_http_ignores_proxy(self) -> None:
+        class IdleProcess:
+            def poll(self):  # 只用到 poll() is None 这一个语义
+                return None
+
+        for base in self._serve(self._ok_handler()):
+            assert build.wait_for_http(base, IdleProcess(), timeout=3.0) is True
