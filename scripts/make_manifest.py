@@ -30,7 +30,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # 脚本在仓库根、包在 backend/src —— 显式加路径，不依赖安装状态
-# （本机解释器是 Python embeddable，不走 PYTHONPATH）。
+# （本机解释器是 Python embeddable，不走 PYTHONPATH），所以下面的 import 必须
+# 晚于这一行 —— 不是「忘了放顶部」。
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from hunter1 import __version__  # noqa: E402
@@ -171,7 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="下载地址前缀（如 …/releases/download/v0.1.0），产物名会拼在其后",
     )
     parser.add_argument("--out", default=str(ROOT / "dist" / "manifest.json"), help="输出路径")
-    parser.add_argument("--version", default="", help="断言与此值一致（默认取包内 %s）" % __version__)
+    parser.add_argument("--version", default="", help=f"断言与此值一致（默认取包内 {__version__}）")
     parser.add_argument("--notes", default="", help="版本说明（可选）")
     args = parser.parse_args(argv)
 

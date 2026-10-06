@@ -59,10 +59,10 @@ SMOKE_PAGE_TIMEOUT_SECONDS = 20.0
 # 的职责是「产物能不能起、前端与 API 两条路通不通」，渲染正确性由
 # 前端的组件测试与整体渲染验收覆盖（见 frontend/src/app/App.test.tsx）。
 SMOKE_PAGES: tuple[tuple[str, str], ...] = (
-    ("/", 'id="root"'),          # SPA 挂载点：产物里必须有
-    ("/api/jobs", '"items"'),     # API 有响应且是预期的 JSON 形状
+    ("/", 'id="root"'),  # SPA 挂载点：产物里必须有
+    ("/api/jobs", '"items"'),  # API 有响应且是预期的 JSON 形状
     ("/api/crawl/status", '"running"'),
-    ("/api/settings", ""),        # 配置端点可达（未配置时返回 null）
+    ("/api/settings", ""),  # 配置端点可达（未配置时返回 null）
 )
 
 # 前端静态资源的可达性单独断言：**先请求 index.html，取出它引用的资源路径再请求**。
@@ -221,7 +221,9 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def check_frontend_assets(base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS) -> list[str]:
+def check_frontend_assets(
+    base_url: str, *, timeout: float = SMOKE_PAGE_TIMEOUT_SECONDS
+) -> list[str]:
     """从 index.html 里取出入口脚本路径并请求它。
 
     这是「前端产物真的能被浏览器加载」的最强静态证据：HTML 能取回、

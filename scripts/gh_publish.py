@@ -32,6 +32,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# 显式加路径而不依赖安装状态：本机解释器是 Python embeddable，不走 PYTHONPATH，
+# 所以下面的 import 必须晚于这一行（不是「忘了放顶部」）。
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from hunter1 import __version__  # noqa: E402
@@ -96,7 +98,9 @@ def api_request(
 ) -> dict:
     """打一次 GitHub API。失败时把状态码与响应体一起抛出来（便于定位）。"""
     url = path if path.startswith("http") else f"{API}{path}"
-    data = raw if raw is not None else (json.dumps(payload).encode() if payload is not None else None)
+    data = (
+        raw if raw is not None else (json.dumps(payload).encode() if payload is not None else None)
+    )
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Authorization", f"Bearer {token}")
     request.add_header("Accept", "application/vnd.github+json")
@@ -135,7 +139,12 @@ def git(*args: str, token: str, cwd: Path = ROOT) -> str:
         env = dict(os.environ, GIT_ASKPASS=str(askpass), HUNTER1_GH_TOKEN=token)
         env.pop("GIT_TERMINAL_PROMPT", None)
         result = subprocess.run(
-            ["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=False
+            ["git", *args],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode != 0:
             raise PublishError(
@@ -172,7 +181,11 @@ def push(owner: str, repo: str, token: str) -> None:
     """设远端并推送分支与 tag。地址在本文件里构造（见模块 docstring 第 2 条）。"""
     remote_url = f"https://github.com/{owner}/{repo}.git"
     existing = subprocess.run(
-        ["git", "remote", "get-url", "origin"], cwd=ROOT, capture_output=True, text=True, check=False
+        ["git", "remote", "get-url", "origin"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if existing.returncode == 0:
         if existing.stdout.strip() != remote_url:
@@ -283,28 +296,45 @@ def main(argv: list[str] | None = None) -> int:
 
     # 工作区干净 + tag 指向 HEAD：与 release.sh 同一套前置条件。
     dirty = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=False
+        ["git", "status", "--porcelain"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     ).stdout.strip()
     if dirty:
         print(f"✗ 工作区有未提交改动，产物会与 tag 对不上：\n{dirty}", file=sys.stderr)
         return 1
     tag_commit = subprocess.run(
-        ["git", "rev-parse", f"{tag}^{{commit}}"], cwd=ROOT, capture_output=True, text=True, check=False
+        ["git", "rev-parse", f"{tag}^{{commit}}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if tag_commit.returncode != 0:
         print(f"✗ tag {tag} 不存在。先打：git tag -a {tag} -m '…'", file=sys.stderr)
         return 1
     if tag_commit.stdout.strip() != head.stdout.strip():
-        print(f"✗ tag {tag} 未指向 HEAD（{tag_commit.stdout.strip()[:7]} vs {head.stdout.strip()[:7]}）", file=sys.stderr)
+        # 先取出短 sha 再拼消息：直接内联会让这一行超过 100 列
+        # （ruff 的 E501 按东亚宽字符算 2 列，中文串很容易超）。
+        tag_sha, head_sha = tag_commit.stdout.strip()[:7], head.stdout.strip()[:7]
+        print(f"✗ tag {tag} 未指向 HEAD（{tag_sha} vs {head_sha}）", file=sys.stderr)
         return 1
     print("  ✓ 工作区干净，tag 指向 HEAD")
 
     if args.dry_run:
         print("\n[dry-run] 将执行：")
-        print(f"  1. 确保仓库 {owner}/{repo} 存在" + ("（不存在则创建）" if args.create_repo else ""))
+        print(
+            f"  1. 确保仓库 {owner}/{repo} 存在" + ("（不存在则创建）" if args.create_repo else "")
+        )
         print(f"  2. git push origin HEAD:refs/heads/main 与 refs/tags/{tag}")
         print(f"  3. 建 Release {tag}")
         print("  4. 重新生成清单（真实地址）并上传 hunter1-win32.zip + manifest.json")
@@ -332,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  新版本 exe：hunter1 update --source {base}/manifest.json  → 期望「已是最新」")
     print("  旧版本 exe：同上加 --download → 期望「可更新」+ 解压成功")
     print("  改坏清单一个 sha256 字符 → 期望 checksum_mismatch 且不留半包")
-    print(f"\n  稳定入口（写进 HUNTER1_UPDATE_SOURCE，一次设好终身有效）：")
+    print("\n  稳定入口（写进 HUNTER1_UPDATE_SOURCE，一次设好终身有效）：")
     print(f"    https://github.com/{owner}/{repo}/releases/latest/download/manifest.json")
     print("\n  ⚠ 别忘了去 GitHub 撤销本次用的令牌，并删除本地令牌文件。")
     return 0
