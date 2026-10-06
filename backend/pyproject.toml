@@ -18,14 +18,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Web UI：FastAPI + 服务端模板（jinja2）+ 表单解析（python-multipart）。
+# Web UI：FastAPI + ASGI 服务器。
+# SSR 模板层已移除（前端是独立 SPA，产物由 main.py 直接服务），因此不再需要
+# jinja2；请求体一律走 JSON（pydantic BaseModel），也没有表单上传，故
+# python-multipart 一并去掉。
 # uvicorn 不取 [standard]：那是给生产部署用的加速件，本地单用户工具用不上，
 # 且在 Windows 上大部分装不了，徒增安装失败面。
 web = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
-  "jinja2>=3.1",
-  "python-multipart>=0.0.9",
 ]
 db = ["sqlalchemy>=2.0,<3"]
 crawler = ["beautifulsoup4>=4.12", "lxml>=5.0"]
