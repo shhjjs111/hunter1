@@ -230,6 +230,21 @@ class TestRepairOfLegacyDuplicates:
         db.initialize()  # 不应抛裸 IntegrityError
         assert len(db.conversations().messages("c1")) == 2
 
+    def test_cleanish_database_reports_zero_repairs(self, db: Database) -> None:
+        """干净库不触发修复（零写入）—— 返回值供启动日志判断是否要提示。"""
+
+        with db.engine.begin() as conn:
+            repaired = Database._repair_duplicate_message_sequences(conn)
+        assert repaired == 0
+
+    def test_dirty_database_reports_repair_count(self, db: Database) -> None:
+        """修复要能被计数 —— 启动日志据此说「已重排 N 个会话」。"""
+
+        self._make_dirty(db)
+        with db.engine.begin() as conn:
+            repaired = Database._repair_duplicate_message_sequences(conn)
+        assert repaired == 1
+
     def test_sequences_become_unique_and_ordered(self, db: Database) -> None:
         import sqlalchemy as sa
 
@@ -272,12 +287,24 @@ class TestSequenceConflictClassification:
 
         from hunter1.platform.db.conversations import _is_sequence_conflict
 
-        unique = IntegrityError("stmt", {}, sqlite3.IntegrityError("UNIQUE constraint failed: a.b"))
+        unique = IntegrityError(
+            "stmt",
+            {},
+            sqlite3.IntegrityError(
+                "UNIQUE constraint failed: conversation_messages.conversation_id, "
+                "conversation_messages.sequence"
+            ),
+        )
         foreign_key = IntegrityError(
             "stmt", {}, sqlite3.IntegrityError("FOREIGN KEY constraint failed")
         )
+        # 表上将来若添了别的唯一约束，撞了它也不该被当撞号重试
+        other_unique = IntegrityError(
+            "stmt", {}, sqlite3.IntegrityError("UNIQUE constraint failed: other.col")
+        )
         assert _is_sequence_conflict(unique) is True
         assert _is_sequence_conflict(foreign_key) is False
+        assert _is_sequence_conflict(other_unique) is False
 
 
 class TestAppendMany:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -59,8 +60,15 @@ class Database:
             # **先修脏数据再建索引**：索引落地前撞过号的老库会存在重复行，
             # 直接 `CREATE UNIQUE INDEX` 会抛裸 IntegrityError —— 而本方法在
             # `AppContext.default` 的启动路径上，后果是应用起不来、用户无从自救。
-            # 重排（而非删除）能保住全部消息并恢复顺序。
-            self._repair_duplicate_message_sequences(connection)
+            # 重排（而非删除）能保住全部消息并恢复顺序。修复是在**改用户数据**，
+            # 不能静默 —— 真触发了要有迹可循，否则将来排查「消息顺序怎么变了」
+            # 时没有任何线索。
+            repaired = self._repair_duplicate_message_sequences(connection)
+            if repaired:
+                print(
+                    f"检测到 {repaired} 个会话的消息序号重复，已重排并补建唯一索引。",
+                    file=sys.stderr,
+                )
             connection.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_conv_messages_conv_seq "
@@ -69,12 +77,14 @@ class Database:
             )
 
     @staticmethod
-    def _repair_duplicate_message_sequences(connection: Connection) -> None:
+    def _repair_duplicate_message_sequences(connection: Connection) -> int:
         """把存在重复序号的会话整体重排为 1..N，为建唯一索引扫清障碍。
 
         只处理确有重复的会话（干净库上这条查询只做一次 GROUP BY），避免无谓写入。
         排序键用 (sequence, created_at, id)：先按原序号，再按时间与 id 稳定化 ——
         保证重排结果确定，且大体保持原有先后顺序。
+
+        返回被修复的会话数（0 = 干净库，无副作用）。
         """
         duplicated = (
             connection.execute(
@@ -86,7 +96,8 @@ class Database:
             .scalars()
             .all()
         )
-        for conversation_id in set(duplicated):
+        conversation_ids = set(duplicated)
+        for conversation_id in conversation_ids:
             message_ids = (
                 connection.execute(
                     text(
@@ -103,6 +114,7 @@ class Database:
                     text("UPDATE conversation_messages SET sequence = :seq WHERE id = :mid"),
                     {"seq": sequence, "mid": message_id},
                 )
+        return len(conversation_ids)
 
     @contextmanager
     def session(self) -> Iterator[Session]:

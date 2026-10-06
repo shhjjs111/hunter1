@@ -27,8 +27,14 @@ def _is_sequence_conflict(exc: IntegrityError) -> bool:
 
     只对撞号重试。FK 失败（如会话被并发删除）等其它完整性错误必须**直接抛出** ——
     否则会被误报成「并发写入冲突过多」，把真实原因埋掉。
+
+    判别钉到**列级**而非表级：表上将来若再添第二个唯一约束，撞了那个也会落进
+    「UNIQUE constraint failed」的宽匹配，被误当撞号重试。
     """
-    return "UNIQUE constraint failed" in str(exc.orig)
+    message = str(exc.orig)
+    return "UNIQUE constraint failed" in message and (
+        "conversation_messages.conversation_id" in message
+    )
 
 
 @dataclass
