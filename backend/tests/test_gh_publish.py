@@ -214,24 +214,58 @@ class TestPublishedSha256:
 
 
 class TestFetchPublishedManifest:
+    def _patch_opener(self, monkeypatch, payload: bytes, *, seen: list | None = None) -> None:
+        """桩掉 `_opener` —— **故意不桩 `urllib.request.urlopen`**。
+
+        这样写是为了抓住「忘了走代理」这类疏漏：若实现改用裸 urlopen，这个桩就
+        不生效，调用会真的出网（慢或失败），测试随之暴露问题。
+        """
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                if seen is not None:
+                    seen.append(request.full_url)
+
+                class FakeResponse:
+                    def read(self_inner):
+                        return payload
+
+                    def __enter__(self_inner):
+                        return self_inner
+
+                    def __exit__(self_inner, *a):
+                        return False
+
+                return FakeResponse()
+
+        def fake_opener(proxy):
+            if seen is not None:
+                seen.append(f"proxy={proxy}")
+            return FakeOpener()
+
+        monkeypatch.setattr(gh, "_opener", fake_opener)
+
     def test_returns_parsed_dict(self, monkeypatch) -> None:
-        payload = json.dumps({"version": "0.1.0", "assets": []}).encode()
-
-        class FakeResponse:
-            def read(self):
-                return payload
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(gh.urllib.request, "urlopen", lambda *a, **k: FakeResponse())
+        self._patch_opener(monkeypatch, json.dumps({"version": "0.1.0", "assets": []}).encode())
         assert gh.fetch_published_manifest("acme", "hunter1", "v0.1.0") == {
             "version": "0.1.0",
             "assets": [],
         }
+
+    def test_goes_through_the_proxy_aware_opener(self, monkeypatch) -> None:
+        """直连被挡的环境正是需要代理的场景 —— 这里也必须走 `_opener`。
+
+        原实现用裸 `urlopen`，于是 `--reupload` 在那类网络下会报「取不到线上
+        清单」（fail-closed 拒绝），而用户会以为是 Release 不存在。
+        """
+        seen: list = []
+        self._patch_opener(monkeypatch, b'{"version": "0.1.0", "assets": []}', seen=seen)
+        monkeypatch.setattr(gh, "effective_proxy", lambda: "http://127.0.0.1:7897")
+
+        gh.fetch_published_manifest("acme", "hunter1", "v0.1.0")
+
+        assert "proxy=http://127.0.0.1:7897" in seen, "必须经 effective_proxy() 取代理"
+        assert any(u.startswith("https://github.com/") for u in seen), "请求地址应正常"
 
     @pytest.mark.parametrize(
         "boom",
@@ -244,11 +278,29 @@ class TestFetchPublishedManifest:
     def test_failures_return_none(self, monkeypatch, boom) -> None:
         """任何失败都返回 None —— 调用方据此拒绝重传（fail-closed）。"""
 
-        def raiser(*a, **k):
-            raise boom
+        class BoomOpener:
+            def open(self, request, timeout=None):
+                raise boom
 
-        monkeypatch.setattr(gh.urllib.request, "urlopen", raiser)
+        monkeypatch.setattr(gh, "_opener", lambda proxy: BoomOpener())
         assert gh.fetch_published_manifest("acme", "hunter1", "v0.1.0") is None
+
+
+class TestNoRawUrlopenInSource:
+    """结构性守卫：源码里不该出现绕过 `_opener` 的裸 urlopen。
+
+    加代理支持时正是漏了 `fetch_published_manifest` —— 当时那条路径没有测试，
+    所以这种疏漏只能靠「直接盯着源码」来挡。将来再加网络调用时，这条会提醒你
+    接上 `_opener(effective_proxy())`。
+    """
+
+    def test_every_network_call_goes_through_the_opener(self) -> None:
+        source = (ROOT / "scripts" / "gh_publish.py").read_text(encoding="utf-8")
+        body = source.split("def _opener(", 1)[1]  # 跳过 _opener 自己的定义
+        assert "urllib.request.urlopen(" not in body, (
+            "发现裸 urllib.request.urlopen —— 它不会走代理检测。"
+            "请改用 _opener(effective_proxy()).open(...)"
+        )
 
 
 class TestReuploadGuard:

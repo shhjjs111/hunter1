@@ -374,6 +374,38 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 > 要发布到 GitHub 官方地址又必须手写时：先 `/mirror default`，或用 shell 变量
 > 拼接（`H=github; "...https://${H}.com/..."` —— 实测能逃过改写）。
 
+### 代理：直连被挡时脚本会自动走系统代理
+
+**实测过这个故障**：推送三次全失败，各超时 21 秒
+`Failed to connect to github.com:443`；同时 `www.baidu.com` 正常（288ms）、
+系统代理 `127.0.0.1:7897` 端口在听、`curl -x` 经它访问 GitHub 得到 200。
+
+根因：代理写在**注册表**里（`ProxyEnable=1`），浏览器会用，但 **Python urllib
+不读注册表** —— 脚本只会报「连不上」，而人不会想到是代理没被用上。
+
+`gh_publish.py` 现在自己读注册表，取值优先级：
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | `HUNTER1_NO_PROXY=1` | 逃生口，设了就完全不用代理（代理本身有问题时用） |
+| 2 | `HTTPS_PROXY` / `http_proxy` 等 | 显式指定优先，便于临时换代理 |
+| 3 | Windows 系统代理 | `HKCU\...\Internet Settings` 的 `ProxyEnable`/`ProxyServer` |
+
+`ProxyServer` 两种形态都认：`host:port`，以及 IE 风格的
+`http=a:1;https=b:2`（GitHub 走 https，优先取那条）。
+
+两点讲究：
+- 推送用 `git -c http.proxy=…` **一次性**传代理，不写进用户的 `.gitconfig`
+  —— 那是用户的配置面，工具不该擅自改。
+- 网络失败时的错误信息里带上「用了哪个代理」和「浏览器能开而这里不行多半是
+  系统代理没被用上」—— 否则这个坑每次都得起一遍诊断流程。
+
+> **用户侧的 `hunter1 update` 不受影响**：它走 httpx，而 httpx 的 `trust_env=True`
+> 会调 `urllib.request.getproxies()` —— 那个函数在 Windows 上**会读注册表**
+> （实测：环境变量里没有任何代理设置，`getproxies()` 仍返回
+> `{'http': 'http://127.0.0.1:7897', 'https': ...}`）。所以产品本身的更新链路
+> 在需要代理的环境里是通的。踩坑的只有发版脚本（它原本用裸 urllib）。
+
 ## 参考
 
 - 架构与路线：[docs/DEVELOPMENT-PLAN.md](DEVELOPMENT-PLAN.md)

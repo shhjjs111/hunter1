@@ -556,8 +556,12 @@ def fetch_published_manifest(owner: str, repo: str, tag: str) -> dict | None:
     重传前必须证明「重传的是同一份产物」—— 就靠这里取回的 sha256。
     """
     url = f"https://github.com/{owner}/{repo}/releases/download/{tag}/manifest.json"
+    request = urllib.request.Request(url)
     try:
-        with urllib.request.urlopen(url, timeout=60) as response:
+        # 必须走 _opener(effective_proxy())：直连被挡的环境正是需要代理的场景，
+        # 而这条路径（--reupload 取线上清单）漏接代理时，用户看到的是「取不到
+        # 线上清单」—— 会误以为是 Release 不存在。
+        with _opener(effective_proxy()).open(request, timeout=60) as response:
             data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError, OSError):
         return None
