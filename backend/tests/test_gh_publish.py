@@ -227,13 +227,13 @@ class TestFetchPublishedManifest:
                     seen.append(request.full_url)
 
                 class FakeResponse:
-                    def read(self_inner):
+                    def read(self):
                         return payload
 
-                    def __enter__(self_inner):
-                        return self_inner
+                    def __enter__(self):
+                        return self
 
-                    def __exit__(self_inner, *a):
+                    def __exit__(self, *a):
                         return False
 
                 return FakeResponse()
@@ -547,3 +547,151 @@ class TestAcceptClipboardToken:
         )
 
         assert gh.prompt_for_token() == "clip-token-abcdefghijklmn"
+
+
+class TestReleaseErrorBranchingRegression:
+    """状态码分流必须按 status，不能按消息文本匹配。
+
+    旧实现用 `"HTTP 422" not in str(exc)` 判断「tag 已存在 Release」——
+    任何一条消息里恰好含这几个字符的错误（例如 400 的详情把用户引向 422 文档）
+    都会被误当成 422，于是脚本去复用 Release，把真实错误咽掉。
+    """
+
+    def test_400_whose_detail_mentions_422_is_not_taken_as_already_exists(
+        self, monkeypatch
+    ) -> None:
+        def fake_api(method, path, token, **kw):
+            if method == "GET":
+                return {"id": 7}
+            raise gh.PublishError(
+                f"{method} {path} → HTTP 400：Validation Failed, see HTTP 422 docs"
+            )
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        with pytest.raises(gh.PublishError):
+            gh.ensure_release("a", "b", "t", "v1", "notes")
+
+
+class TestVerifyTokenNetworkRegression:
+    """网络故障不能被吞成「令牌无效」—— 两者的下一步完全不同。"""
+
+    def test_network_failure_propagates(self, monkeypatch) -> None:
+        def boom(*a, **k):
+            raise gh.PublishError("GET /user → 网络不可达：No route to host（已试过代理 x）")
+
+        monkeypatch.setattr(gh, "api_request", boom)
+        with pytest.raises(gh.PublishError):
+            gh.verify_token("whatever")
+
+
+class TestClipboardDefaultIsSafe:
+    """不像令牌的剪贴板内容，回车默认「跳过」—— 不发给 GitHub。
+
+    误复制的文本（聊天里的一句、随手选的一段）不该靠一个回车就送出去。
+    想强行用就显式敲 y：默认动作落在安全的那一侧。
+    """
+
+    def test_implausible_text_enter_skips_without_calling_github(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / ".tok"
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: "short")
+        monkeypatch.setattr(gh, "verify_token", lambda t: pytest.fail("不该发起校验"))
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # 直接回车
+
+        assert gh._accept_clipboard_token() is None
+        assert not target.exists()
+
+    def test_implausible_text_can_still_be_forced_with_y(self, monkeypatch, tmp_path: Path) -> None:
+        target = tmp_path / ".tok"
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "token_from_clipboard", lambda: "short")
+        monkeypatch.setattr(gh, "verify_token", lambda t: "someone")
+        monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+
+        assert gh._accept_clipboard_token() == "short"
+        assert target.read_text(encoding="utf-8") == "short"
+
+
+class TestApiErrorCarriesStatus:
+    """调用方按 status 分流 —— 不再匹配消息文本。"""
+
+    def test_status_and_message(self) -> None:
+        exc = gh.ApiError("POST", "/repos/a/b/releases", 422, "already_exists")
+        assert exc.status == 422
+        assert "HTTP 422" in str(exc)
+        assert "already_exists" in str(exc)
+
+    def test_blank_detail_has_no_dangling_colon(self) -> None:
+        assert str(gh.ApiError("GET", "/user", 404)) == "GET /user → HTTP 404"
+
+    def test_both_subclasses_are_publish_errors(self) -> None:
+        """既有的 `except PublishError` 兜底必须继续接住它们。"""
+        assert issubclass(gh.ApiError, gh.PublishError)
+        assert issubclass(gh.NetworkError, gh.PublishError)
+
+
+class TestVerifyTokenContract:
+    def test_network_error_propagates(self, monkeypatch) -> None:
+        def boom(*a, **k):
+            raise gh.NetworkError("GET /user → 网络不可达：…")
+
+        monkeypatch.setattr(gh, "api_request", boom)
+        with pytest.raises(gh.NetworkError):
+            gh.verify_token("whatever")
+
+    def test_auth_rejection_is_none(self, monkeypatch) -> None:
+        def boom(*a, **k):
+            raise gh.ApiError("GET", "/user", 401, "Bad credentials")
+
+        monkeypatch.setattr(gh, "api_request", boom)
+        assert gh.verify_token("bad") is None
+
+    def test_success_returns_login(self, monkeypatch) -> None:
+        monkeypatch.setattr(gh, "api_request", lambda *a, **k: {"login": "someone"})
+        assert gh.verify_token("good") == "someone"
+
+
+class TestEnsureRepoUsesStatus:
+    def test_404_proceeds_to_create(self, monkeypatch) -> None:
+        posts: list[str] = []
+
+        def fake_api(method, path, token, **kw):
+            if method == "POST":
+                posts.append(path)
+                return {}
+            if path == "/user":
+                return {"login": ""}
+            raise gh.ApiError("GET", path, 404, "Not Found")
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        gh.ensure_repo("acme", "hunter1", "t", create=True)
+        assert posts == ["/user/repos"]
+
+    def test_500_is_reraised(self, monkeypatch) -> None:
+        def fake_api(method, path, token, **kw):
+            raise gh.ApiError(method, path, 500, "server error")
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        with pytest.raises(gh.ApiError):
+            gh.ensure_repo("acme", "hunter1", "t", create=False)
+
+
+class TestEnsureReleaseUsesStatus:
+    def test_422_reuses_existing_release(self, monkeypatch) -> None:
+        def fake_api(method, path, token, **kw):
+            if method == "POST":
+                raise gh.ApiError("POST", path, 422, "Validation Failed")
+            return {"id": 7}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 7
+
+    def test_500_is_reraised(self, monkeypatch) -> None:
+        def fake_api(method, path, token, **kw):
+            raise gh.ApiError(method, path, 500, "server error")
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        with pytest.raises(gh.ApiError):
+            gh.ensure_release("a", "b", "t", "v1", "notes")

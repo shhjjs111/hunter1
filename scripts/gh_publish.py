@@ -160,7 +160,35 @@ def _opener(proxy: str | None) -> urllib.request.OpenerDirector:
 
 
 class PublishError(RuntimeError):
-    pass
+    """发布流程的可预期失败 —— 都有明确原因与下一步。"""
+
+
+class NetworkError(PublishError):
+    """连不上 GitHub（代理 / 网络问题）。
+
+    必须与「令牌无效」分开报：前者要去查网络/代理，后者才去查令牌。本机实测
+    的故障模式正是这个 —— 直连被挡、代理没生效时，`GET /user` 抛的就是它；
+    吞成「令牌被拒」会把用户指到完全错误的方向。
+    """
+
+
+class ApiError(PublishError):
+    """GitHub 返回了错误状态码，附带 `status` 供调用方分流。
+
+    此前靠匹配异常消息里的 `"HTTP 422"` / `"HTTP 404"` 子串判断 —— 任何一条
+    详情文本里恰好含这几个字符的错误都会被误判（实测复现：400 的详情提到
+    422 文档，就被当成「tag 已存在 Release」，真实错误被咽掉）。
+    """
+
+    def __init__(self, method: str, path: str, status: int, detail: str = "") -> None:
+        self.method = method
+        self.path = path
+        self.status = status
+        self.detail = detail
+        message = f"{method} {path} → HTTP {status}"
+        if detail:
+            message += f"：{detail}"
+        super().__init__(message)
 
 
 def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
@@ -179,10 +207,15 @@ def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
 
 
 def verify_token(token: str) -> str | None:
-    """令牌有效时返回账号名，否则 None。"""
+    """令牌有效时返回账号名；GitHub 明确拒绝（401/403…）时返回 None。
+
+    **网络故障不在这里吞掉**：`NetworkError` 会照原样冒出去。把它也归成 None，
+    用户就会被告知「GitHub 拒绝了令牌」，然后去反复折腾令牌 —— 而真正的问题
+    可能是代理没生效（本机实测的故障模式）。
+    """
     try:
         return api_request("GET", "/user", token).get("login") or None
-    except PublishError:
+    except ApiError:
         return None
 
 
@@ -257,13 +290,22 @@ def _accept_clipboard_token() -> str | None:
         return None
     # 只显示前 4 位与长度 —— 令牌不能出现在屏幕、日志或聊天记录里。
     prefix = candidate[:4]
-    verdict = "看起来像令牌" if looks_like_a_token(candidate) else "不太像令牌（太短或含空格）"
+    plausible = looks_like_a_token(candidate)
+    verdict = "看起来像令牌" if plausible else "不太像令牌（太短或含空格）"
     print(f"剪贴板里有一段文本：{prefix}…（共 {len(candidate)} 字符），{verdict}。")
+    # 不像令牌时**默认跳过**：误复制的文本不该靠一个回车就发给 GitHub。
+    # 想强行用就显式敲 y —— 默认动作要落在安全的那一侧。
+    prompt = (
+        "  回车 = 就用它　　n = 改成手动输入：" if plausible else "  回车 = 跳过　　y = 仍然用它："
+    )
     try:
-        answer = input("  回车 = 就用它　　n = 改成手动输入：").strip().lower()
+        answer = input(prompt).strip().lower()
     except EOFError:
         return None
-    if answer == "n":
+    if plausible:
+        if answer == "n":
+            return None
+    elif answer != "y":
         return None
     login = verify_token(candidate)
     if login is None:
@@ -377,15 +419,15 @@ def api_request(
         with _opener(effective_proxy()).open(request, timeout=120) as response:
             body = response.read()
             if response.status not in expect:
-                raise PublishError(f"{method} {path} → HTTP {response.status}")
+                raise ApiError(method, path, response.status)
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:400]
-        raise PublishError(f"{method} {path} → HTTP {exc.code}：{detail}") from None
+        raise ApiError(method, path, exc.code, detail) from None
     except urllib.error.URLError as exc:
         proxy = effective_proxy()
         hint = f"（已试过代理 {proxy}）" if proxy else "（未使用代理）"
-        raise PublishError(
+        raise NetworkError(
             f"{method} {path} → 网络不可达：{exc.reason}{hint}\n"
             "  若浏览器能开 GitHub、这里却不行，多半是系统代理没被用上 —— 本脚本"
             "会自动读 Windows 代理设置；仍不行就设 HTTPS_PROXY 环境变量，"
@@ -439,8 +481,8 @@ def ensure_repo(owner: str, repo: str, token: str, *, create: bool) -> None:
         api_request("GET", f"/repos/{owner}/{repo}", token)
         print(f"  ✓ 仓库已存在：{owner}/{repo}")
         return
-    except PublishError as exc:
-        if "HTTP 404" not in str(exc):
+    except ApiError as exc:
+        if exc.status != 404:
             raise
     if not create:
         raise PublishError(
@@ -492,8 +534,8 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> i
         )
         print(f"  ✓ 已创建 Release {tag}")
         return int(release["id"])
-    except PublishError as exc:
-        if "HTTP 422" not in str(exc):  # 422 = tag 已存在 Release
+    except ApiError as exc:
+        if exc.status != 422:  # 422 = tag 已存在 Release
             raise
     found = api_request("GET", f"/repos/{owner}/{repo}/releases/tags/{tag}", token)
     print(f"  ✓ Release {tag} 已存在，复用")
