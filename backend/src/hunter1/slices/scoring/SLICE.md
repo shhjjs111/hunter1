@@ -83,10 +83,8 @@ cd backend && <python> -m pytest tests/slices/scoring -q
 3. 用同一批岗位对照新旧版本的分数分布（**没有对照就没有换代收益的证据**）；
 4. 提交时在 message 里写下这一版改了什么、为什么。
 
-## 迁移注（切换完成时删除本段）
+## 设计取舍（记录用）
 
-- `CandidateProfile` / `ScoreCard` / `ScoringError` 曾住在 `domain/matching.py`，
-  已随本切片归位；旧文件待下线。
 - `store.py` 直接访问 `platform.db` 的岗位仓储；jobs 切片将来若提供评分写回
   的公开面，可改经其调用（协议不变，只换实现）。
 - `CandidateProfile` 目前由**用户经「配置」页写入**，存在通用键值配置区

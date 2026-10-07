@@ -57,7 +57,7 @@
 cd backend && <python> -m pytest tests/slices/assistant -q
 ```
 
-## 迁移注（切换完成时删除本段）
+## 设计取舍（记录用）
 
 - `Message` / `Role` / `ToolCall` / `ToolResult`（`domain/assistant.py`）**刻意留在共享位置**：
   `platform/db`（会话持久化）与 `platform/llm`（OpenAI 消息序列化）都要用它们 ——
@@ -65,4 +65,3 @@ cd backend && <python> -m pytest tests/slices/assistant -q
   终态的合理位置是 `platform/llm`（它们描述的正是模型消息协议），届时一并迁移。
 - 工具集在组装处以 `build_tools(jobs=..., applications=...)` 构造后注入 router；
   切片内不持有全局状态。
-- 旧文件 `application/{assistant,tools,job_tools}.py` 待组装处切换后下线。

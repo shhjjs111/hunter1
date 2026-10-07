@@ -1,6 +1,6 @@
 """数据库装配的跨线程可用性 —— 一条回归护栏。
 
-背景：抓取在后台线程里跑（`web/crawl_runner.py` 起线程，线程内通过仓储写库），
+背景：抓取在后台线程里跑（`slices/crawl/runner.py` 起线程，线程内通过仓储写库），
 主线程同时可能在读页面。
 
 一次外部审查把「`create_engine` 没显式传 `check_same_thread=False`」报成了缺陷。

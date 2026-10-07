@@ -80,7 +80,7 @@ typeCheckingMode = "standard"
 # 本机自带解释器是 Python **embeddable** 版（`.tools/python`）：pyright 自动探测
 # 时拿不到它的 site-packages，会把已装好的 pydantic / fastapi / sqlalchemy 等
 # 全报成 `Import ... could not be resolved` —— 是**假错**，不是依赖缺失
-# （同一个环境里 pytest 能正常跑 817 项）。实测：裸跑 pyright 39 条假错，
+# （同一个环境里 pytest 能全绿跑完）。实测：裸跑 pyright 39 条假错，
 # 补上本项后归零。
 #
 # 路径是**仓库相对**（相对本文件所在目录 `backend/`），不是机器绝对路径；

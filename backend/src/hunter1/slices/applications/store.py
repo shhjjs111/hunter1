@@ -5,7 +5,8 @@
 2. 未来换实现（加缓存层、换存储）只动这里，service/router 不动。
 
 当前薄委托 `platform.db` 的 `SqliteApplicationRepository`；表定义（ApplicationRow）
-与仓储实现的归位（搬进本切片）在后续波次完成（见 SLICE.md 的迁移注）。
+与仓储实现的归位（搬进本切片）**仍未完成** —— 这是有意的过渡期技术债，
+见 `docs/ARCHITECTURE.md` 的「已知取舍与技术债」。
 """
 
 from __future__ import annotations
