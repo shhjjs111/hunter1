@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -35,7 +37,11 @@ class ConversationSummary(BaseModel):
 
     id: str
     title: str
-    updated_at: str
+    #: 用 `datetime` 而非 `str`：契约里才会带上 `format: date-time`，与
+    #: `ApplicationSummary.updated_at` 等其余切片的同类字段一致。
+    #: 早先是 `str` + 构造处手动 `.isoformat()`，于是同一类字段在契约里
+    #: 一半是 date-time、一半是**裸 string** —— 前端拿不到格式保证。
+    updated_at: datetime
 
 
 class ConversationMessageView(BaseModel):

@@ -109,9 +109,7 @@ def build_router(
     )
     def list_conversations() -> list[ConversationSummary]:
         return [
-            ConversationSummary(
-                id=item.id, title=item.title, updated_at=item.updated_at.isoformat()
-            )
+            ConversationSummary(id=item.id, title=item.title, updated_at=item.updated_at)
             for item in store.list(limit=50)
         ]
 

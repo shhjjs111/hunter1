@@ -367,7 +367,10 @@ export interface components {
             id: string;
             /** Title */
             title: string;
-            /** Updated At */
+            /**
+             * Updated At
+             * Format: date-time
+             */
             updated_at: string;
         };
         /**
