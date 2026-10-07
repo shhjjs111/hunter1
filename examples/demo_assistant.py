@@ -16,13 +16,15 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.domain.assistant import Message, Role, ToolCall
-from hunter1.domain.llm import LLMResponse
+from hunter1.domain.llm import LLMResponse, StreamComplete, TextDelta
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
 from hunter1.slices.assistant import build_tools, run_turn
@@ -49,12 +51,36 @@ class ScriptedLLM:
         tool_content = next((m.content for m in reversed(messages) if m.role is Role.TOOL), "")
         return LLMResponse(content=f"帮你查到这些：\n{tool_content}", model="scripted")
 
-    # 助手只用 complete_with_tools，另两个是端口要求
-    def complete(self, **_kw) -> LLMResponse:
+    # `LLMProvider` 端口共四个方法。本演示只经 `run_turn` 走 `complete_with_tools`，
+    # 但**必须把四个都实现**才能满足 `@runtime_checkable` 的 LLMProvider —— 漏掉
+    # 任意一个，`ScriptedLLM` 就不是合法实现（pyright 会报 reportArgumentType）。
+    # 这正是 examples/ 长期游离于门禁之外的后果：端口加了方法，这里静默腐化。
+    def complete(self, **_kw: object) -> LLMResponse:
         raise NotImplementedError
 
-    def complete_structured(self, **_kw) -> LLMResponse:
+    def complete_structured(self, **_kw: object) -> LLMResponse:
         raise NotImplementedError
+
+    def stream_with_tools(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        max_tokens: int | None = None,
+    ) -> Iterator[TextDelta | StreamComplete]:
+        """端口要求的流式方法。本演示不经它（走一次性 `run_turn`）。
+
+        不抛 NotImplementedError：端口承诺「始终可用」，而 `run_turn_stream`
+        确实可能调用它 —— 用一个诚实的最小实现兜住，比留个会炸的洞好。
+        签名逐字对齐 `LLMProvider`（少一个参数、类型差一点都会让本类不再是合法实现）。
+        """
+        del tools, max_tokens
+        response = self.complete_with_tools(messages=messages, tools=[])
+        if response.content:
+            yield TextDelta(response.content)
+        yield StreamComplete(
+            content=response.content, model=response.model, tool_calls=response.tool_calls
+        )
 
 
 def _seed(db: Database) -> None:
