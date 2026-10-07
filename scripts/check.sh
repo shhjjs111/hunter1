@@ -7,9 +7,11 @@
 #
 # 覆盖范围按目录存在性**自动纳入**（迁移期友好，不需要改脚本）：
 #   backend/     总是检查：ruff format / ruff check / pyright / pytest
-#   scripts/     不依赖 backend/，单独检查：ruff format / ruff check
-#   frontend/    有 package.json 时检查：npm run check（类型 + lint + 测试）
+#   scripts/     不依赖 backend/，单独检查：ruff format / ruff check / pyright
+#   examples/    示例脚本：ruff format / ruff check / pyright + 离线冒烟
+#   frontend/    有 package.json 时检查：npm run check（类型 + lint + 测试）+ vite build
 #   contracts/   有 openapi.json 时检查：契约漂移门禁
+# 另含：shell 脚本语法（bash -n）与 PyInstaller 规格语法（compile）。
 #
 # ⚠ scripts/ 的 ruff 检查必须显式传 `--config backend/pyproject.toml`。
 #   根目录没有 ruff 配置，不传就会用 ruff 的**默认规则集**（行长 88、规则集也不同），
@@ -60,12 +62,51 @@ echo "== 脚本：静态检查 (ruff check) =="
 echo "== 脚本：类型检查 (pyright) =="
 (cd "$ROOT/backend" && "$PY" -m pyright --pythonpath "$PY" "$ROOT/scripts")
 
+# 示例脚本（examples/）。它们长期在门禁之外 —— 代价是实测暴露的真实腐化：
+# 端口新增方法后示例里的假实现静默失配（pyright 一开就报）、导入未排序，
+# 以及 Windows GBK 控制台下打印站点标题直接崩。与 scripts/ 同款：必须显式传
+# 配置与路径（示例也用 sys.path.insert 动态找包，pyright 读不懂那句）。
+echo "== 示例：格式检查 (ruff format) =="
+"$PY" -m ruff format --check --config "$ROOT/backend/pyproject.toml" "$ROOT/examples"
+
+echo "== 示例：静态检查 (ruff check) =="
+"$PY" -m ruff check --config "$ROOT/backend/pyproject.toml" "$ROOT/examples"
+
+echo "== 示例：类型检查 (pyright) =="
+(cd "$ROOT/backend" && "$PY" -m pyright --pythonpath "$PY" "$ROOT/examples")
+
+# 离线冒烟：不依赖网络的三份示例要**真能跑通**。静态检查抓不到运行时崩溃
+# （上面那个 GBK 问题就是典型）。`demo_crawl` 需要真实站点，不在此列。
+echo "== 示例：离线冒烟 =="
+"$PY" "$ROOT/examples/demo_assistant.py" > /dev/null
+"$PY" "$ROOT/examples/demo_persist.py" > /dev/null
+"$PY" "$ROOT/examples/demo_sites.py" --offline > /dev/null
+
+# shell 脚本语法。shellcheck 在本机未安装（装不上就别假装查了），
+# `bash -n` 至少兜住语法级错误 —— 比完全不查强。
+echo "== 脚本：shell 语法检查 (bash -n) =="
+for script in "$ROOT"/scripts/*.sh; do
+  bash -n "$script"
+done
+
+# PyInstaller 规格文件。它只在发布流程里经 build.py 用到，平时无人碰 ——
+# 语法错误会一直潜伏到打包当天。一行 compile 就能提前抓住。
+echo "== 打包规格：语法检查 (compile) =="
+"$PY" -c "import sys; compile(open(sys.argv[1], encoding='utf-8').read(), 'hunter1.spec', 'exec')" \
+  "$ROOT/backend/hunter1.spec"
+
 echo "== 后端：测试 (pytest) =="
 (cd "$ROOT/backend" && "$PY" -m pytest)
 
 if [[ -f "$ROOT/frontend/package.json" ]]; then
   echo "== 前端：类型检查 + lint + 测试 (npm run check) =="
   (cd "$ROOT/frontend" && npm run --silent check)
+
+  # 生产构建。`npm run check` 只含 typecheck + lint + test —— **不含 build**，
+  # 于是 CSS/tailwind/资源路径/插件配置这类只在打包期暴露的错误，过去要等到
+  # 发布流程的 build.py 才现形。这里把它拉进门禁（产物落在 gitignore 的 dist/）。
+  echo "== 前端：生产构建 (vite build) =="
+  (cd "$ROOT/frontend" && npm run --silent build)
 fi
 
 if [[ -f "$ROOT/contracts/openapi.json" ]]; then

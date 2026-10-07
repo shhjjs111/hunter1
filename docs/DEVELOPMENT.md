@@ -171,7 +171,7 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/check.sh` | 一条命令跑完后端格式/静态/类型/测试 + 前端检查 + 契约漂移（与 CI 同款） |
+| `scripts/check.sh` | 一条命令跑完后端格式/静态/类型/测试 + 脚本与示例（ruff/pyright + 离线冒烟）+ 前端检查与**生产构建** + 契约漂移（与 CI 同款） |
 | `scripts/contracts.sh` | 导出 OpenAPI 快照与前端类型；`--check` 为漂移门禁 |
 | `scripts/dev.sh` | 开发形态：API(:8000) + Vite(:5173) 双进程 |
 | `scripts/build.py` | 构建打包产物 + 硬校验（前端产物可达性、体积） |
