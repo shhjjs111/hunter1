@@ -453,3 +453,110 @@ class TestStreamWithTools:
 
         list(_client(handler).stream_with_tools(messages=[], tools=[]))
         assert "tools" not in seen["body"]
+
+
+class _BreakAfterDeltas(httpx.SyncByteStream):
+    """吐出若干 SSE 增量后模拟对端掐断。
+
+    `RemoteProtocolError` / `ReadTimeout` 都是 `httpx.HTTPError` 子类 —— 正是它们
+    让「半截流」被误当成「连接失败」。
+    """
+
+    def __init__(self, payloads: list[str]) -> None:
+        self._payloads = payloads
+
+    def __iter__(self):  # type: ignore[override]
+        for payload in self._payloads:
+            yield f"data: {payload}\n\n".encode()
+        raise httpx.RemoteProtocolError("peer closed connection mid-stream")
+
+
+class TestMidStreamDisconnect:
+    """流**已产出内容**后断连：必须抛错，不得降级重发。
+
+    重发的后果不是「多要点流量」，而是**重复输出并落库**：消费方
+    （assistant/service.run_turn_stream）把每个 TextDelta 累进 TurnDone.reply，
+    于是「半截 + 全文」被写进对话历史。
+
+    机理：`except httpx.HTTPError` 原先包住了整个 `with self._client.stream(...)`，
+    连 `parse_sse_lines` 的消费也在内 —— 与 docstring 声称的「流已吐一部分不再
+    重试、降级只覆盖连接建立阶段」正好相反。
+    """
+
+    def test_mid_stream_break_raises_without_degrading(self) -> None:
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_BreakAfterDeltas([_delta("你好"), _delta("世界")]),
+            )
+
+        events: list[Any] = []
+        with pytest.raises(LLMError) as excinfo:
+            for event in _client(handler).stream_with_tools(messages=[], tools=[]):
+                events.append(event)
+
+        assert excinfo.value.code == "stream_interrupted"
+        # 已产出的增量保留（调用方可据此落库半截内容）——但不得有兜底重发
+        assert _texts(events) == ["你好", "世界"]
+        assert [e for e in events if isinstance(e, StreamComplete)] == []
+        assert calls["n"] == 1, "已产出内容后不得再发第二次请求（会把全文重复吐一遍）"
+
+    def test_mid_stream_break_leaves_reply_without_duplication(self) -> None:
+        """按消费方的方式累加：reply 必须是「半截」，不得是「半截 + 全文」。
+
+        handler 区分流式/非流式 —— 否则兜底请求也拿到断流，重复就不会显现，
+        这条用例会变成「改前改后都绿」的假守卫。
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if json.loads(request.content or b"{}").get("stream"):
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=_BreakAfterDeltas([_delta("你好"), _delta("世界")]),
+                )
+            return httpx.Response(
+                200, json={"model": "m", "choices": [{"message": {"content": "你好世界"}}]}
+            )
+
+        reply = ""
+        with pytest.raises(LLMError):
+            for event in _client(handler).stream_with_tools(messages=[], tools=[]):
+                if isinstance(event, TextDelta):
+                    reply += event.text
+
+        assert reply == "你好世界"
+
+    def test_connection_phase_failure_still_degrades(self) -> None:
+        """**未产出任何内容**时（连接建立阶段）仍走降级 —— 这条防回归。
+
+        与上面两条是同一个 try 的两种命运：分界线是「有没有 yield 过」。
+        """
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.ConnectError("cannot connect")
+            return httpx.Response(
+                200, json={"model": "m", "choices": [{"message": {"content": "兜底全文"}}]}
+            )
+
+        done = _done(list(_client(handler).stream_with_tools(messages=[], tools=[])))
+        assert done.content == "兜底全文"
+        assert done.degraded is True
+
+    def test_degraded_path_failure_is_not_swallowed(self) -> None:
+        """降级路径**自己**失败时也要如实抛错，不能被当成「已处理」。"""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.ConnectError("network down")
+
+        with pytest.raises(LLMError):
+            list(_client(handler).stream_with_tools(messages=[], tools=[]))

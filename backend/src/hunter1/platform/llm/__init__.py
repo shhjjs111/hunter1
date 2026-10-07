@@ -207,8 +207,13 @@ class OpenAICompatibleClient:
         与 `complete_with_tools` 的差别只在**怎么拿到结果**，不在**拿到什么**：
         降级路径同样保留工具调用 —— 否则助手会悄悄退化成「只会聊天」。
 
-        刻意不做重试：流已经吐了一部分再重试会重复输出。连接建立阶段的失败
-        改走非流式降级路径，那边自带重试，足以覆盖「代理不支持流式」这类故障。
+        刻意不做重试：流已经吐了一部分再重试会重复输出。为此把降级限制在
+        **尚未产出任何事件**之前（连接建立阶段）—— 一旦吐过 TextDelta，中途断连
+        （ReadTimeout / RemoteProtocolError 都是 `httpx.HTTPError` 子类）会抛
+        `LLMError("stream_interrupted")` 而不是降级重发：否则全文会被当成新的
+        增量再吐一遍，消费方（`assistant/service.run_turn_stream`）累加后就是
+        「半截 + 全文」的重复输出，并落进对话历史。连接建立阶段的失败仍走非流式
+        降级路径，那边自带重试，足以覆盖「代理不支持流式」这类故障。
         """
         payload: dict[str, Any] = {
             "model": self.model,
@@ -228,13 +233,18 @@ class OpenAICompatibleClient:
             "Accept": "text/event-stream",
         }
 
+        # 「是否已经吐过事件」—— 这是「能否降级」的分界线。吐过之后断连若降级重发，
+        # 全文会被当成新的增量再吐一遍（重复输出并落库）；未吐过时降级则安全。
+        yielded = False
         try:
             with self._client.stream("POST", url, headers=headers, json=payload) as response:
                 if response.status_code >= 400:
                     response.read()  # 先读完，连接才能复用
                     if response.status_code == 400 or response.status_code in TRANSIENT_STATUS:
                         # 400：多半是这家不接受 stream；429/5xx：暂时性故障，
-                        # 交给非流式路径重试。两者都走降级。
+                        # 交给非流式路径重试。两者都走降级 —— 此时尚未 yield，
+                        # 重发不会重复。（降级自身的失败会以 LLMError 抛出，
+                        # 不是 httpx.HTTPError，因此不会被下面这个 except 吞掉。）
                         yield from self._degraded_stream(
                             messages=messages, tools=tools, max_tokens=max_tokens
                         )
@@ -243,10 +253,18 @@ class OpenAICompatibleClient:
 
                 content_type = response.headers.get("content-type", "")
                 if "event-stream" in content_type.lower():
-                    yield from parse_sse_lines(response.iter_lines(), default_model=self.model)
+                    # 逐事件 yield 而不是 `yield from`：需要在每个事件后记录「已吐过」，
+                    # 好让紧接着的断连走「抛错」而非「降级重发」。
+                    for event in parse_sse_lines(response.iter_lines(), default_model=self.model):
+                        yielded = True
+                        yield event
                     return
                 body = response.read()
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            if yielded:
+                # 流已产出内容 —— 重发必然重复。如实抛错，由调用方决定半截结果怎么办
+                # （assistant 的流式端点已有 except → SSE error 事件 的路径接住）。
+                raise LLMError("stream_interrupted", _short(str(exc))) from exc
             yield from self._degraded_stream(messages=messages, tools=tools, max_tokens=max_tokens)
             return
 
