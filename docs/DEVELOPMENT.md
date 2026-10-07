@@ -73,6 +73,19 @@ npm run lint     # 只跑 eslint
 npm run build    # 产出 dist/（交付形态由后端服务它）
 ```
 
+### shellcheck（可选，推荐装）
+
+`check.sh` 会对 `scripts/*.sh` 跑 shellcheck —— `bash -n` 只查语法，shellcheck
+才查语义级缺陷（未加引号的展开、错误的续行、数组误用）。本机没装时会**明确提示
+并跳过**（不是静默跳过），不会让门禁失败：
+
+```bash
+./.tools/python/python.exe -m pip install --index-url https://pypi.org/simple shellcheck-py
+# 装完即被 check.sh 自动发现（.tools/python/Scripts/shellcheck.exe）
+```
+
+> 为什么必须走官方 PyPI 索引：清华镜像未收录 `shellcheck-py` 的 win_amd64 wheel。
+
 **提交前必须全绿。** 详见 `.github/workflows/ci.yml`。
 
 ## 目录结构（v2：前后端分离）
@@ -171,7 +184,7 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/check.sh` | 一条命令跑完后端格式/静态/类型/测试 + 脚本与示例（ruff/pyright + 离线冒烟）+ 前端检查与**生产构建** + 契约漂移（与 CI 同款） |
+| `scripts/check.sh` | 一条命令跑完后端格式/静态/类型/测试 + 脚本与示例（ruff/pyright + shellcheck + 离线冒烟）+ 前端检查与**生产构建** + 契约漂移（与 CI 同款） |
 | `scripts/contracts.sh` | 导出 OpenAPI 快照与前端类型；`--check` 为漂移门禁 |
 | `scripts/dev.sh` | 开发形态：API(:8000) + Vite(:5173) 双进程 |
 | `scripts/build.py` | 构建打包产物 + 硬校验（前端产物可达性、体积） |

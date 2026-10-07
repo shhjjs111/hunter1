@@ -183,6 +183,6 @@ flowchart LR
 | 前端 | `cd frontend && npm run check` | 类型 + lint + 测试（含整体渲染验收） |
 | 示例 | `pyright ../examples` + 三份离线示例实跑 | 示例不腐化（端口变更后假实现不失配） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
-| 全门禁 | `bash scripts/check.sh` | 以上全部 + 示例 + shell/规格语法 + **前端生产构建** |
+| 全门禁 | `bash scripts/check.sh` | 以上全部 + 示例 + shellcheck/bash -n + 规格语法 + **前端生产构建** |
 | 视觉 | 无头浏览器截图（见 DEVELOPMENT 检查单第 7 步） | 多分辨率布局（**单测覆盖不到**：jsdom 无布局引擎） |
 | 打包 | `python scripts/build.py` | 布局 + 冒烟（SPA 外壳 + API） |

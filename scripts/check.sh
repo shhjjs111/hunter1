@@ -11,7 +11,8 @@
 #   examples/    示例脚本：ruff format / ruff check / pyright + 离线冒烟
 #   frontend/    有 package.json 时检查：npm run check（类型 + lint + 测试）+ vite build
 #   contracts/   有 openapi.json 时检查：契约漂移门禁
-# 另含：shell 脚本语法（bash -n）与 PyInstaller 规格语法（compile）。
+# 另含：shell 脚本静态分析（shellcheck；未装则明确跳过）与语法（bash -n）、
+#       PyInstaller 规格语法（compile）。
 #
 # ⚠ scripts/ 的 ruff 检查必须显式传 `--config backend/pyproject.toml`。
 #   根目录没有 ruff 配置，不传就会用 ruff 的**默认规则集**（行长 88、规则集也不同），
@@ -82,8 +83,43 @@ echo "== 示例：离线冒烟 =="
 "$PY" "$ROOT/examples/demo_persist.py" > /dev/null
 "$PY" "$ROOT/examples/demo_sites.py" --offline > /dev/null
 
-# shell 脚本语法。shellcheck 在本机未安装（装不上就别假装查了），
-# `bash -n` 至少兜住语法级错误 —— 比完全不查强。
+# shell 脚本静态分析。
+#
+# `bash -n` 只查语法；shellcheck 查语义级缺陷（未加引号的展开、错误的续行、
+# 数组误用…）—— 两者互补，都跑。
+#
+# ⚠ 行尾必须归一化再喂给 shellcheck。仓库内容是 LF（.gitattributes 的
+#   `* text=auto eol=lf`），但 Windows 工作树里常是 CRLF。shellcheck 对 CRLF
+#   文件会在**每一行**报 SC1017(error)，并在续行处产生 SC2215 假阳性 ——
+#   实测 344 + 6 条，全是行尾伪影，把真问题彻底淹掉（归一化后同一批脚本 0 问题）。
+#   所以先 `tr -d '\r'`：检查的是**将要提交的内容**，与 CI 检出的内容一致。
+#   不这么做的话，本机跑门禁会满屏红而 CI 全绿 —— 最坏的一种不一致。
+#
+# 未安装时**明确提示**而非静默跳过 —— 静默跳过会让「本机没装」看起来像
+# 「检查通过」（这个项目已经吃过一次「假绿」的教训）。
+echo "== 脚本：shell 静态分析 (shellcheck) =="
+SHELLCHECK=""
+if command -v shellcheck >/dev/null 2>&1; then
+  SHELLCHECK="shellcheck"
+elif [[ -x "$ROOT/.tools/python/Scripts/shellcheck.exe" ]]; then
+  SHELLCHECK="$ROOT/.tools/python/Scripts/shellcheck.exe"
+elif [[ -x "$ROOT/.tools/python/bin/shellcheck" ]]; then
+  SHELLCHECK="$ROOT/.tools/python/bin/shellcheck"
+fi
+
+if [[ -n "$SHELLCHECK" ]]; then
+  # 归一化到临时目录（而不是 stdin），让报错里的文件名仍可读、可点击。
+  SHELLCHECK_TMP="$(mktemp -d)"
+  trap 'rm -rf "$SHELLCHECK_TMP"' EXIT
+  for script in "$ROOT"/scripts/*.sh; do
+    name="$(basename "$script")"
+    tr -d '\r' < "$script" > "$SHELLCHECK_TMP/$name"
+  done
+  "$SHELLCHECK" -s bash "$SHELLCHECK_TMP"/*.sh
+else
+  echo "  ⚠ 未安装 shellcheck，已跳过此项。安装：$PY -m pip install shellcheck-py"
+fi
+
 echo "== 脚本：shell 语法检查 (bash -n) =="
 for script in "$ROOT"/scripts/*.sh; do
   bash -n "$script"

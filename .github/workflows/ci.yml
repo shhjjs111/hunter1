@@ -38,7 +38,16 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: 全量门禁（ruff / pyright / pytest / 前端 check / 契约漂移）
+      - name: 安装 shellcheck
+        # check.sh 会跑 shellcheck 查 shell 脚本的语义级缺陷（bash -n 只查语法）。
+        # 未装时 check.sh 会明确提示并跳过（不是静默跳过）—— 但**不装就等于没强制**，
+        # 所以这里保证它在 CI 上存在。镜像通常已预装，仅在缺失时才 apt 装。
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          fi
+
+      - name: 全量门禁（ruff / pyright / pytest / 示例 / shellcheck / 前端 check+build / 契约漂移）
         # 直接调用本地同款脚本 —— CI 与开发机不可能再漂移。
         # 之前这里手写后端五步，漏了前端 `npm run check` 与 `contracts.sh --check`：
         # 「后端改了 API 模型忘了重跑 contracts.sh」能一路绿灯合入，契约静默断开。
