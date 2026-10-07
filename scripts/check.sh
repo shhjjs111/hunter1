@@ -31,7 +31,16 @@ if [[ -z "${PY:-}" ]]; then
   elif [[ -x "$ROOT/.tools/python/bin/python3" ]]; then
     PY="$ROOT/.tools/python/bin/python3"
   else
-    PY="python"
+    # ⚠ 必须解析成**绝对路径**，不能留裸名 `python`。
+    # pyright 的 `--pythonpath` 要的是解释器**路径**；给它裸名时它解析不到解释器，
+    # 于是找不到 site-packages，把 httpx / pydantic / fastapi / bs4 等**全部**第三方
+    # import 报成 `reportMissingImports`。实测（CI 环境镜像：extraPaths 只剩 "src"）：
+    # 裸名 → 41 errors；绝对路径 → 0 errors。
+    #
+    # 本机看不见这个问题：`pyproject.toml` 的 extraPaths 里有一条指向本机
+    # `.tools/python/Lib/site-packages` 的搜索路径，把解释器解析失败掩盖掉了 ——
+    # 而 CI 上 `.tools/` 不在仓库里，没有这条兜底。典型的「只有 CI 才暴露」缺陷。
+    PY="$(command -v python 2>/dev/null || command -v python3 2>/dev/null || echo python)"
   fi
 fi
 

@@ -84,8 +84,14 @@ typeCheckingMode = "standard"
 # 补上本项后归零。
 #
 # 路径是**仓库相对**（相对本文件所在目录 `backend/`），不是机器绝对路径；
-# 该目录不存在时 pyright 只是忽略这条搜索路径、不报错 —— CI 上即为此情形
-# （CI 用正常 Python 环境，本项是多余但无害的一条搜索路径）。
+# 该目录不存在时 pyright 只是忽略这条搜索路径、不报错。
+#
+# ⚠️ 但**「多余但无害」这个假设被证伪过一次**（实测教训，别重蹈）：
+# 本机 pyright 之所以顺手，一部分就靠这条路径直接指向本机 site-packages。
+# 它把「`--pythonpath` 传了个解析不到的解释器」这类问题**掩盖掉了** ——
+# CI 上 `.tools/` 不在仓库里、没有这条兜底，于是同一个配置报了 41 条
+# `reportMissingImports`（httpx / pydantic / fastapi / bs4 全中），而本机 0 errors。
+# 也就是说：**本机绿 ≠ CI 绿**，凡 pyright 相关改动都该意识到这层遮蔽。
 #
 # 与 check.sh 的关系：check.sh 用 `--pythonpath` 显式传解释器，本项对它是冗余的
 # 双保险。本项的价值在于让**裸跑 `pyright` 与 IDE** 也能得到正确结果，避免
