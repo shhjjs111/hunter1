@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -462,6 +463,27 @@ class TestLooksLikeAToken:
         assert not gh.looks_like_a_token(text)
 
 
+class TestClipboardIsWindowsOnly:
+    """`token_from_clipboard` 的**平台契约** —— 这条在所有平台都有意义。
+
+    函数体第一行就是 `if os.name != "nt": return None`（它只读 Windows 剪贴板）。
+    改动它之前先看这里：**非 Windows 必须干净地返回 None**，而不是抛错、
+    也不是去调一个本机不存在的命令。
+    """
+
+    def test_non_windows_returns_none_without_touching_subprocess(self, monkeypatch) -> None:
+        if os.name == "nt":
+            pytest.skip("本条守的是非 Windows 分支")
+        monkeypatch.setattr(gh.subprocess, "run", lambda *a, **k: pytest.fail("不该调用子进程"))
+        assert gh.token_from_clipboard() is None
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="token_from_clipboard 是**仅 Windows** 的实现（函数体第一行就是 os.name 守卫，"
+    "非 Windows 直接 return None）。下面这些用例桩掉 subprocess 来验证 PowerShell 输出的"
+    "解析，在非 Windows 上永远走不到那段代码。该契约本身由 TestClipboardIsWindowsOnly 守。",
+)
 class TestTokenFromClipboard:
     """桩掉子进程 —— 测试绝不读写真实剪贴板。"""
 

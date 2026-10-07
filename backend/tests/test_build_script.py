@@ -85,6 +85,14 @@ class TestLayoutProblems:
         shutil.rmtree(dist / "_internal" / "hunter1" / "web_dist" / "assets")
         assert any("assets" in p for p in build.layout_problems(dist))
 
+    @pytest.mark.skipif(
+        build._exe_name() == build.APP_NAME,
+        reason="PyInstaller 5.x 的**平铺**布局在本平台不可表示：可执行文件名与前端产物"
+        "目录名同为 'hunter1'（exe 在 dist/hunter1/hunter1，前端在 dist/hunter1/hunter1/"
+        "web_dist）—— 同一个父目录下不能既有同名文件又有同名目录，mkdir 必抛 "
+        "NotADirectoryError。Windows 上 exe 叫 hunter1.exe 故不冲突。"
+        "（5.x 是历史布局，6.x 起产物在 _internal/，不受影响。）",
+    )
     def test_accepts_pyinstaller_5_flat_layout(self, tmp_path: Path) -> None:
         """5.x 的产物是平铺的 —— 不该把「产物在」误报成「不在」。"""
         assert build.layout_problems(_make_dist(tmp_path, frontend="v5")) == []
