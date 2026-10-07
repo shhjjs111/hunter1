@@ -27,8 +27,18 @@ fi
 
 cleanup() {
   # 两个子进程一起收 —— 留一个在后台占着端口是本地开发最常见的困惑源
-  [[ -n "${BACKEND_PID:-}" ]] && kill "$BACKEND_PID" 2>/dev/null || true
-  [[ -n "${FRONTEND_PID:-}" ]] && kill "$FRONTEND_PID" 2>/dev/null || true
+  #
+  # 用 `if` 而不是 `[[ -n ... ]] && kill ... || true`：后者是经典的
+  # `A && B || C` 形态，shellcheck 的 SC2015 会就此告警（B 失败时 C 也会跑）。
+  # 这里 C 是 `true`、实际无害，但**写法上写清楚**优于「靠约定无害」——
+  # 且该告警在不同 shellcheck 版本间报不报不一致（实测 0.11.0 不报、apt 的旧版报），
+  # 写清楚才能让本机与 CI 的判定一致。
+  if [[ -n "${BACKEND_PID:-}" ]]; then
+    kill "$BACKEND_PID" 2>/dev/null || true
+  fi
+  if [[ -n "${FRONTEND_PID:-}" ]]; then
+    kill "$FRONTEND_PID" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 

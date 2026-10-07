@@ -119,8 +119,8 @@ echo "== 脚本：shell 静态分析 (shellcheck) =="
 SHELLCHECK=""
 for candidate in \
   "$(command -v shellcheck 2>/dev/null || true)" \
+  "$(dirname "$PY")/shellcheck" \
   "$(dirname "$PY")/Scripts/shellcheck.exe" \
-  "$(dirname "$PY")/bin/shellcheck" \
   "$ROOT/.tools/python/Scripts/shellcheck.exe" \
   "$ROOT/.tools/python/bin/shellcheck"
 do
