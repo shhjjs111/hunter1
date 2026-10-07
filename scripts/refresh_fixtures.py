@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from bs4 import BeautifulSoup
+
 from hunter1.platform.fetch.http import HttpFetcher
 from hunter1.slices.crawl import SITES, available_sites, ensure_not_blocked, parse_list_page
 

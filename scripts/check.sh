@@ -18,6 +18,9 @@
 #   根目录没有 ruff 配置，不传就会用 ruff 的**默认规则集**（行长 88、规则集也不同），
 #   与 backend/ 的判定标准不一致 —— 实测过：默认集下 E402 未启用，会建议你删掉
 #   其实必需的 `# noqa: E402`（RUF100 报「无用 noqa」），按它改反而引入 E402 违规。
+#   同样必须 `cd backend` 再跑：配置里的相对 `src` 是**按进程 cwd** 解析的，不切
+#   目录会让 first-party 判定漂移，判定结果随你在哪个目录敲命令翻转（详见下面
+#   scripts/ 那两节的注释）。
 #
 # 解释器探测顺序：$PY → 项目自带 .tools/python → PATH 上的 python。
 # 这样在「系统没有 Python」的机器上，只要项目内工具链存在也能直接跑。
@@ -57,11 +60,22 @@ echo "== 后端：类型检查 (pyright) =="
 
 # 工程脚本（仓库根，不属于后端包）。曾经漏在门禁之外 —— 在 scripts/ 下新增的
 # 几百行 Python 完全没被 lint / 格式检查过。必须显式传配置，理由见文件头注释。
+#
+# ⚠ 必须 `cd backend`（与上面各步一致）。ruff 把配置里的**相对路径按进程 cwd
+#   解析** —— `--config` 传绝对路径也改变不了这点。实测 `--show-settings`：
+#     cwd=backend → linter.src = ["<repo>/backend/src", "<repo>/backend/tests"]
+#     cwd=仓库根 → linter.src = []
+#   于是 first-party 判定（进而 import 分组的合法性）**随调用者所在目录翻转**：
+#   同一份工作区、同一条命令，backend/ 下报 I001、仓库根下 All checks passed。
+#   而 CI 恒从仓库根跑 —— 「本机红」与「CI 绿」可以同时为真，判定标准本身在漂移。
+#   根治在 backend/pyproject.toml 的 `known-first-party = ["hunter1"]`（消除漂移），
+#   此处钉住 cwd 是第二道保险：配置里还有别的 cwd 相对项（如 extend-exclude），
+#   且这样本节才有**确定**的运行环境，不依赖调用者在哪。
 echo "== 脚本：格式检查 (ruff format) =="
-"$PY" -m ruff format --check --config "$ROOT/backend/pyproject.toml" "$ROOT/scripts"
+(cd "$ROOT/backend" && "$PY" -m ruff format --check --config "$ROOT/backend/pyproject.toml" "$ROOT/scripts")
 
 echo "== 脚本：静态检查 (ruff check) =="
-"$PY" -m ruff check --config "$ROOT/backend/pyproject.toml" "$ROOT/scripts"
+(cd "$ROOT/backend" && "$PY" -m ruff check --config "$ROOT/backend/pyproject.toml" "$ROOT/scripts")
 
 # 脚本的类型检查。两处讲究：
 # 1. 必须从 backend/ 跑并显式传 scripts 路径 —— 试过在 pyproject 里用
@@ -75,12 +89,13 @@ echo "== 脚本：类型检查 (pyright) =="
 # 示例脚本（examples/）。它们长期在门禁之外 —— 代价是实测暴露的真实腐化：
 # 端口新增方法后示例里的假实现静默失配（pyright 一开就报）、导入未排序，
 # 以及 Windows GBK 控制台下打印站点标题直接崩。与 scripts/ 同款：必须显式传
-# 配置与路径（示例也用 sys.path.insert 动态找包，pyright 读不懂那句）。
+# 配置与路径（示例也用 sys.path.insert 动态找包，pyright 读不懂那句），
+# 并且同样 `cd backend` 钉住 cwd（理由见上面 scripts/ 那两节的注释）。
 echo "== 示例：格式检查 (ruff format) =="
-"$PY" -m ruff format --check --config "$ROOT/backend/pyproject.toml" "$ROOT/examples"
+(cd "$ROOT/backend" && "$PY" -m ruff format --check --config "$ROOT/backend/pyproject.toml" "$ROOT/examples")
 
 echo "== 示例：静态检查 (ruff check) =="
-"$PY" -m ruff check --config "$ROOT/backend/pyproject.toml" "$ROOT/examples"
+(cd "$ROOT/backend" && "$PY" -m ruff check --config "$ROOT/backend/pyproject.toml" "$ROOT/examples")
 
 echo "== 示例：类型检查 (pyright) =="
 (cd "$ROOT/backend" && "$PY" -m pyright --pythonpath "$PY" "$ROOT/examples")

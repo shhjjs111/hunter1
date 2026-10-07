@@ -64,6 +64,24 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 # 全角/形近字符误用。本项目注释与文档为中文，全角标点是有意使用，故忽略。
 ignore = ["RUF001", "RUF002", "RUF003"]
 
+[tool.ruff.lint.isort]
+# ⚠️ 为什么必须显式写 `known-first-party`：上面 `src = ["src", "tests"]` 是
+# **相对进程 cwd** 解析的，不是相对本文件 —— `--config` 传绝对路径也不改变
+# 这一点（实测 `--show-settings`）：
+#   cwd=backend  → linter.src = ["<repo>/backend/src", "<repo>/backend/tests"] → hunter1 判 first-party
+#   cwd=仓库根   → linter.src = []                                           → hunter1 判 third-party
+# 后果是**同一个 import 块的合法性随调用者所在目录翻转**，而 `check.sh` 里
+# scripts/ 与 examples/ 两条 ruff 步骤没切目录（backend 那几条切了）——
+# 于是「门禁红不红取决于你在哪个目录敲命令」，且 CI 恒从仓库根跑、恒绿。
+# 实测差距：scripts/refresh_fixtures.py 的 `from bs4 import ...` 与
+# `from hunter1...` 连排，backend 下报 I001、仓库根下 All checks passed。
+#
+# 钉住归属即可消除漂移：scripts/ 里的脚本都先 `sys.path.insert(.../backend/src)`
+# 再 import hunter1（见 refresh_fixtures.py:26），语义上就是本方包 ——
+# 不因从哪个目录调用而改变。对 backend 自身的检查无影响（那里 hunter1 本就是
+# first-party，此项只是把隐式判定写成显式的）。
+known-first-party = ["hunter1"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
