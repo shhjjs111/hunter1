@@ -12,7 +12,7 @@ hunter1/
 │   │   ├── platform/   机制内核（零业务：db / llm / fetch / update / text）
 │   │   ├── slices/     业务垂直切片（jobs / crawl / applications / assistant / scoring / settings）
 │   │   ├── domain/     共享模型（过渡期，见 docs/ARCHITECTURE.md 的技术债）
-│   │   ├── application/ 端口协议（进程边界）+ 并存期残留
+│   │   ├── application/ 端口协议（进程边界）
 │   │   ├── main.py     组装根 —— 唯一认识所有切片的地方
 │   │   └── cli.py      serve / crawl / update
 │   └── tests/          镜像 src 结构；tests/slices/<name> = 该切片的独立验证

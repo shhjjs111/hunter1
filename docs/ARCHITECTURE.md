@@ -180,7 +180,7 @@ flowchart LR
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
 | 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
-| 前端 | `cd frontend && npm run check` | 类型 + lint + 58 项（含整体渲染验收） |
+| 前端 | `cd frontend && npm run check` | 类型 + lint + 测试（含整体渲染验收） |
 | 契约 | `bash scripts/contracts.sh --check` | 双零漂移（快照 + 前端类型） |
 | 全门禁 | `bash scripts/check.sh` | 以上全部 |
 | 视觉 | 无头浏览器截图（见 DEVELOPMENT 检查单第 7 步） | 多分辨率布局（**单测覆盖不到**：jsdom 无布局引擎） |
