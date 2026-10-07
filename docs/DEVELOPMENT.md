@@ -89,10 +89,12 @@ Unix `bin/`）→ 项目自带解释器。第二项是必需的：实测 pip 把
 「装了却报未装」。
 
 > ⚠️ **必须指定官方 PyPI 索引**。清华镜像未收录 `shellcheck-py` 的 win_amd64
-> wheel；而本机与 CI 的 `PIP_INDEX_URL` 都指向镜像。这也是它**刻意不写进
-> `pyproject.toml` 的 `[dev]`** 的原因 —— 写进去会让 `pip install -e ".[dev]"`
-> 在镜像环境下直接失败（一条可选检查项不该拖垮主安装路径）。
-> CI 侧不走 pip，用 ubuntu 官方包的 shellcheck（见 `.github/workflows/ci.yml`）。
+> wheel；本机的 `PIP_INDEX_URL` 指向镜像（CI 上没有该变量，但写明更稳）。这也是
+> 它**刻意不写进 `pyproject.toml` 的 `[dev]`** 的原因 —— 写进去会让
+> `pip install -e ".[dev]"` 在镜像环境下直接失败（一条可选检查项不该拖垮主安装路径）。
+> CI 侧**同样用 pip**，只是**钉住版本**（`shellcheck-py==0.11.0.1`）。不走 apt 是
+> 因为 apt 的版本随 runner 镜像漂移 —— 实测比 0.11.0 旧，同一段 `A && B || C`
+> 旧版报 SC2015、新版不报，会造成「本机绿、CI 红」。见 `.github/workflows/ci.yml`。
 
 **提交前必须全绿。** 详见 `.github/workflows/ci.yml`。
 
