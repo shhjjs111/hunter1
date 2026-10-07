@@ -164,9 +164,10 @@ def build_router(
         conversation = store.get(body.conversation_id) if body.conversation_id else None
         history = store.messages(conversation.id, limit=history_limit) if conversation else []
         user_message = Message(role=Role.USER, content=text)
+        llm = llm_factory()
         try:
             result: AssistantResult = run_turn(
-                llm=llm_factory(), registry=tools, messages=[*history, user_message]
+                llm=llm, registry=tools, messages=[*history, user_message]
             )
         except ModelNotConfiguredError:
             # 「模型未配置」不是**上游故障**（根本没发出请求），502 的语义不符；
@@ -175,6 +176,9 @@ def build_router(
         except Exception as exc:
             # 不落库：失败的尝试不留会话（免得下次把失败那句当上下文）
             raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+        finally:
+            # 客户端每请求新建 —— 用完释放，别把连接池攒在进程里
+            llm.close()
 
         conversation_id = _persist(
             store,
@@ -197,10 +201,14 @@ def build_router(
         text = body.message.strip()
         if not text:
             return _static_stream([{"type": "error", "message": "请输入内容后再发送。"}])
+        llm = llm_factory()
+        # 所有权交给 generator：真正的消费发生在响应体被读取时（端点这时早已返回），
+        # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
+        # 会 close 这个 generator，finally 同样会跑到。
         return StreamingResponse(
             _stream_turn(
                 store=store,
-                llm=llm_factory(),
+                llm=llm,
                 tools=tools,
                 text=text,
                 conversation_id=body.conversation_id,
@@ -269,6 +277,10 @@ def _stream_turn(
     except Exception as exc:
         # 响应已经开始，没法再重定向 —— 失败必须作为事件交出去
         yield _sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+    finally:
+        # 本 generator 拥有这个客户端（见 `stream` 端点的注释）：正常结束、出错、
+        # 或客户端断开（GeneratorExit）—— 三条路径都要把连接池释放掉。
+        llm.close()
 
 
 __all__ = [

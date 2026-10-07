@@ -82,6 +82,12 @@ class ScriptedLLM:
             content=response.content, model=response.model, tool_calls=response.tool_calls
         )
 
+    def close(self) -> None:
+        """端口要求的释放方法。本演示的假模型没有资源可释放 —— no-op。
+
+        （真实客户端是每请求新建的，路由会在用完后调它关掉连接池。）
+        """
+
 
 def _seed(db: Database) -> None:
     repo = db.jobs()

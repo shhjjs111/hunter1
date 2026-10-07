@@ -39,6 +39,9 @@ def _job(**kw: Any) -> Job:
 class FakeLLM:
     """记录调用，返回预置结构化结果。"""
 
+    def close(self) -> None:
+        """端口要求：释放底层资源；内存假件是 no-op。"""
+
     def __init__(
         self, payload: dict[str, Any] | str | None = None, *, boom: Exception | None = None
     ) -> None:

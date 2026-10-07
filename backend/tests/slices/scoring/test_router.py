@@ -29,6 +29,11 @@ class FakeLLM:
     def __init__(self, payload: dict[str, Any] | None = None, *, boom: bool = False) -> None:
         self.payload = payload if payload is not None else {"score": 77}
         self.boom = boom
+        self.closed = False
+
+    def close(self) -> None:
+        """端口要求：用完释放（真实客户端会关掉 httpx 连接池）。"""
+        self.closed = True
 
     def complete_structured(self, **_kwargs: Any) -> LLMResponse:
         if self.boom:
@@ -279,3 +284,22 @@ class TestProfileEndpoints:
             f"期望 409，实际 {response.status_code}：{response.text[:120]}"
         )
         assert "画像" in response.json()["detail"]
+
+
+class TestLlmClientIsReleased:
+    """客户端是**每请求新建**的（改配置要立刻生效），所以必须用完即关 —— 否则真实的
+    httpx 连接池会随请求数累积。这条守的是「路由真的调了 close」。
+    """
+
+    def test_score_releases_client(self, db: Database) -> None:
+        llm = FakeLLM({"score": 66, "summary": "还行"})
+        for client in _client(db, llm):
+            assert client.post(f"/api/scoring/{JOB_ID}").status_code == 200
+        assert llm.closed is True, "评分端点必须释放客户端"
+
+    def test_score_releases_client_even_on_failure(self, db: Database) -> None:
+        """失败路径也要释放 —— try/finally，不是只在成功分支 close。"""
+        llm = FakeLLM(boom=True)
+        for client in _client(db, llm):
+            assert client.post(f"/api/scoring/{JOB_ID}").status_code == 422
+        assert llm.closed is True, "失败也必须释放客户端"

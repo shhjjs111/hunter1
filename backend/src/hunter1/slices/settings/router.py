@@ -128,8 +128,8 @@ def build_router(
             return ConnectionTestResponse(
                 ok=False, message="配置不完整：base_url / 模型 / API Key 都要填。"
             )
+        llm = llm_factory(settings)
         try:
-            llm = llm_factory(settings)
             response = llm.complete(
                 system_prompt="你是连通性测试助手。",
                 user_prompt="只回复两个字：可用",
@@ -137,6 +137,9 @@ def build_router(
             )
         except Exception as exc:
             return ConnectionTestResponse(ok=False, message=f"{type(exc).__name__}: {exc}")
+        finally:
+            # 探测也是一次完整使用 —— 客户端每请求新建，用完释放
+            llm.close()
         return ConnectionTestResponse(
             ok=True, message=f"连接成功，模型 {response.model or settings.model} 已应答。"
         )

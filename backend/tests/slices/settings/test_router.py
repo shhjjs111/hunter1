@@ -23,6 +23,9 @@ from hunter1.slices.settings.store import SettingsStore
 
 
 class FakeLLM:
+    def close(self) -> None:
+        """端口要求：释放底层资源；内存假件是 no-op。"""
+
     def __init__(self, *, boom: bool = False) -> None:
         self.boom = boom
 

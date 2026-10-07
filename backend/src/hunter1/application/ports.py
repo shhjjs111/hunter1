@@ -157,6 +157,15 @@ class LLMProvider(Protocol):
         max_tokens: int | None = None,
     ) -> Iterator[TextDelta | StreamComplete]: ...
 
+    def close(self) -> None:
+        """释放底层资源（连接池等）。
+
+        为什么在端口上：客户端是**每请求新建**的（用户改配置要立刻生效，不能做成
+        进程级单例），所以「谁用完谁释放」必须成为契约的一部分 —— 否则真实的
+        httpx 连接池会随请求数累积。无状态的实现（内存假件、纯桩）写成 no-op 即可。
+        """
+        ...
+
 
 __all__ = [
     "ApplicationRepository",

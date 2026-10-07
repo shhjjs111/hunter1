@@ -46,6 +46,9 @@ class _FakeCrawler:
 
 
 class _FakeLLM:
+    def close(self) -> None:
+        """端口要求：释放底层资源；内存假件是 no-op。"""
+
     def complete_structured(self, **_kw: Any) -> LLMResponse:
         return LLMResponse(content='{"score": 66, "summary": "还行"}', model="fake")
 

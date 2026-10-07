@@ -44,6 +44,9 @@ class ScriptedLLM:
     隐式依赖另一个测试目录（对方一删这边就红）。就地定义，自包含。
     """
 
+    def close(self) -> None:
+        """端口要求：释放底层资源；内存假件是 no-op。"""
+
     def __init__(self, script: list[Any]) -> None:
         self.script = list(script)
         self.calls: list[dict[str, Any]] = []
@@ -73,6 +76,9 @@ class StreamingLLM:
     脚本每一项是 `list[TextDelta | StreamComplete]`（一次 `stream_with_tools`
     调用产出的事件），或一个异常（调用时抛出）。
     """
+
+    def close(self) -> None:
+        """端口要求：释放底层资源；内存假件是 no-op。"""
 
     def __init__(self, script: list[Any]) -> None:
         self.script = list(script)

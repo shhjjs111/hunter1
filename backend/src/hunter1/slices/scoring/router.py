@@ -122,10 +122,14 @@ def build_router(
         if job is None:
             raise HTTPException(status_code=404, detail=f"岗位不存在：{job_id}")
 
+        llm = llm_factory()
         try:
-            card = score_job(job=job, profile=profile, llm=llm_factory())
+            card = score_job(job=job, profile=profile, llm=llm)
         except ScoringError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            # 客户端是每请求新建的 —— 用完即释放，别把连接池攒在进程里
+            llm.close()
 
         store.save_score(job_id, card.score)
         return ScoreView(

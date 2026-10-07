@@ -44,6 +44,11 @@ class ScriptedLLM:
         self.reply = reply
         self.boom = boom
         self.round = 0
+        self.closed = False
+
+    def close(self) -> None:
+        """端口要求：用完释放（真实客户端会关掉 httpx 连接池）。"""
+        self.closed = True
 
     # 一次性路径
     def complete_with_tools(self, *, messages: list[Message], **_kw: Any) -> LLMResponse:
@@ -205,3 +210,47 @@ class TestStreamEndpoint:
         for client in _client(db, ScriptedLLM()):
             events = _parse_sse(client.post("/api/assistant/stream", json={"message": "   "}).text)
             assert events == [{"type": "error", "message": "请输入内容后再发送。"}]
+
+
+class TestLlmClientIsReleased:
+    """两个端点都每请求新建客户端（改配置要立刻生效），必须用完即关。
+
+    流式那条尤其要紧：真正的消费发生在响应体被读取时，端点函数早已返回 ——
+    释放只能挂在 generator 的 finally 上（客户端中断连接时 Starlette 会 close
+    这个 generator，同样会走到）。
+    """
+
+    def test_turn_releases_client(self, db: Database) -> None:
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            assert (
+                client.post("/api/assistant/turn", json={"message": "有哪些产品岗？"}).status_code
+                == 200
+            )
+        assert llm.closed is True, "一次性端点必须释放客户端"
+
+    def test_turn_releases_client_on_failure(self, db: Database) -> None:
+        llm = ScriptedLLM(boom=True)
+        for client in _client(db, llm):
+            assert client.post("/api/assistant/turn", json={"message": "在吗"}).status_code == 502
+        assert llm.closed is True, "失败也必须释放客户端"
+
+    def test_stream_releases_client(self, db: Database) -> None:
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            response = client.post("/api/assistant/stream", json={"message": "有哪些产品岗？"})
+            assert response.status_code == 200
+            # 读完响应体才算真正消费完（释放挂在 generator 的 finally 上）
+            assert response.text
+        assert llm.closed is True, "流式端点必须释放客户端"
+
+    def test_stream_releases_client_when_generator_closed_early(self, db: Database) -> None:
+        """客户端中途断开 → Starlette close 这个 generator → finally 仍要释放。"""
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            with client.stream(
+                "POST", "/api/assistant/stream", json={"message": "有哪些产品岗？"}
+            ) as r:
+                assert r.status_code == 200
+                next(r.iter_text())  # 只读第一块就撒手
+        assert llm.closed is True, "客户端提前断开也必须释放"

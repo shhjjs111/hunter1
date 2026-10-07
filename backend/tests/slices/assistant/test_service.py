@@ -24,6 +24,9 @@ REGISTRY = ToolRegistry([tool(_search, name="search_jobs")])
 class ScriptedLLM:
     """按脚本依次返回响应；记录每次收到的消息。"""
 
+    def close(self) -> None:
+        """端口要求：释放底层资源；内存假件是 no-op。"""
+
     def __init__(self, script: list[LLMResponse | Exception]) -> None:
         self.script = list(script)
         self.calls: list[dict] = []
