@@ -504,7 +504,22 @@ class TestStructuredDegradationIsRememberedAcrossRequests:
             fmt = body.get("response_format")
             modes.append("none" if fmt is None else str(fmt.get("type")))
             if fmt is not None:
-                return httpx.Response(400, json={"error": {"message": "unsupported"}})
+                # 措辞按**真实形状**写：厂商的 400 会点名出问题的参数，而「是否永久
+                # 记住该模式被拒」的判据就看响应体措辞（见 llm._looks_like_format_rejection）。
+                # 早先这里写笼统的 "unsupported"，生产逻辑判不出来 —— 假数据不自知地
+                # 偏离了真实，会让本用例在真实判据下失去意义。
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "message": (
+                                "Invalid parameter: 'response_format' of type 'json_schema' "
+                                "is not supported with this model."
+                            ),
+                            "param": "response_format",
+                        }
+                    },
+                )
             return httpx.Response(
                 200,
                 json={

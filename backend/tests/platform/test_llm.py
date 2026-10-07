@@ -303,13 +303,32 @@ SCHEMA = {"type": "object", "properties": {"score": {"type": "integer"}}, "requi
 
 
 def _rejecting_handler(seen: list[object]) -> object:
-    """记录每次请求带的 response_format；带了就 400 拒绝（模拟厂商不支持）。"""
+    """记录每次请求带的 response_format；带了就 400 拒绝（模拟厂商不支持）。
+
+    响应体按**真实形状**写：厂商的 400 一定会点名出问题的参数（`response_format`），
+    而不是一句笼统的 "unsupported format"。这一点在本用例里有实际后果 ——
+    「是否永久记住该模式被拒」的判据就看响应体措辞（见
+    `_looks_like_format_rejection`）。早先用笼统措辞的版本会让生产逻辑
+    判不出来，假数据不自知地偏离了真实。
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         seen.append(body.get("response_format"))
         if body.get("response_format") is not None:
-            return httpx.Response(400, json={"error": {"message": "unsupported format"}})
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            "Invalid parameter: 'response_format' of type 'json_schema' "
+                            "is not supported with this model."
+                        ),
+                        "type": "invalid_request_error",
+                        "param": "response_format",
+                    }
+                },
+            )
         return _ok_response('{"score": 7}')
 
     return handler
@@ -380,3 +399,82 @@ class TestRejectedModeMemory:
 
         # B 端点应从 json_schema 开始试（它没被拒过）
         assert seen_b[0] is not None, f"B 端点不该被 A 的拒绝记录连累；实际 {seen_b}"
+
+
+# 真实厂商拒绝 `response_format` 时的措辞样本（取自各家文档/实测报错的形状）。
+REAL_FORMAT_REJECTIONS = [
+    # OpenAI：json_schema 不被该模型支持
+    "Invalid parameter: 'response_format' of type 'json_schema' is not supported with this model.",
+    # 网关/自建：只认 json_object
+    "unsupported value: response_format",
+    # 中文网关
+    "json_schema is not supported",
+]
+
+
+def _plain_400_handler(seen: list[object], message: str) -> object:
+    """400 拒绝，但错误文本与「格式不支持」**无关**（如上下文超长）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body.get("response_format"))
+        if body.get("response_format") is not None:
+            return httpx.Response(400, json={"error": {"message": message}})
+        return _ok_response('{"score": 7}')
+
+    return handler
+
+
+class TestFormatRejectionHeuristic:
+    """「永久记住这个端点拒绝某格式」只在**确实**是格式问题时才该发生。
+
+    误记的代价是静默且永久的：该端点此后再也不试结构化输出（连试都不试），
+    直接降级成纯提示词 —— 用户永远拿不到格式保障，而日志里没有任何异常。
+    """
+
+    def test_non_format_400_is_not_remembered_across_clients(self) -> None:
+        """上下文超长导致的 400 不该被当成「格式被拒」记下来。"""
+        seen: list[object] = []
+        handler = _plain_400_handler(seen, "This model's maximum context length is 8192 tokens.")
+
+        first = _client(handler)
+        first.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        first.close()
+
+        seen.clear()
+        second = _client(handler)  # 下一个请求（新实例）
+        second.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        second.close()
+
+        assert seen[0] is not None, f"不该被永久记住 —— 下次仍应从 json_schema 试起；实际 {seen}"
+
+    def test_non_format_400_still_degrades_this_request(self) -> None:
+        """本次仍要降级：下一个模式或许能过（只是不永久记住）。
+
+        若这里改成「原样抛 http_400」，厂商措辞不在特征词表里时用户会**彻底失败** ——
+        比多打两个请求糟得多。
+        """
+        seen: list[object] = []
+        handler = _plain_400_handler(seen, "maximum context length exceeded")
+        client = _client(handler)
+        client.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        client.close()
+
+        assert [f is not None for f in seen] == [True, True, False], f"实际 {seen}"
+
+    @pytest.mark.parametrize("message", REAL_FORMAT_REJECTIONS)
+    def test_real_vendor_wording_is_remembered(self, message: str) -> None:
+        """措辞确实指向格式 → 记住，下一个请求不再浪费一次 400。"""
+        seen: list[object] = []
+        handler = _plain_400_handler(seen, message)
+
+        first = _client(handler)
+        first.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        first.close()
+
+        seen.clear()
+        second = _client(handler)
+        second.complete_structured(system_prompt="s", user_prompt="u", schema=SCHEMA)
+        second.close()
+
+        assert seen == [None], f"应直接用 none 模式，不再发多余请求；实际 {seen}"

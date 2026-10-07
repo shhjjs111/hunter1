@@ -59,6 +59,27 @@ def clear_rejected_modes() -> None:
         _rejected_modes_by_endpoint.clear()
 
 
+# 「这个 400 是在说格式不支持吗」的特征词。只认**明确指向格式参数**的措辞，
+# 不做泛化的 "unsupported"/"invalid" 匹配 —— 那会把上下文超长、参数非法之类
+# 统统误判成格式问题，进而永久降级该端点。
+#
+# 取舍方向是**宁可漏记**：漏记时本次照样降级（下一个模式往往能过），只是下次
+# 多打一个注定失败的请求；误记则是静默且永久的（该端点再也不试结构化输出）。
+_FORMAT_REJECTION_HINTS = (
+    "response_format",  # OpenAI / DeepSeek / 多数网关：直接点名参数
+    "json_schema",
+    "json_object",
+    "json mode",
+    "structured output",
+)
+
+
+def _looks_like_format_rejection(text: str) -> bool:
+    """响应体是否确实在说「不认这个 response_format」。"""
+    lowered = (text or "").lower()
+    return any(hint in lowered for hint in _FORMAT_REJECTION_HINTS)
+
+
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
@@ -406,13 +427,20 @@ class OpenAICompatibleClient:
                 continue
 
             if response.status_code >= 400:
-                # 400 且带了 response_format 时，很可能是厂商不支持该格式 → 触发降级
+                # 400 且带了 response_format：厂商可能是「不接受这种格式」，也可能只是
+                # 这次请求有别的问题（上下文超长、参数非法…）。
+                #
+                # 两种情况都值得**本次**降级 —— 下一个模式或许能过（json_schema 太复杂
+                # 时 json_object 常常可以）。但只有前者该被**永久记住**：误记的代价是
+                # 该端点此后再也不试结构化输出（静默降级成纯提示词，日志里毫无痕迹），
+                # 而漏记的代价只是下次多打一个注定失败的请求。
                 if (
                     response.status_code == 400
                     and reject_mode is not None
                     and reject_mode != "none"
                 ):
-                    self._rejected_modes.add(reject_mode)
+                    if _looks_like_format_rejection(response.text):
+                        self._rejected_modes.add(reject_mode)
                     raise LLMError("format_unsupported", _short(response.text))
                 raise LLMError(f"http_{response.status_code}", _short(response.text))
 
