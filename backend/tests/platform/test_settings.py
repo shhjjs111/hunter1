@@ -89,3 +89,42 @@ class TestSettingsRepository:
         assert repo.get_raw("missing") is None
         repo.set_raw("prefs", {"page_size": 20})
         assert repo.get_raw("prefs") == {"page_size": 20}
+
+
+def _write_raw(db: Database, key: str, value: object) -> None:
+    """绕过 `set_raw` 直接写存储 —— 模拟手工改库 / 外部工具写入的损坏值。
+
+    `set_raw` 自己会 `dict(value)`，非对象值在写入时就抛错，造不出这种形状；
+    而「配置损坏」恰恰多半来自应用之外的写入（改库、旧版本遗留、同步工具）。
+    """
+    import json
+
+    from sqlalchemy import text
+
+    with db.engine.begin() as conn:
+        conn.execute(
+            text("INSERT OR REPLACE INTO settings (key, value) VALUES (:k, :v)"),
+            {"k": key, "v": json.dumps(value)},
+        )
+
+
+class TestNonObjectStoredValueIsCorruptionNotCrash:
+    """存储值不是对象时，必须归到「配置损坏」的词汇（ValueError），不能抛 TypeError。
+
+    为什么：`except ValueError` 是全仓统一的「配置损坏」守卫 —— settings 路由的
+    GET / PUT / 连通性探测、scoring 的画像读取都靠它。`dict(123)` 抛的 **TypeError
+    会绕过全部守卫直穿成 500**，与「损坏必须可修复、不能自锁」的不变量冲突。
+
+    （缺口由独立复核发现，探针实测 int / list 两种形状确实抛 TypeError。）
+    """
+
+    @pytest.mark.parametrize("value", [123, [1, 2], "abc"])
+    def test_non_object_value_raises_valueerror(self, db: Database, value: object) -> None:
+        _write_raw(db, "llm", value)
+        with pytest.raises(ValueError):
+            db.settings().get_raw("llm")
+
+    def test_get_llm_on_non_object_is_valueerror(self, db: Database) -> None:
+        _write_raw(db, "llm", 123)
+        with pytest.raises(ValueError):
+            db.settings().get_llm()

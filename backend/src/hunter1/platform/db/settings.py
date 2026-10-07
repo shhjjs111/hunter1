@@ -30,6 +30,23 @@ LLM_KEY = "llm"
 _LEGACY_LLM_FIELDS = frozenset({"temperature", "max_tokens"})
 
 
+def _as_object(value: object, key: str) -> dict[str, Any]:
+    """把存储值收敛为对象；不是对象就抛 `ValueError`（**不是 TypeError**）。
+
+    `except ValueError` 是全仓统一的「配置损坏」守卫 —— settings 路由的
+    GET / PUT / 连通性探测、scoring 的画像读取都靠它。旧库里的裸标量 / 数组
+    （手工改库、外部工具写入）经 `dict(...)` 会抛 **TypeError**，绕过全部守卫
+    直穿成 500，与「配置损坏必须可修复、不能自锁」的不变量冲突。
+
+    这里显式把「不是对象」判成损坏，让异常类型与守卫的词汇一致。
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"配置 {key!r} 不是对象（实际是 {type(value).__name__}），已判为损坏")
+    return dict(value)
+
+
 class SqliteSettingsRepository:
     """键值配置仓储。"""
 
@@ -43,7 +60,7 @@ class SqliteSettingsRepository:
             row = session.get(SettingRow, key)
             if row is None:
                 return None
-            return dict(row.value or {})
+            return _as_object(row.value, key)
 
     def set_raw(self, key: str, value: dict[str, Any]) -> None:
         with self._db.session() as session:

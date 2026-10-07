@@ -202,3 +202,36 @@ class TestCorruptedConfigIsRepairable:
         body = response.json()
         assert body["ok"] is False
         assert "不可用" in body["message"]
+
+    @staticmethod
+    def _corrupt_to_non_object(db: Database) -> None:
+        """把配置值写成**非对象**（手工改库 / 外部工具才可能出现的形状）。
+
+        与 `_corrupt` 的区别：那里是一个字段类型不对的**对象**（走 `get_llm` 的
+        `ValidationError→ValueError` 分支）；这里连对象都不是 —— `dict(123)` 曾抛
+        `TypeError`，绕过全仓统一的 `except ValueError` 守卫直穿成 500。
+        """
+        import json
+
+        from sqlalchemy import text
+
+        with db.engine.begin() as conn:
+            conn.execute(
+                text("INSERT OR REPLACE INTO settings (key, value) VALUES (:k, :v)"),
+                {"k": LLM_KEY, "v": json.dumps(123)},
+            )
+
+    def test_get_with_non_object_config_is_not_500(self, db: Database) -> None:
+        """配置页必须能打开去修 —— 非对象值也不能把自己锁在门外。"""
+        self._corrupt_to_non_object(db)
+        for client in _client(db):
+            response = client.get("/api/settings")
+        assert response.status_code == 200, f"配置页打不开就没法修，实际 {response.status_code}"
+        assert response.json()["broken"] is True
+
+    def test_probe_with_non_object_config_is_not_500(self, db: Database) -> None:
+        self._corrupt_to_non_object(db)
+        for client in _client(db):
+            response = client.post("/api/settings/test")
+        assert response.status_code == 200, f"非对象配置也要给可读结论，实际 {response.status_code}"
+        assert response.json()["ok"] is False
