@@ -55,6 +55,15 @@ class TestConversationLifecycle:
         listed = repo.list()
         assert [c.id for c in listed][:2] == [first.id, second.id]
 
+    def test_list_is_stable_when_updated_at_ties(self, db: Database) -> None:
+        """多个会话同 updated_at 时，顺序必须确定 —— 同值行的顺序不是「碰巧怎么返回」。"""
+        from hunter1.platform.db import SqliteConversationRepository
+
+        frozen = datetime(2026, 10, 5, 12, 0, 0, tzinfo=UTC)
+        repo = SqliteConversationRepository(db, clock=lambda: frozen)
+        ids = [repo.create(title=f"t{index}").id for index in range(4)]
+        assert [c.id for c in repo.list()] == sorted(ids)
+
     def test_delete_removes_conversation_and_messages(self, db: Database) -> None:
         repo = db.conversations()
         conv = repo.create(title="待删")

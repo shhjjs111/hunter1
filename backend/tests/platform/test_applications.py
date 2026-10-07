@@ -79,6 +79,14 @@ class TestApplicationRepository:
         assert [a.id for a in repo.list(limit=2)] == ["a4", "a3"]
         assert [a.id for a in repo.list(limit=2, offset=2)] == ["a2", "a1"]
 
+    def test_list_is_stable_when_updated_at_ties(self, db: Database) -> None:
+        """同 updated_at 时的顺序是契约：分页基于 offset，序不确定就会跨页重复/丢行。"""
+        repo = db.applications()
+        same = datetime(2026, 9, 2, tzinfo=UTC)
+        for index in range(4):
+            repo.upsert(_application(id=f"a{index}", updated_at=same))
+        assert [a.id for a in repo.list()] == ["a0", "a1", "a2", "a3"]
+
     def test_by_job_returns_matches(self, db: Database) -> None:
         repo = db.applications()
         repo.upsert(_application(id="a1", job_id="j1"))

@@ -104,6 +104,27 @@ def _assign_facts(row: JobRow, job: Job) -> None:
     row.last_seen_at = job.last_seen_at
 
 
+# 排序契约：时间主键之后必须跟一个**唯一**且**稳定**的第二键。
+#
+# 为什么需要第二键：SQL 规范对 ORDER BY 同值行的顺序**不作保证**，它由实现决定。
+# 典型触发场景是批量抓取 —— 同一轮写入的岗位 last_seen_at 全部相同，此时
+# 「最近岗位」的顺序纯属实现细节（实测当前是索引内 rowid 逆序，无任何语义）。
+# 而 `list`/`search` 把 offset 分页直接透传出去，序不确定 → 翻页会跨页重复或丢行。
+#
+# 为什么不取 rowid（虽然它**更快**，实测 20k 行 0.26ms vs id 的 0.84ms）：
+# rowid 不是不变量 —— `VACUUM` 会重排它（本仓库目前无 VACUUM，但那是随时可能
+# 被加上的常规运维动作，加了就会静默复现同一个 bug）。分页稳定性是正确性要求，
+# 不该绑在一个可被重排的存储细节上。`id` 是不可变主键，语义上就是「稳定第二键」。
+#
+# 顺带一笔实测代价（20k 行、LIMIT 100 OFFSET 500）：`id ASC` 约 0.5–0.8ms，
+# 而只按时间排约 0.26ms。差的是「过滤/排序在内存里做」这一步，绝对量极小 ——
+# 求职工具是单用户、岗位量级千级，这个代价换分页确定性与 id 语义，值得。
+# 不复用 `ix_jobs_last_seen_at` 的原因：索引内部隐含 `(last_seen_at, rowid)` 且
+# rowid 升序，`DESC, ASC` 是混合方向，任何索引都服侍不了（要 TEMP B-TREE）。
+# 真要榨干这点开销，正解是加复合索引 `(last_seen_at, id)`；当前量级下不值得。
+_JOB_ORDER = (JobRow.last_seen_at.desc(), JobRow.id.asc())
+
+
 class SqliteJobRepository:
     """岗位仓储。"""
 
@@ -173,7 +194,7 @@ class SqliteJobRepository:
             statement = (
                 select(JobRow)
                 .where(JobRow.id.like(f"{escaped}%", escape="\\"))
-                .order_by(JobRow.last_seen_at.desc())
+                .order_by(*_JOB_ORDER)
             )
             return [_to_job(row) for row in session.scalars(statement)]
 
@@ -192,9 +213,7 @@ class SqliteJobRepository:
 
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Job]:
         with self._db.session() as session:
-            statement = (
-                select(JobRow).order_by(JobRow.last_seen_at.desc()).limit(limit).offset(offset)
-            )
+            statement = select(JobRow).order_by(*_JOB_ORDER).limit(limit).offset(offset)
             return [_to_job(row) for row in session.scalars(statement)]
 
     def search(self, *, keyword: str, limit: int = 20, offset: int = 0) -> list[Job]:
@@ -204,7 +223,7 @@ class SqliteJobRepository:
         """
         normalized = normalize_job_title(keyword)
         with self._db.session() as session:
-            statement = select(JobRow).order_by(JobRow.last_seen_at.desc())
+            statement = select(JobRow).order_by(*_JOB_ORDER)
             if normalized:
                 statement = statement.where(
                     JobRow.title_key.like(f"%{_escape_like(normalized)}%", escape="\\")

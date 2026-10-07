@@ -86,9 +86,13 @@ class SqliteConversationRepository:
             return _to_conversation(row) if row is not None else None
 
     def list(self, *, limit: int = 50) -> list[Conversation]:
+        # 第二键 id：多个会话可能同 updated_at（时钟注入、批量创建），同值行顺序
+        # SQL 不作保证。理由见 repository.py 的 _JOB_ORDER。
         with self._db.session() as session:
             statement = (
-                select(ConversationRow).order_by(ConversationRow.updated_at.desc()).limit(limit)
+                select(ConversationRow)
+                .order_by(ConversationRow.updated_at.desc(), ConversationRow.id.asc())
+                .limit(limit)
             )
             return [_to_conversation(row) for row in session.scalars(statement)]
 

@@ -125,6 +125,45 @@ class TestJobs:
         assert [j.id for j in repo.list(limit=2, offset=0)] == ["j4", "j3"]
         assert [j.id for j in repo.list(limit=2, offset=2)] == ["j2", "j1"]
 
+    def test_list_is_stable_when_last_seen_at_ties(self, db: Database) -> None:
+        """同 last_seen_at 时的顺序是**契约**，不是「SQLite 碰巧怎么返回」。
+
+        批量抓取写入的岗位 last_seen_at 全部相同，而 SQL 规范对 ORDER BY 同值行的
+        顺序**不作保证**：只依赖实现的偶然，换 SQLite 版本 / 加 ANALYZE / 改索引
+        之后顺序就可能变，offset 分页随之跨页重复或丢行。钉住第二键即消除该脆弱性。
+        """
+        repo = db.jobs()
+        same = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+        for index in range(5):
+            repo.upsert(_job(id=f"j{index}", last_seen_at=same))
+
+        assert [j.id for j in repo.list(limit=10)] == ["j0", "j1", "j2", "j3", "j4"]
+
+        # 翻页拼起来必须恰好是全集：不重复、不缺失
+        paged = [j.id for j in repo.list(limit=2, offset=0)]
+        paged += [j.id for j in repo.list(limit=2, offset=2)]
+        paged += [j.id for j in repo.list(limit=2, offset=4)]
+        assert paged == ["j0", "j1", "j2", "j3", "j4"]
+
+    def test_search_order_matches_list_when_last_seen_at_ties(self, db: Database) -> None:
+        """`list` 与 `search` 必须给出一致的顺序 —— 否则同一批数据的两种取法互相矛盾。"""
+        repo = db.jobs()
+        same = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+        for index in range(5):
+            repo.upsert(_job(id=f"j{index}", title="产品经理", last_seen_at=same))
+
+        assert [j.id for j in repo.search(keyword="产品经理", limit=10)] == [
+            j.id for j in repo.list(limit=10)
+        ]
+
+    def test_get_by_prefix_is_deterministic_when_last_seen_at_ties(self, db: Database) -> None:
+        repo = db.jobs()
+        same = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+        for index in range(3):
+            repo.upsert(_job(id=f"b{index}", last_seen_at=same))
+
+        assert [j.id for j in repo.get_by_prefix("b")] == ["b0", "b1", "b2"]
+
     def test_data_survives_reopen(self, tmp_path: Path) -> None:
         """持久化必须跨连接存续（不是内存态）。"""
         path = tmp_path / "persist.db"

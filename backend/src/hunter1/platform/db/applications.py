@@ -53,10 +53,12 @@ class SqliteApplicationRepository:
             return _to_application(row) if row is not None else None
 
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Application]:
+        # 第二键 id：同 updated_at 行的顺序 SQL 不作保证，而本方法直接走 offset 分页
+        # （批量导入/脚本写入时同秒不罕见）。与 jobs 仓储同款，理由见 repository.py 的 _JOB_ORDER。
         with self._db.session() as session:
             statement = (
                 select(ApplicationRow)
-                .order_by(ApplicationRow.updated_at.desc())
+                .order_by(ApplicationRow.updated_at.desc(), ApplicationRow.id.asc())
                 .limit(limit)
                 .offset(offset)
             )
@@ -67,7 +69,7 @@ class SqliteApplicationRepository:
             statement = (
                 select(ApplicationRow)
                 .where(ApplicationRow.job_id == job_id)
-                .order_by(ApplicationRow.updated_at.desc())
+                .order_by(ApplicationRow.updated_at.desc(), ApplicationRow.id.asc())
             )
             return [_to_application(row) for row in session.scalars(statement)]
 
