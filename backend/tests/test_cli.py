@@ -218,6 +218,23 @@ class TestUpdateCommand:
         assert main(["update", "--source", ""]) == 2
         assert "更新源" in capsys.readouterr().out
 
+    def test_unparseable_version_reports_instead_of_traceback(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """清单里 version 解析不了时给可判别的错误，而不是让裸 ValueError 冒到用户面前。"""
+        monkeypatch.setenv("HUNTER1_UPDATE_SOURCE", "https://x/m.json")
+
+        def boom(**kwargs: object) -> object:
+            raise ValueError("无法解析版本号：'release-x'")
+
+        # `_update` 是**函数内**导入 check_for_update 的，所以补丁要打在被导入的
+        # 模块上（打在 hunter1.cli 上找不到该属性）。
+        monkeypatch.setattr("hunter1.platform.update.check_for_update", boom)
+        assert main(["update"]) == 1
+        out = capsys.readouterr().out
+        assert "manifest_invalid" in out
+        assert "Traceback" not in out
+
 
 class TestMain:
     def test_no_command_prints_help_and_fails(self, capsys: pytest.CaptureFixture[str]) -> None:

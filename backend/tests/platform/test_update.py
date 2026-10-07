@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from hunter1.platform.update import (
     DownloadError,
@@ -201,3 +203,43 @@ def test_status_is_a_plain_dataclass() -> None:
         UpdateStatus(current="0.0.1", latest="0.2.0", available=True, detail="x")
     )
     assert payload["current"] == "0.0.1"
+
+
+class TestManifestVersionIsNotAPath:
+    """`version` 会被当成**路径成分**（`dest_dir / latest`、`hunter1-{latest}.zip`）。
+
+    伪造一份清单让 version 带上跳（如 `9.9.9/../../evil`），解压就会写到目标
+    目录之外。压缩包**成员**已有越界检查（见 TestPrepareUpdate），但目录名本身
+    这条路径此前无人守 —— 校验器只查了非空。
+
+    兼容红线：`v` 前缀与 `-beta`/`+local` 后缀是 `is_newer` 的既有语义，不能砍。
+    """
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            r"9.9.9\..\..\..\evil",  # 反斜杠分隔（Windows 风格）
+            "1.2.3/../../x",
+            "../evil",
+            "..",
+            "a/b",
+            r"C:\Windows\Temp\evil",  # 盘符 + 反斜杠
+            "c:/windows/temp/evil",  # 盘符 + 正斜杠
+        ],
+    )
+    def test_rejects_path_like_versions(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            ReleaseManifest(version=bad, assets=[])
+
+    def test_rejects_via_json_too(self) -> None:
+        """真实攻击面是**下载来的 JSON**（fetch_manifest 走 model_validate_json）。"""
+        payload = json.dumps({"version": "9.9.9/../../evil", "assets": []})
+        with pytest.raises(ValidationError):
+            ReleaseManifest.model_validate_json(payload)
+
+    @pytest.mark.parametrize(
+        "good",
+        ["1.2.3", "v1.2.3", "1.2", "1.2.3-beta.1", "1.2.3+local", "0.0.1"],
+    )
+    def test_keeps_existing_version_forms(self, good: str) -> None:
+        assert ReleaseManifest(version=good, assets=[]).version == good

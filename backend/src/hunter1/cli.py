@@ -200,6 +200,12 @@ def _update(args: argparse.Namespace) -> int:
         except DownloadError as exc:
             print(f"检查更新失败：{exc}")
             return 1
+        except ValueError as exc:
+            # 清单里 version 无法解析（`is_newer` → `parse_version` 抛的裸 ValueError，
+            # 如 version="release-x"）。与 `fetch_manifest` 的解析失败对齐成同一个
+            # 可判别的形态 —— 否则用户看到的是一段 traceback。
+            print(f"检查更新失败：{DownloadError('manifest_invalid', str(exc))}")
+            return 1
 
         print(status.detail)
         if status.notes:
