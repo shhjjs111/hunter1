@@ -110,7 +110,20 @@ def build_router(
 
     @router.post("/settings/test", summary="连通性探测（真发一次最小请求）")
     def test_connection() -> ConnectionTestResponse:
-        settings = store.get_llm()
+        try:
+            settings = store.get_llm()
+        except ValueError as exc:
+            # 保存的配置不合法（数据损坏 / 旧版本遗留）。**不能 500** —— 与 GET/PUT 同一课：
+            # 配置页是用户唯一的自救入口，探测也不例外（此前这里裸调 `get_llm()`，
+            # 损坏时 `ValueError` 穿透成 500，而前端只显示一句「探测失败」，把原因吞掉）。
+            #
+            # 保持端点的「报告形状」不变（与下面「配置不完整」同形：200 + `ok=False` +
+            # 可读原因），而不是抛 409：前端 `useTestConnection` 在出错分支只显示
+            # 「探测失败」，用一个统一的状态码换不回丢失的指引。
+            return ConnectionTestResponse(
+                ok=False,
+                message=f"已保存的配置不可用，请重新填写并保存后再测试：{exc}",
+            )
         if settings is None or not settings.is_configured:
             return ConnectionTestResponse(
                 ok=False, message="配置不完整：base_url / 模型 / API Key 都要填。"

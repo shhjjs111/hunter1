@@ -186,3 +186,19 @@ class TestCorruptedConfigIsRepairable:
         for client in _client(db):
             response = client.put("/api/settings", json={**FORM, "api_key": ""})
         assert response.status_code == 200
+
+    def test_probe_reports_corruption_instead_of_500(self, db: Database) -> None:
+        """探测端点也必须接住损坏 —— 它是配置页上的按钮，不能以 500 告终。
+
+        SLICE.md 把 `/settings/test` 与评分/助手并列，要求损坏时「不是 500」。
+        GET/PUT 都接住了，唯独探测此前裸调 `store.get_llm()`：损坏配置下
+        `ValueError` 直接穿透成 500，前端 `useTestConnection` 只显示一句
+        「探测失败」，把「重填即可自救」这个唯一出路埋掉。
+        """
+        self._corrupt(db)
+        for client in _client(db):
+            response = client.post("/api/settings/test")
+        assert response.status_code == 200, f"探测不该 500，实际 {response.status_code}"
+        body = response.json()
+        assert body["ok"] is False
+        assert "不可用" in body["message"]
