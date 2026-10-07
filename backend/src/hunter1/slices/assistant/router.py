@@ -19,11 +19,16 @@ from collections.abc import Callable, Iterator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
 from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
 from hunter1.domain.assistant import Message, Role
 from hunter1.domain.llm import TextDelta
+from hunter1.slices.assistant.schemas import (
+    ConversationMessageView,
+    ConversationSummary,
+    StreamRequest,
+    TurnResponse,
+)
 from hunter1.slices.assistant.service import (
     AssistantResult,
     ToolFinished,
@@ -46,37 +51,6 @@ TOOL_PREVIEW_LIMIT = 1000
 DEFAULT_HISTORY_LIMIT = 20
 
 FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
-
-
-class StreamRequest(BaseModel):
-    """对话请求体（流式与一次性共用）。"""
-
-    message: str = Field(min_length=1)
-    conversation_id: str = ""
-
-
-class TurnResponse(BaseModel):
-    """一次性对话的结果。"""
-
-    conversation_id: str
-    reply: str
-    iterations: int
-    truncated: bool
-
-
-class ConversationSummary(BaseModel):
-    """会话列表项。"""
-
-    id: str
-    title: str
-    updated_at: str
-
-
-class ConversationMessageView(BaseModel):
-    """会话里的一条消息。"""
-
-    role: str
-    content: str
 
 
 def _sse(event: dict[str, object]) -> str:

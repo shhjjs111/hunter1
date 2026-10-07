@@ -15,8 +15,13 @@ from hunter1.slices.assistant.job_tools import SEARCH_LIMIT_MAX, build_tools
 from hunter1.slices.assistant.router import (
     DEFAULT_HISTORY_LIMIT,
     FALLBACK_REPLY,
-    StreamRequest,
     build_router,
+)
+from hunter1.slices.assistant.schemas import (
+    ConversationMessageView,
+    ConversationSummary,
+    StreamRequest,
+    TurnResponse,
 )
 from hunter1.slices.assistant.service import (
     DEFAULT_MAX_ITERATIONS,
@@ -40,13 +45,16 @@ __all__ = [
     "SEARCH_LIMIT_MAX",
     "AssistantEvent",
     "AssistantResult",
+    "ConversationMessageView",
     "ConversationStore",
+    "ConversationSummary",
     "StreamRequest",
     "Tool",
     "ToolFinished",
     "ToolRegistry",
     "ToolStarted",
     "TurnDone",
+    "TurnResponse",
     "build_router",
     "build_tools",
     "run_turn",
