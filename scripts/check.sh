@@ -97,15 +97,29 @@ echo "== 示例：离线冒烟 =="
 #
 # 未安装时**明确提示**而非静默跳过 —— 静默跳过会让「本机没装」看起来像
 # 「检查通过」（这个项目已经吃过一次「假绿」的教训）。
+# ⚠ 陷阱：注释若以「井号紧跟 shellcheck」开头，会被它当成**指令**解析
+# （指令名非法即 SC1072/SC1073 报错）。本节第一版就踩了 —— 在注释里提到这个
+# 工具时，别让那个词落在注释的最前面。
 echo "== 脚本：shell 静态分析 (shellcheck) =="
+# 探测顺序：PATH → `$PY` 同级脚本目录 → 项目自带解释器。
+#
+# 为什么不能只靠 PATH：实测本机 `command -v shellcheck` **找不到**已装好的它
+# （pip 把二进制放在 .tools/python/Scripts/，而该目录不在 Git Bash 的 PATH 上）。
+# 所以按 venv 布局从 `$PY` 反推脚本目录（Windows 是 `Scripts/`，Unix 是 `bin/`）——
+# 这样「pip 装在某个解释器里、但该目录不在 PATH」也能被发现（venv 未激活时即如此）。
 SHELLCHECK=""
-if command -v shellcheck >/dev/null 2>&1; then
-  SHELLCHECK="shellcheck"
-elif [[ -x "$ROOT/.tools/python/Scripts/shellcheck.exe" ]]; then
-  SHELLCHECK="$ROOT/.tools/python/Scripts/shellcheck.exe"
-elif [[ -x "$ROOT/.tools/python/bin/shellcheck" ]]; then
-  SHELLCHECK="$ROOT/.tools/python/bin/shellcheck"
-fi
+for candidate in \
+  "$(command -v shellcheck 2>/dev/null || true)" \
+  "$(dirname "$PY")/Scripts/shellcheck.exe" \
+  "$(dirname "$PY")/bin/shellcheck" \
+  "$ROOT/.tools/python/Scripts/shellcheck.exe" \
+  "$ROOT/.tools/python/bin/shellcheck"
+do
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    SHELLCHECK="$candidate"
+    break
+  fi
+done
 
 if [[ -n "$SHELLCHECK" ]]; then
   # 归一化到临时目录（而不是 stdin），让报错里的文件名仍可读、可点击。
@@ -117,7 +131,9 @@ if [[ -n "$SHELLCHECK" ]]; then
   done
   "$SHELLCHECK" -s bash "$SHELLCHECK_TMP"/*.sh
 else
-  echo "  ⚠ 未安装 shellcheck，已跳过此项。安装：$PY -m pip install shellcheck-py"
+  echo "  ⚠ 未安装 shellcheck，已跳过此项（不是通过 —— 是没查）。"
+  echo "    安装：$PY -m pip install --index-url https://pypi.org/simple shellcheck-py"
+  echo "    （必须指定官方索引：清华镜像未收录该包的 win_amd64 wheel）"
 fi
 
 echo "== 脚本：shell 语法检查 (bash -n) =="

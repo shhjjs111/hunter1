@@ -81,10 +81,18 @@ npm run build    # 产出 dist/（交付形态由后端服务它）
 
 ```bash
 ./.tools/python/python.exe -m pip install --index-url https://pypi.org/simple shellcheck-py
-# 装完即被 check.sh 自动发现（.tools/python/Scripts/shellcheck.exe）
 ```
 
-> 为什么必须走官方 PyPI 索引：清华镜像未收录 `shellcheck-py` 的 win_amd64 wheel。
+`check.sh` 的探测顺序是 PATH → **`$PY` 同级脚本目录**（Windows `Scripts/`、
+Unix `bin/`）→ 项目自带解释器。第二项是必需的：实测 pip 把 shellcheck 放进
+`.tools/python/Scripts/`，而该目录**不在** Git Bash 的 PATH 上，只靠 PATH 会
+「装了却报未装」。
+
+> ⚠️ **必须指定官方 PyPI 索引**。清华镜像未收录 `shellcheck-py` 的 win_amd64
+> wheel；而本机与 CI 的 `PIP_INDEX_URL` 都指向镜像。这也是它**刻意不写进
+> `pyproject.toml` 的 `[dev]`** 的原因 —— 写进去会让 `pip install -e ".[dev]"`
+> 在镜像环境下直接失败（一条可选检查项不该拖垮主安装路径）。
+> CI 侧不走 pip，用 ubuntu 官方包的 shellcheck（见 `.github/workflows/ci.yml`）。
 
 **提交前必须全绿。** 详见 `.github/workflows/ci.yml`。
 
