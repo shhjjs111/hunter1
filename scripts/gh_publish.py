@@ -439,6 +439,15 @@ def git(*args: str, token: str, cwd: Path = ROOT) -> str:
     """跑一条 git 命令，凭据经 GIT_ASKPASS 临时脚本提供（不落盘、不进 argv）。
 
     令牌写成 `x-access-token` 的用户名 + 令牌作密码 —— GitHub 对 PAT 的约定。
+
+    安全取舍（已评估，有意不修）：
+    - 令牌**本体**不落盘 —— askpass 脚本只是读环境变量，不写令牌；令牌也不进
+      remote URL、不进 argv（argv 会被 `ps` 看到）。这三点是刻意设计。
+    - 脚本落在 TEMP，且调了 `chmod 0o700` —— 但 Windows 的 NTFS 不认 POSIX
+      权限位，这一句在本平台**无实际效果**。同机其他用户在脚本存在的窗口期内
+      理论上可读它；因脚本不含令牌，泄露面仅是「一个读 env 的小 shell 脚本」。
+      单用户桌面工具下接受。若将来要跑在多用户机器上，应改为把令牌经
+      `git credential` helper 协议传递，而不是靠文件权限兜底。
     """
     askpass = Path(os.environ.get("TEMP", "/tmp")) / f".gh_askpass_{os.getpid()}.sh"
     try:
