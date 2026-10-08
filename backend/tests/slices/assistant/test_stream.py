@@ -124,6 +124,32 @@ def _run(llm: StreamingLLM, **kwargs: Any) -> list[Any]:
     return list(run_turn_stream(llm=llm, registry=REGISTRY, **kwargs))
 
 
+class TestIncompleteStream:
+    """端口契约：一次 `stream_with_tools` 必须以 `StreamComplete` 收尾。
+
+    拿不到就报错，而不是拿半截内容继续 —— 否则「模型只说了半句」会变成一条看起来
+    正常的回答，用户与上游都无从发现。
+
+    实测：把服务层那两个守卫（`if completion is None:` 与它下面的 `raise`）改成
+    `if False:` / `pass`，**全部 assistant 用例照样绿** —— 因为假 provider 一律正常
+    收尾，这条路径从没被走到；真走到了也只是 AttributeError（`completion.model`），
+    而路由层只看 `LLMError`。
+    """
+
+    def test_text_without_completion_is_an_error(self) -> None:
+        llm = StreamingLLM([[TextDelta("我说了半句")]])  # 只有增量，没有 StreamComplete
+        with pytest.raises(LLMError) as excinfo:
+            _run(llm, messages=[Message(Role.USER, "你好")])
+        assert "stream_incomplete" in str(excinfo.value)
+
+    def test_empty_stream_is_an_error_too(self) -> None:
+        """一个事件都不给（provider 直接结束）同样是契约违背。"""
+        llm = StreamingLLM([[]])
+        with pytest.raises(LLMError) as excinfo:
+            _run(llm, messages=[Message(Role.USER, "你好")])
+        assert "stream_incomplete" in str(excinfo.value)
+
+
 class TestTextStreaming:
     def test_deltas_are_yielded_as_they_arrive(self) -> None:
         llm = StreamingLLM([_stream_text("你", "好", "！")])
