@@ -62,6 +62,12 @@ echo "  ✓ 工作区干净"
 # 跨平台），且这个缺口永远不会被本机门禁发现。
 ARTIFACT_NAME="$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import artifact_name; print(artifact_name())")"
 EXE_REL="$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import exe_relative_path; print(exe_relative_path())")"
+# 清单里的 `platform` 字段必须与产物名用**同一个**词汇（两者都取自 artifact.py）：
+# 写死 `win32=` 时，Linux 上打出的包会被声明成 win32 平台 —— 不报错、不告警，
+# 而 Linux 用户的更新端按 `sys.platform`（`linux`）查清单，永远查到「没有本平台
+# 产物，跳过」：**所有非 Windows 用户的更新链静默断掉**。这与产物名写死是同一类
+# 缺口，只是躺在清单字段上。
+PLATFORM_KEY="$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import platform_key; print(platform_key())")"
 ZIP="dist/$ARTIFACT_NAME"
 EXE="dist/$EXE_REL"
 for f in "$ZIP" "$EXE"; do
@@ -94,7 +100,7 @@ TMP_MANIFEST="dist/.manifest.tmp.json"
 trap 'rm -f "$TMP_MANIFEST"' EXIT
 
 "$PY" scripts/make_manifest.py \
-  --asset "win32=$ZIP" \
+  --asset "$PLATFORM_KEY=$ZIP" \
   --url-base "$URL_BASE" \
   --out "$TMP_MANIFEST"
 
