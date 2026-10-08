@@ -51,6 +51,17 @@ class TestNormalizeDetailUrl:
         assert normalize_detail_url("") == ""
         assert normalize_detail_url("   ") == ""
 
+    def test_hash_route_fragment_is_kept(self) -> None:
+        """`#/job/123`、`#!/job/123` 是 SPA 的岗位身份 —— 丢了它整页归一成同一个地址。"""
+        assert normalize_detail_url("https://a.com/jobs#/job/123") == "https://a.com/jobs#/job/123"
+        assert (
+            normalize_detail_url("https://a.com/jobs#!/job/123") == "https://a.com/jobs#!/job/123"
+        )
+
+    def test_plain_fragment_is_still_dropped(self) -> None:
+        """普通锚点（#section）仍是噪声，不是路由。"""
+        assert normalize_detail_url("https://a.com/jobs/1#section") == "https://a.com/jobs/1"
+
     @pytest.mark.parametrize(
         "raw",
         [

@@ -121,6 +121,54 @@ class TestParseListPage:
         jobs = parse_list_page(html, _spec(), company="C", page_url="https://a.com/")
         assert len(jobs) == 1
 
+    def test_placeholder_links_do_not_swallow_real_jobs(self) -> None:
+        """`href="#"` / `javascript:void(0)` 的条目不能把同页真岗位一起吞掉。
+
+        归一化后它们分别是「列表页自己」与空串 —— 原先校验只看原始 href 非空，
+        于是这些条目共享同一个归一化结果：首条被当成一条岗位（链接还指向列表页），
+        其余全部按「同页重复」丢掉。真实后果：整页岗位只入库 1 条，而且 fetched=1
+        看起来还挺正常。
+        """
+        html = """
+        <ul class="job-list">
+          <li class="job-item"><a class="job-title" href="#">回到顶部</a></li>
+          <li class="job-item"><a class="job-title" href="javascript:void(0)">甲岗位</a></li>
+          <li class="job-item"><a class="job-title" href="/jobs/1001">乙岗位</a></li>
+          <li class="job-item"><a class="job-title" href="javascript:void(0)">丙岗位</a></li>
+          <li class="job-item"><a class="job-title" href="/jobs/1002">丁岗位</a></li>
+          <li class="job-item"><a class="job-title" href="#">回到顶部</a></li>
+        </ul>
+        """
+        jobs = parse_list_page(html, _spec(), company="C", page_url="https://a.com/jobs")
+
+        assert [job.title for job in jobs] == ["乙岗位", "丁岗位"]
+        assert [job.detail_url for job in jobs] == [
+            "https://a.com/jobs/1001",
+            "https://a.com/jobs/1002",
+        ]
+
+    def test_hash_routed_links_stay_distinct(self) -> None:
+        """hash 路由（`#/job/123`）的整页岗位必须各留一条。
+
+        fragment 就是它们的岗位身份 —— 归一化时丢掉 fragment 会让整页归一成同一个
+        地址（并共享同一个 `JobIdentity`），除首条外全被当成重复丢掉。
+        """
+        html = """
+        <ul class="job-list">
+          <li class="job-item"><a class="job-title" href="#/job/1">甲岗位</a></li>
+          <li class="job-item"><a class="job-title" href="#/job/2">乙岗位</a></li>
+          <li class="job-item"><a class="job-title" href="#/job/3">丙岗位</a></li>
+        </ul>
+        """
+        jobs = parse_list_page(html, _spec(), company="C", page_url="https://a.com/jobs")
+
+        assert [job.title for job in jobs] == ["甲岗位", "乙岗位", "丙岗位"]
+        assert [job.detail_url for job in jobs] == [
+            "https://a.com/jobs#/job/1",
+            "https://a.com/jobs#/job/2",
+            "https://a.com/jobs#/job/3",
+        ]
+
 
 class TestFetch:
     def test_single_page(self) -> None:

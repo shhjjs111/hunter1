@@ -60,7 +60,9 @@ def normalize_detail_url(url: str) -> str:
     2. 非 http(s) 的「链接」判空 —— 真实站点里列表项常挂 `javascript:void(0)`，
        真链接由 JS 绑定；这类不是可用的详情页地址
     3. scheme / host 小写，path 大小写保留（有些站点 path 大小写敏感）
-    4. 去掉 fragment
+    4. 去掉 fragment —— **除非它是 hash 路由**（`#/job/123`、`#!/job/123`）：
+       SPA 站点的岗位身份就在 fragment 里，丢掉它会让整页岗位归一成同一个地址
+       （也是同一个 `JobIdentity` → 除首条外全部被当成重复丢掉，且链接指向列表页）。
     5. 去掉跟踪类查询参数，保留其余（岗位 id 常在 query 里，不能一刀切删）
     6. 去掉末尾斜杠
     """
@@ -87,9 +89,19 @@ def normalize_detail_url(url: str) -> str:
             parts.netloc.lower(),
             path,
             urlencode(query_pairs),
-            "",  # 丢弃 fragment
+            _kept_fragment(parts.fragment),
         )
     )
+
+
+def _kept_fragment(fragment: str) -> str:
+    """fragment 是否该保留（hash 路由）—— 返回交给 `urlunsplit` 的那一段。
+
+    ⚠ 不带前导 `#`：`urlunsplit` 自己会加，多一个就变成 `##/job/1`。
+    """
+    if fragment.startswith("/") or fragment.startswith("!/"):
+        return fragment
+    return ""
 
 
 def _rewrite_intermediary(url: str) -> str:

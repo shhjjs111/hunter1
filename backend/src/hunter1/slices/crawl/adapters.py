@@ -133,7 +133,15 @@ def parse_list_page(
         if not href:
             continue
 
+        # 校验必须在**归一化之后**：`href="#"` 归一后是列表页自己、
+        # `javascript:void(0)` 归一后是空串 —— 两者都不是详情页地址。原先只检查
+        # 原始 href 非空，于是这些条目共享同一个归一化结果：除首条外全被当成
+        # 「同页重复」丢掉（整页岗位只入库一条，而且那一条的链接指向列表页）。
         detail_url = normalize_detail_url(urljoin(page_url, href))
+        if not detail_url or detail_url == normalize_detail_url(page_url):
+            # 跳过时**不能**把它算进 seen：它代表「这个条目没有可用链接」，
+            # 而不是「这个链接见过了」。写进 seen 会把后续真正不同的链接一起吞掉。
+            continue
         if detail_url in seen:
             continue
         seen.add(detail_url)
