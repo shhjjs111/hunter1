@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import shutil
 from pathlib import Path
@@ -22,6 +23,20 @@ from pydantic import ValidationError
 
 from hunter1.platform.update.ports import ProgressCallback
 from hunter1.platform.update.rules import ReleaseAsset, ReleaseManifest
+
+
+def _discard(part: Path) -> None:
+    """尽力删掉半包；**删不掉也不许影响正在报的那个错**。
+
+    这是实测踩出来的：父路径是个普通文件时，`unlink` 在不同平台上抛的异常不同 ——
+    Windows 抛 `FileNotFoundError`（被 `missing_ok=True` 吞掉），Linux 抛
+    `NotADirectoryError`（`missing_ok` **不**吞），后者会从 `except` 处理器里
+    逃出去、把真正的 `DownloadError("write_failed")` 顶掉，调用方看到的是一个
+    与「下载失败」毫无关系的 `NotADirectoryError`。
+    """
+    with contextlib.suppress(OSError):
+        part.unlink(missing_ok=True)
+
 
 _CHUNK = 1024 * 1024
 
@@ -79,25 +94,31 @@ def download_verified(
         # 清单里的 URL 非法（坏端口、坏 IDNA 主机名…）。`InvalidURL` 的 mro 是
         # `InvalidURL → Exception` —— **不是** `HTTPError`，只 catch HTTPError 会让
         # 它裸穿到调用方（CLI 只捕 DownloadError / ValueError）→ 裸 traceback。
-        part.unlink(missing_ok=True)
+        _discard(part)
         raise DownloadError("invalid_url", f"{url}：{exc}") from exc
     except httpx.HTTPError as exc:
-        part.unlink(missing_ok=True)
+        _discard(part)
         raise DownloadError("transport_failed", str(exc)) from exc
     except DownloadError:
-        part.unlink(missing_ok=True)
+        _discard(part)
         raise
     except OSError as exc:
         # 建目录失败与写盘失败同属「这台机器上落不了位」
-        part.unlink(missing_ok=True)
+        _discard(part)
         raise DownloadError("write_failed", str(exc)) from exc
 
     if digest.hexdigest() != expected:
-        part.unlink(missing_ok=True)  # 半个坏包比没有包更危险
+        _discard(part)  # 半个坏包比没有包更危险
         raise DownloadError("checksum_mismatch", url)
 
-    # 校验通过才落到目标位置 —— 原子改名，避免出现"改到一半"的状态
-    shutil.move(str(part), str(dest))
+    # 校验通过才落到目标位置 —— 原子改名，避免出现"改到一半"的状态。
+    # 改名同样可能失败（目标被别的进程占着、跨设备、父路径是个文件…），
+    # 而且它在上面那个 try **之外** —— 不单独兜住就又是一次裸 OSError 逃逸。
+    try:
+        shutil.move(str(part), str(dest))
+    except OSError as exc:
+        _discard(part)
+        raise DownloadError("write_failed", f"{dest}：{exc}") from exc
     return dest
 
 

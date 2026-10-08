@@ -116,24 +116,36 @@ def _is_llm_configured(context: AppContext) -> bool:
     return settings is not None and settings.is_configured
 
 
-def _port_is_free(host: str, port: int) -> bool:
+def _port_problem(host: str, port: int) -> str | None:
     """能否在 (host, port) 上绑定 —— 宣布「已启动」、开浏览器之前先探一次。
 
     这是**预检**（bind 一次即关），真正的绑定仍由 uvicorn 完成。要解决的是最常见
     的那种失败：端口被占时先打印一句「已启动」，还开一个指向死服务的浏览器页，
     用户得自己从 uvicorn 的报错里反推发生了什么。
 
+    返回 `None` 表示可用；否则返回一句**给人看的原因**。
+
+    ⚠ 必须区分「被别人占着」与「本进程无权绑定」：Linux 上非 root 绑 <1024 的端口
+    会抛 `PermissionError`（同样是 `OSError`），把它一律说成「端口已被占用」会让人
+    去杀一个根本不存在的进程（CI 上就是这么暴露的：测试用 `--port 1`，Windows 上
+    能绑、Linux 上不行）。
+
     预检与真正绑定之间仍有一次 TOCTOU 窗口 —— 但那是毫秒级，且真撞上时 uvicorn
     自己会报错退出，不会留下错误的状态说明。
     """
+    import errno
     import socket
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
             probe.bind((host, port))
-        except OSError:
-            return False
-    return True
+        except PermissionError:
+            return f"端口 {port} 无权绑定（1024 以下是特权端口，需要管理员/root 权限）。"
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                return f"端口 {port} 无权绑定（权限不足）。"
+            return f"端口 {port} 已被占用：换一个 --port，或先停掉占用它的进程。"
+    return None
 
 
 def _serve(args: argparse.Namespace) -> int:
@@ -149,8 +161,9 @@ def _serve(args: argparse.Namespace) -> int:
     app = create_app(context)
     url = f"http://{args.host}:{args.port}"
 
-    if not _port_is_free(args.host, args.port):
-        print(f"端口 {args.port} 已被占用：换一个 --port，或先停掉占用它的进程。")
+    port_problem = _port_problem(args.host, args.port)
+    if port_problem is not None:
+        print(port_problem)
         context.db.dispose()
         return 2
 

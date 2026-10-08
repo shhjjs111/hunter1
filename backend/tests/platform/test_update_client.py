@@ -151,6 +151,57 @@ class TestDownloadVerified:
             )
         assert excinfo.value.code == "write_failed"
 
+    def test_cleanup_failure_does_not_mask_the_real_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """清理半包时 `unlink` 自己抛错，**不许顶掉**正在报的那个错误。
+
+        实测（Linux）：父路径是普通文件时 `unlink` 抛 `NotADirectoryError`，而
+        `missing_ok=True` **不**吞它 —— 于是逃出去的是 `NotADirectoryError`，
+        调用方（CLI 只认 DownloadError）拿到一个与「下载失败」毫无关系的异常。
+        Windows 抛的是 `FileNotFoundError`（被吞），所以这个 bug 只在 Linux 可见 ——
+        这条用例把 `unlink` 打进错误状态，在任何平台都能钉住它。
+        """
+        blocker = tmp_path / "afile"
+        blocker.write_bytes(b"x")
+
+        def denied(*_args: object, **_kwargs: object) -> None:
+            raise NotADirectoryError(20, "Not a directory")
+
+        monkeypatch.setattr(Path, "unlink", denied)
+
+        with _http(_blob()) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client, "https://example.com/a.zip", blocker / "a.zip", expected_sha256=PAYLOAD_SHA
+            )
+        assert excinfo.value.code == "write_failed"
+
+    def test_failed_final_move_is_wrapped_not_leaked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """校验通过后的改名也要是 DownloadError。
+
+        改名（`shutil.move`）在下载的 try **之外** —— 目标被别的进程占着、
+        跨设备、父路径是文件时它都会抛 `OSError`，不单独兜住就又是一次裸异常逃逸，
+        而调用方的错误词汇表里只有 `DownloadError`。
+        """
+        import hunter1.platform.update.client as client_module
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError(18, "Invalid cross-device link")
+
+        monkeypatch.setattr(client_module.shutil, "move", boom)
+        dest = tmp_path / "a.zip"
+
+        with _http(_blob()) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client, "https://example.com/a.zip", dest, expected_sha256=PAYLOAD_SHA
+            )
+
+        assert excinfo.value.code == "write_failed"
+        assert not dest.exists()
+        assert not dest.with_name("a.zip.part").exists(), "改名失败也不能留半包"
+
     def test_overwrites_existing_file_on_success(self, tmp_path: Path) -> None:
         target = tmp_path / "a.zip"
         target.write_bytes(b"stale")

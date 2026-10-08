@@ -132,6 +132,16 @@ class TestServeReleasesDatabase:
     `KeyboardInterrupt`，正常返回路径根本走不到 —— 所以清理必须放在 `finally`。
     """
 
+    def _free_port(self) -> int:
+        """借一个空闲端口号：`--port 1` 在 Linux 上绑不了（特权端口，非 root 报
+        EACCES），于是 `_serve` 在预检处就 return 2、根本走不到 uvicorn —— 测试会以
+        「DID NOT RAISE」的形式失败，看起来像清理没做（CI 上就是这么暴露的）。"""
+        import socket
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            return int(probe.getsockname()[1])
+
     def _served(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: BaseException):
         import uvicorn
 
@@ -140,7 +150,10 @@ class TestServeReleasesDatabase:
 
         monkeypatch.setattr(uvicorn, "run", boom)
         db_file = tmp_path / "data" / "h.db"
-        return db_file, lambda: main(["serve", "--db", str(db_file), "--no-browser", "--port", "1"])
+        port = str(self._free_port())
+        return db_file, lambda: main(
+            ["serve", "--db", str(db_file), "--no-browser", "--port", port]
+        )
 
     def test_interrupt_still_releases_the_database(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -423,3 +436,33 @@ class TestPortProbe:
         out = capsys.readouterr().out
         assert "端口" in out and str(port) in out
         assert "已启动" not in out, "还没绑上就不该宣布启动成功"
+
+    def test_privileged_port_says_permission_not_occupied(self, monkeypatch) -> None:
+        """无权绑定 ≠ 已被占用。
+
+        非 root 的 Linux 上绑 <1024 的端口抛 `PermissionError`（同样是 `OSError`）——
+        一律说成「端口已被占用」会让人去杀一个根本不存在的进程。CI 上就是这么暴露的：
+        测试用 `--port 1`，Windows 上能绑、Linux 上不能。
+
+        这里用假 socket 复现，不依赖跑测试的账号有没有权限。
+        """
+        import socket as socket_module
+
+        import hunter1.cli as cli
+
+        class DeniedSocket:
+            def __enter__(self) -> DeniedSocket:
+                return self
+
+            def __exit__(self, *_exc: object) -> bool:
+                return False
+
+            def bind(self, _address: tuple[str, int]) -> None:
+                raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(socket_module, "socket", lambda *_a, **_kw: DeniedSocket())
+
+        problem = cli._port_problem("127.0.0.1", 1)
+        assert problem is not None
+        assert "无权绑定" in problem
+        assert "已被占用" not in problem
