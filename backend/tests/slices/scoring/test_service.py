@@ -14,7 +14,7 @@ import pytest
 from hunter1.domain.models import Job
 from hunter1.platform.llm import LLMError, LLMResponse
 from hunter1.slices.scoring.models import CandidateProfile, ScoreCard
-from hunter1.slices.scoring.service import score_job
+from hunter1.slices.scoring.service import ScoringError, score_job
 
 PROFILE = CandidateProfile(
     keywords=["AI产品经理", "大模型产品经理"],
@@ -84,6 +84,34 @@ class TestHappyPath:
         schema = llm.calls[0]["schema"]
         assert "score" in schema["properties"]
         assert "score" in schema["required"]
+
+
+class TestMalformedModelOutput:
+    """模型回复不是「带 score 的 JSON 对象」时，必须就地翻成 `ScoringError`。
+
+    三种畸形形态，**此前只有第三种有覆盖**（用例里的 `FakeLLM` 永远 `json.dumps`
+    一下，所以前两种根本走不到 —— 变异扫描把两个 `raise` 换成 `pass` 全都存活）：
+
+    1. 根本不是 JSON（`json.loads` 抛 ValueError）→ 若不翻，`payload` 未绑定，
+       冒出去的是 `NameError`，路由层看到的是「实现 bug」（500）；
+    2. 是 JSON 但不是对象（`[1,2]` / `42` / `"88"`）→ `.get` 会 AttributeError；
+    3. 是对象但没有可用 score（已有覆盖）。
+
+    前两种的后果都是**用户在界面上看到 500**，而正确表现是可读的 422。
+    """
+
+    def test_non_json_text_is_a_scoring_error(self) -> None:
+        llm = FakeLLM("模型说：这个岗位 88 分")  # 不是 JSON
+        with pytest.raises(ScoringError) as excinfo:
+            score_job(job=_job(), profile=PROFILE, llm=llm)
+        assert "non-JSON" in str(excinfo.value)
+
+    @pytest.mark.parametrize("payload", ["[1, 2]", "42", '"88"'])
+    def test_json_that_is_not_an_object_is_a_scoring_error(self, payload: str) -> None:
+        llm = FakeLLM(payload)
+        with pytest.raises(ScoringError) as excinfo:
+            score_job(job=_job(), profile=PROFILE, llm=llm)
+        assert "non-object" in str(excinfo.value)
 
 
 class TestCompanyField:

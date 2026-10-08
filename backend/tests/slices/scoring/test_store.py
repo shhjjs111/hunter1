@@ -11,7 +11,8 @@ import pytest
 
 from hunter1.domain.models import Job
 from hunter1.platform.db import Database
-from hunter1.slices.scoring.store import ScoreStore
+from hunter1.slices.scoring.models import CandidateProfile
+from hunter1.slices.scoring.store import PROFILE_KEY, ScoreStore
 
 JOB_ID = "b" * 32
 
@@ -87,3 +88,32 @@ class TestScoreIsolation:
         db.jobs().upsert_facts(stale)
 
         assert db.jobs().get(JOB_ID).match_score == 80  # type: ignore[union-attr]
+
+
+class TestProfileLoadDistinguishesStates:
+    """「还没配过」与「存坏了」必须能分辨 —— 这是本模块文档给的承诺。
+
+    实测：把 `load_profile` 里 `if raw is None: return None` 整段去掉（未配置时直接
+    `CandidateProfile.model_validate(None)` → ValidationError → 抛「画像不合法」），
+    全部 scoring 用例照样绿 —— 因为路由的 GET 对 ValueError 也是 200 + `profile=null`，
+    只差一个 `warning` 字段，而没有用例断言那个字段。后果是**全新安装的用户第一次
+    打开配置页，看到的是「已保存的画像不可用，请重新填写」**。
+    """
+
+    def test_never_configured_is_none_not_an_error(self, store: ScoreStore) -> None:
+        assert store.load_profile() is None
+
+    def test_saved_profile_round_trips(self, store: ScoreStore) -> None:
+        store.save_profile(CandidateProfile(keywords=["AI产品经理"], summary="三年经验"))
+        loaded = store.load_profile()
+        assert loaded is not None
+        assert loaded.keywords == ["AI产品经理"] and loaded.summary == "三年经验"
+
+    def test_corrupted_profile_raises_with_a_readable_reason(
+        self, store: ScoreStore, db: Database
+    ) -> None:
+        """存坏了要说**不可用**（而不是静默当作没配过 —— 那会掩盖损坏）。"""
+        db.settings().set_raw(PROFILE_KEY, {"keywords": "不是列表"})
+        with pytest.raises(ValueError) as excinfo:
+            store.load_profile()
+        assert "画像" in str(excinfo.value)

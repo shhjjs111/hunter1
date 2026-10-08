@@ -212,11 +212,18 @@ class TestProfileEndpoints:
         return TestClient(app)
 
     def test_starts_unconfigured_not_404(self, db: Database) -> None:
-        """未配置是**初始状态**，用 200 + null 表达；404 会让人以为是路由错了。"""
+        """未配置是**初始状态**，用 200 + null 表达；404 会让人以为是路由错了。
+
+        `warning` 必须是空的：它专用来报「已存的画像**坏了**」，而全新安装带上它
+        等于告诉用户「你存过的东西坏了」—— 那正是 store 文档要分辨的两个状态
+        （实测：把 `load_profile` 的「未配置返回 None」去掉，用例照样绿，
+        因为只断言了 profile 是 null）。
+        """
         with self._client(db, FakeLLM()) as client:
             response = client.get("/api/scoring/profile")
             assert response.status_code == 200
             assert response.json()["profile"] is None
+            assert response.json()["warning"] is None
 
     def test_save_then_read_back(self, db: Database) -> None:
         with self._client(db, FakeLLM()) as client:
