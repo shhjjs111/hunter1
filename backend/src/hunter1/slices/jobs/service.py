@@ -50,18 +50,21 @@ def list_jobs(store: JobStore, *, keyword: str = "", page: int = 1, page_size: i
     )
 
 
-def find_job(store: JobStore, job_id: str) -> tuple[Job | None, int]:
+def find_job(store: JobStore, job_id: str, *, limit: int = 20) -> tuple[Job | None, int]:
     """按 id（或唯一前缀）找岗位。返回 (命中, 前缀歧义数)。
 
     - 全 id 命中 → (job, 0)
     - 前缀唯一命中 → (job, 0)
     - 前缀多命中 → (None, n)（调用方据此提示「给更长的 id」）
     - 未命中 → (None, 0)
+
+    `n` 是**最多** `limit` 的计数（前缀查找带 limit，见 `get_by_prefix`）——
+    提示语里说「至少 n 条」即可，调用方不需要精确总数。
     """
     job = store.get(job_id)
     if job is not None:
         return job, 0
-    candidates = store.get_by_prefix(job_id)
+    candidates = store.get_by_prefix(job_id, limit=limit)
     if len(candidates) == 1:
         return candidates[0], 0
     if len(candidates) > 1:

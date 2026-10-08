@@ -27,8 +27,8 @@ class JobStore:
     def get(self, job_id: str) -> Job | None:
         return self._db.jobs().get(job_id)
 
-    def get_by_prefix(self, prefix: str) -> list[Job]:
-        return self._db.jobs().get_by_prefix(prefix)
+    def get_by_prefix(self, prefix: str, *, limit: int = 20) -> list[Job]:
+        return self._db.jobs().get_by_prefix(prefix, limit=limit)
 
     def page(self, *, keyword: str, limit: int, offset: int) -> list[Job]:
         """一页岗位（`keyword` 为空 = 列最近）。"""

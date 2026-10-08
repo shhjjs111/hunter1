@@ -164,6 +164,22 @@ class TestJobs:
 
         assert [j.id for j in repo.get_by_prefix("b")] == ["b0", "b1", "b2"]
 
+    def test_get_by_prefix_respects_the_limit(self, db: Database) -> None:
+        """前缀查找必须带 LIMIT：单字符前缀在大库上会命中整表。
+
+        调用方只用它「找到唯一那条 / 判断有歧义」，全量取回 + 全量实例化纯属浪费
+        （模型给一个 `j` 就要把整个岗位库反序列化一遍）。
+        """
+        repo = db.jobs()
+        same = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+        for index in range(5):
+            repo.upsert(_job(id=f"b{index}", last_seen_at=same))
+
+        assert len(repo.get_by_prefix("b", limit=2)) == 2
+        # 顺序仍由 _JOB_ORDER 决定（取前 N 条也要稳定，否则歧义提示会飘）
+        assert [j.id for j in repo.get_by_prefix("b", limit=2)] == ["b0", "b1"]
+        assert len(repo.get_by_prefix("b")) == 5, "默认上限不影响小库"
+
     def test_data_survives_reopen(self, tmp_path: Path) -> None:
         """持久化必须跨连接存续（不是内存态）。"""
         path = tmp_path / "persist.db"

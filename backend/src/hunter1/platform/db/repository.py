@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 
 from hunter1.domain.models import CaptureStatus, Company, Job
 from hunter1.platform.db.enums import restore_enum
+from hunter1.platform.db.like import escape_like
 from hunter1.platform.db.schema import CompanyRow, JobRow
 from hunter1.platform.text import normalize_job_title
 
@@ -79,13 +81,13 @@ class SqliteCompanyRepository:
 
 
 def _escape_like(text: str) -> str:
-    """转义 LIKE 通配符。
+    """转义 LIKE 通配符（历史名，实现已归位到 `platform/db/like.py`）。"""
+    return escape_like(text)
 
-    SQLite 的 LIKE 默认把 `%`（任意串）与 `_`（任意单字符）当通配符；标题归一化
-    不剥离标点，所以标题里含这些字符、或用户拿它们搜索时，会匹配到意料之外的行。
-    显式转义后按**字面**匹配（配合 `escape="\\\\"`）。
-    """
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+#: 前缀查找一次最多取多少行。调用方只用它「找到唯一那条 / 判断有歧义」，
+#: 取再多也没有意义（单字符前缀在大库上能命中整表）。
+PREFIX_MATCH_LIMIT = 20
 
 
 def _assign_facts(row: JobRow, job: Job) -> None:
@@ -163,18 +165,35 @@ class SqliteJobRepository:
             _assign_facts(row, job)
             session.commit()
 
-    def set_match_score(self, job_id: str, score: int) -> bool:
-        """只更新 match_score 一列；返回是否有行被更新（False = 岗位不存在）。
+    def set_match_score(
+        self,
+        job_id: str,
+        score: int,
+        *,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        scored_at: datetime | None = None,
+    ) -> bool:
+        """只更新评分相关的几列；返回是否有行被更新（False = 岗位不存在）。
 
         ORM 只把**变更过的属性**写进 UPDATE，所以这里读一行再改属性，落到 SQL 仍是
-        单列 `UPDATE ... SET match_score=? WHERE id=?` —— 不会像整行 upsert 那样把
-        抓取线程同时更新的标题/城市/JD 回滚掉。
+        定向 `UPDATE ... SET match_score=?, score_model=?, ... WHERE id=?` ——
+        不会像整行 upsert 那样把抓取线程同时更新的标题/城市/JD 回滚掉。
+
+        溯源（model / prompt_version / scored_at）与分数同一次写入：分开写会出现
+        「分数是新的、溯源是旧的」这种半截状态，而它的用途恰恰是回溯。
         """
         with self._db.session() as session:
             row = session.get(JobRow, job_id)
             if row is None:
                 return False
             row.match_score = score
+            if model is not None:
+                row.score_model = model
+            if prompt_version is not None:
+                row.score_prompt_version = prompt_version
+            if scored_at is not None:
+                row.scored_at = scored_at
             session.commit()
             return True
 
@@ -183,21 +202,26 @@ class SqliteJobRepository:
             row = session.get(JobRow, job_id)
             return _to_job(row) if row is not None else None
 
-    def get_by_prefix(self, prefix: str) -> list[Job]:
+    def get_by_prefix(self, prefix: str, *, limit: int = PREFIX_MATCH_LIMIT) -> list[Job]:
         """按 id 前缀查找（助手常只看到前 8 位 id）。
 
         下推到 SQL 的前缀匹配 —— 不在内存里扫「最近 N 条」碰运气：
         那种做法既随库增长变慢，也会漏掉窗口之外的真实匹配。
         空前缀返回空：全表不是「一个前缀」。
+
+        `limit` **必须有**：单字符前缀（模型可能只给一位）在大库上会命中整表，
+        而这里只用来「找到唯一那条 / 判断有歧义」，全量实例化纯属浪费。
+        调用方据此把「多了」说成「至少 N 条」（见 `find_job`）。
         """
         if not prefix:
             return []
-        escaped = _escape_like(prefix)
+        escaped = escape_like(prefix)
         with self._db.session() as session:
             statement = (
                 select(JobRow)
                 .where(JobRow.id.like(f"{escaped}%", escape="\\"))
                 .order_by(*_JOB_ORDER)
+                .limit(limit)
             )
             return [_to_job(row) for row in session.scalars(statement)]
 

@@ -201,6 +201,33 @@ class TestApplicationQueryTool:
         assert result.ok
         assert "还没有投递" in result.content
 
+    def test_accepts_the_eight_char_prefix_the_search_tool_shows(self, jobs_db: Database) -> None:
+        """`search_jobs` 展示的是 8 位前缀 id —— 模型照着传，投递查询必须认得。
+
+        修复前只做精确匹配：模型传展示格式 → 「没有查到投递记录」（假否定），
+        用户看到助手说「你没投过这家」。
+        """
+        self._seed(jobs_db)
+        shown_id = ("j1" + "0" * 30)[:8]  # 与 search_jobs 里 f"[{job.id[:8]}]" 同形
+        result = self._registry(jobs_db).invoke(
+            "application_query", {"job_id": shown_id}, call_id="c1"
+        )
+        assert result.ok
+        assert "AI产品经理" in result.content, result.content
+
+    def test_ambiguous_real_id_prefix_is_reported(self, jobs_db: Database) -> None:
+        """前缀命中多条投递时要提示「给更长的 id」，而不是随便挑一条。"""
+        self._seed(jobs_db)
+        second = jobs_db.jobs().get("j2" + "0" * 30)
+        assert second is not None
+        jobs_db.applications().upsert(
+            new_application(job=second, now=datetime(2026, 10, 2, tzinfo=UTC), application_id="a2")
+        )
+        result = self._registry(jobs_db).invoke("application_query", {"job_id": "j"}, call_id="c1")
+        assert result.ok
+        assert "请给更长的 id" in result.content, result.content
+        assert "2" in result.content
+
     def test_can_filter_by_job_id(self, jobs_db: Database) -> None:
         self._seed(jobs_db)
         found = self._registry(jobs_db).invoke(

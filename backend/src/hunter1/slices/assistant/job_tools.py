@@ -102,9 +102,20 @@ def build_tools(
             """查询投递记录与所处阶段。
 
             不传 job_id 时列出全部投递；传了则只看该岗位的投递情况。
+            **岗位 id 可以只给前几位**（`search_jobs` 展示的就是 8 位前缀）——
+            只做精确匹配会让模型按展示格式传参时得到「没有投递记录」这种假否定。
             """
             if job_id:
                 found = applications.by_job(job_id)
+                if not found:
+                    # 与 job_detail 同一套：精确不中再按前缀找（模型常只记得前几位 id）
+                    candidates = applications.by_job_prefix(job_id, limit=SEARCH_LIMIT_MAX)
+                    if len(candidates) > 1:
+                        return (
+                            f"岗位 id 前缀 {job_id} 有 {len(candidates)} 条投递匹配，"
+                            "请给更长的 id。"
+                        )
+                    found = candidates
                 if not found:
                     return f"没有查到岗位 {job_id} 的投递记录。"
             else:
