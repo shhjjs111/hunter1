@@ -418,10 +418,34 @@ class TestDetectBlocking:
     def test_detects_access_denied(self) -> None:
         assert detect_blocking(ACCESS_DENIED) == "access denied"
 
-    def test_markup_signal_table_is_not_empty(self) -> None:
-        """词表不能被清空 —— 清空了下面那条参数化用例会「零用例」地静默通过。"""
-        assert len(BLOCK_MARKUP_SIGNALS) >= 5
-        assert len(BLOCK_TITLE_SIGNALS) >= 5
+    def test_signal_tables_cover_the_known_vendors(self) -> None:
+        """词表不能被**删空**，也不能被**删项** —— 下面那条参数化用例只覆盖表里剩下的，
+        少一个信号它照样全绿（线上表现为「抓到 0 条」而不是报错）。
+
+        用 `>=` 超集断言：**加**信号不打扰（新型挑战页随时会冒出来），
+        **删/改**任何一个已覆盖的信号立刻变红。
+        """
+        assert set(BLOCK_MARKUP_SIGNALS) >= {
+            "challenge-platform",
+            "cf-challenge",
+            "cf_chl_opt",
+            "geetest",
+            "/verify-slider",
+            "grecaptcha",
+            "hcaptcha",
+        }
+        assert set(BLOCK_TITLE_SIGNALS) >= {
+            "安全验证",
+            "人机验证",
+            "异常访问",
+            "访问受限",
+            "访问过于频繁",
+            "just a moment",
+            "attention required",
+            "access denied",
+            "checking your browser",
+            "enable javascript and cookies",
+        }
 
     @pytest.mark.parametrize("signal", BLOCK_MARKUP_SIGNALS)
     def test_every_markup_signal_is_detected(self, signal: str) -> None:
