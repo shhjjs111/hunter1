@@ -38,6 +38,25 @@ native_path() {
 SNAPSHOT="$ROOT/contracts/openapi.json"
 GENERATED="$ROOT/contracts/.openapi.generated.json"
 
+# 中断 / 失败也要清掉临时产物。两个临时文件在 .gitignore 里也各有一条兜底
+# （`/contracts/.openapi.generated.json`、`/frontend/src/shared/api/.schema.generated.d.ts`），
+# 但这里不能只靠 .gitignore：**漏网的是 `git status` 之外的东西** —— 生成物若被
+# 半途留下，下一次 `contracts.sh --check` 会拿它跟快照比（`mv` 前的那一步），
+# 而且 `.schema.generated.d.ts` 会被 `tsc` 当成本地声明文件读进编译。
+# 所以两道都要：trap 负责正常退出/中断，.gitignore 负责 `kill -9` 那种 trap 跑不到的情况。
+# （release.sh 与 gh_publish.py 都以「工作区干净」为硬门禁，一次 Ctrl-C 就能把发布堵死，
+# 报错还是一句笼统的「工作区有未提交改动」。）
+#
+# `TMP_TS` 只在前端分支里赋值（见文件末尾），而 trap 在脚本退出时必然执行 ——
+# `set -u` 下引用未赋值变量会直接报错，所以只能用 `${TMP_TS:-}`。
+_cleanup() {
+  rm -f "$GENERATED"
+  if [[ -n "${TMP_TS:-}" ]]; then
+    rm -f "$TMP_TS"
+  fi
+}
+trap _cleanup EXIT
+
 # 参数只认 `--check` 或「不带参数」。写错一个字符（`--chek`）原先会落进下面的
 # else 分支 —— 那分支的动作是 `mv` 覆盖**已入库的快照**：想验漂移的人反而把漂移
 # 抹平了（而且他以为自己在做只读检查）。这类「手滑即改数据」的入口必须报错。
