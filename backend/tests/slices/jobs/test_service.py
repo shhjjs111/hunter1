@@ -96,6 +96,21 @@ class TestListJobs:
         assert [job.id for job in last.items] == [FULL_C]
         assert last.has_next is False
 
+    def test_keyword_pagination_honours_offset(self, store: JobStore) -> None:
+        """**带关键词**翻页必须真的跳过前一页 —— 否则第 2 页把第 1 页再显示一遍。
+
+        实测：把 `JobStore.page` 里 `search(...)` 的 `offset` 写死成 0，全部 jobs
+        用例照样绿 —— 此前只覆盖了「不带关键词」那条分支（`repository.list`）。
+        带关键词的翻页是搜索框 + 分页器一起用时必然走到的路径。
+        """
+        first = list_jobs(store, keyword="产品经理", page=1, page_size=1)
+        assert [job.id for job in first.items] == [FULL_A]
+        assert first.has_next is True
+
+        second = list_jobs(store, keyword="产品经理", page=2, page_size=1)
+        assert [job.id for job in second.items] == [FULL_B]
+        assert second.has_next is False
+
     def test_page_is_clamped_to_max(self, store: JobStore) -> None:
         """页码上界：page=999999 必须被钳到 MAX_PAGE（防天量 OFFSET）。"""
         page = list_jobs(store, page=999_999)
