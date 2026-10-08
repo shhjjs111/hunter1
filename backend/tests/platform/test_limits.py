@@ -88,10 +88,16 @@ class TestCooldown:
         assert second_until > first_until
 
     def test_backoff_is_capped(self, clock: FakeClock) -> None:
+        """退避长到 cap 就**停在 cap**，而不是「不超过 cap」。
+
+        原先断言 `<= 4.0`：与「不冷却」重合 —— record 完全不上冷却时
+        `cooldown_remaining` 返回 0.0，`0.0 <= 4.0` 照样绿。这里钉精确值：
+        base=1.0、cap=4.0、连续 10 次 500 → 理论退避 2^9 已被夹到 cap。
+        """
         limiter = _limiter(clock, per_host=2, base=1.0, cap=4.0)
         for _ in range(10):
             limiter.record("https://a.com/x", status=500)
-        assert limiter.cooldown_remaining("a.com") <= 4.0
+        assert limiter.cooldown_remaining("a.com") == pytest.approx(4.0)
 
     def test_retry_after_header_is_honoured(self, clock: FakeClock) -> None:
         limiter = _limiter(clock, per_host=2, base=1.0, cap=60.0)
