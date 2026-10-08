@@ -77,7 +77,7 @@ export function SettingsPage() {
         >
           <Field label="Base URL" hint="任意 OpenAI 兼容端点，如 https://api.deepseek.com/v1">
             <input
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded border border-field px-3 py-2"
               value={baseUrl}
               onChange={(event) => setBaseUrlEdit(event.target.value)}
               placeholder="https://api.example.com/v1"
@@ -87,7 +87,7 @@ export function SettingsPage() {
 
           <Field label="模型">
             <input
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded border border-field px-3 py-2"
               value={model}
               onChange={(event) => setModelEdit(event.target.value)}
               placeholder="deepseek-chat"
@@ -102,7 +102,7 @@ export function SettingsPage() {
             <input
               id="api_key"
               type="password"
-              className="w-full rounded border border-slate-300 px-3 py-2"
+              className="w-full rounded border border-field px-3 py-2"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               placeholder="sk-…"
@@ -141,7 +141,7 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <p className="mt-4 max-w-2xl text-xs text-slate-500">
+      <p className="mt-4 max-w-2xl text-xs text-muted">
         密钥明文存在本地 SQLite：单机单用户场景下，系统钥匙串会引入平台特有依赖，
         与「零托管、跨平台」冲突。界面只回显掩码，日志不输出完整密钥。
       </p>
@@ -164,9 +164,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-slate-700">{label}</span>
+      <span className="mb-1 block text-sm font-medium text-ink-soft">{label}</span>
       {children}
-      {hint != null && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
+      {hint != null && <span className="mt-1 block text-xs text-muted">{hint}</span>}
     </label>
   );
 }

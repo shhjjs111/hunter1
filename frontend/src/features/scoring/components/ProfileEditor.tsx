@@ -27,7 +27,7 @@ export function ProfileEditor() {
   const save = useSaveProfile();
 
   if (profile.isLoading) {
-    return <p className="text-sm text-slate-500">正在加载画像…</p>;
+    return <p className="text-sm text-muted">正在加载画像…</p>;
   }
   if (profile.isError) {
     return <ErrorNotice message={(profile.error as Error).message} />;
@@ -39,7 +39,7 @@ export function ProfileEditor() {
   return (
     <Card className="max-w-2xl p-6">
       <h2 className="mb-1 text-lg font-medium">候选人画像</h2>
-      <p className="mb-4 text-sm text-slate-500">
+      <p className="mb-4 text-sm text-muted">
         {current
           ? "评分会拿它跟岗位对照。改了立刻生效，不必重启。"
           : "还没配画像 —— 评分要用它，配好之后就能给岗位打分了。"}
@@ -65,45 +65,45 @@ export function ProfileEditor() {
         }}
       >
         <label className="block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">目标关键词</span>
+          <span className="mb-1 block text-sm font-medium text-ink-soft">目标关键词</span>
           <textarea
             name="keywords"
             rows={3}
             defaultValue={(current?.keywords ?? []).join("\n")}
             placeholder={"一行一条，如：\nAI产品经理\n大模型应用"}
-            className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+            className="w-full rounded border border-field px-3 py-2 font-mono text-sm"
           />
-          <span className="mt-1 block text-xs text-slate-500">
+          <span className="mt-1 block text-xs text-muted">
             一行一条，最多 {MAX_KEYWORDS} 条、每条不超过 {MAX_ITEM_CHARS} 字符 ——
             它会原样进评分提示词，太长会顶掉模型额度
           </span>
         </label>
 
         <label className="block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">目标方向</span>
+          <span className="mb-1 block text-sm font-medium text-ink-soft">目标方向</span>
           <textarea
             name="directions"
             rows={2}
             defaultValue={(current?.directions ?? []).join("\n")}
             placeholder={"一行一条，如：\nAgent 产品\nLLM 应用"}
-            className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+            className="w-full rounded border border-field px-3 py-2 font-mono text-sm"
           />
-          <span className="mt-1 block text-xs text-slate-500">
+          <span className="mt-1 block text-xs text-muted">
             一行一条，最多 {MAX_DIRECTIONS} 条、每条不超过 {MAX_ITEM_CHARS} 字符
           </span>
         </label>
 
         <label className="block">
-          <span className="mb-1 block text-sm font-medium text-slate-700">背景摘要</span>
+          <span className="mb-1 block text-sm font-medium text-ink-soft">背景摘要</span>
           <textarea
             name="summary"
             rows={4}
             maxLength={MAX_SUMMARY_CHARS}
             defaultValue={current?.summary ?? ""}
             placeholder="一段话讲清你的背景与偏好，评分时会作为判断依据。"
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded border border-field px-3 py-2 text-sm"
           />
-          <span className="mt-1 block text-xs text-slate-500">最多 {MAX_SUMMARY_CHARS} 字符</span>
+          <span className="mt-1 block text-xs text-muted">最多 {MAX_SUMMARY_CHARS} 字符</span>
         </label>
 
         <div className="flex items-center gap-3 pt-2">

@@ -6,9 +6,9 @@ export type ChatItem = {
 };
 
 const ROLE_STYLE: Record<string, string> = {
-  user: "bg-slate-900 text-white",
-  assistant: "bg-white border border-slate-200",
-  tool: "bg-amber-50 border border-amber-200 text-amber-900 text-xs",
+  user: "bg-ink text-white",
+  assistant: "bg-surface border border-line",
+  tool: "bg-warning-soft border border-warning-line text-warning-strong text-xs",
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -20,7 +20,7 @@ const ROLE_LABEL: Record<string, string> = {
 
 /** 一条对话气泡（纯展示）。 */
 export function MessageBubble({ item }: { item: ChatItem }) {
-  const style = ROLE_STYLE[item.role] ?? "bg-slate-100";
+  const style = ROLE_STYLE[item.role] ?? "bg-surface-sunken";
   const isUser = item.role === "user";
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>

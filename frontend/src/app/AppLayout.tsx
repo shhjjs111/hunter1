@@ -28,10 +28,10 @@ export function AppLayout() {
   const location = useLocation();
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <aside className="shrink-0 border-b border-slate-200 bg-white md:w-48 md:border-r md:border-b-0">
+      <aside className="shrink-0 border-b border-line bg-surface md:w-48 md:border-r md:border-b-0">
         <div className="px-4 pt-3 pb-1 md:py-5">
           <h1 className="text-lg font-semibold tracking-tight">Hunter1</h1>
-          <p className="text-xs text-slate-500">求职工作台</p>
+          <p className="text-xs text-muted">求职工作台</p>
         </div>
         {/* 窄屏：横向可滚动的导航条（5 项在 390px 下也放不下，允许横滑）；
             宽屏：恢复成竖向列表。 */}
@@ -43,7 +43,7 @@ export function AppLayout() {
               end={item.end}
               className={({ isActive }) =>
                 `shrink-0 rounded px-3 py-2 text-sm whitespace-nowrap transition-colors ${
-                  isActive ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"
+                  isActive ? "bg-ink text-white" : "text-ink-soft hover:bg-surface-sunken"
                 }`
               }
             >

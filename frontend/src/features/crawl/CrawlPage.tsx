@@ -38,7 +38,7 @@ export function CrawlPage() {
           running=false，这条提示必须跟着消失（否则它会永远挂在页面上，用户以为
           自己的点击被永久拒绝了）。 */}
       {start.data && !start.data.started && running && (
-        <p className="mb-4 text-sm text-amber-700">上一轮还在跑，未启动新的。</p>
+        <p className="mb-4 text-sm text-warning">上一轮还在跑，未启动新的。</p>
       )}
       {start.isError && <ErrorNotice message={(start.error as Error).message} />}
 
@@ -46,7 +46,7 @@ export function CrawlPage() {
         // 首屏/读取失败时别渲染一张空白 Card —— 那与「跑过但一个站点都没有」
         // 看起来一样。
         <Card>
-          <p className="px-4 py-6 text-sm text-slate-500">正在读取抓取进度…</p>
+          <p className="px-4 py-6 text-sm text-muted">正在读取抓取进度…</p>
         </Card>
       ) : snapshot.sites.length === 0 ? (
         <EmptyState>
@@ -60,7 +60,7 @@ export function CrawlPage() {
 
       {snapshot && <FailedSites sites={snapshot.sites} />}
 
-      <p className="mt-4 text-xs text-slate-500">
+      <p className="mt-4 text-xs text-muted">
         只抓公开列表页，不做登录、不绕验证码。站点返回风控页时会显式报错，
         不会伪装成「今天没岗位」。
       </p>

@@ -25,12 +25,12 @@ export class ErrorBoundary extends Component<
       return this.props.children;
     }
     return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-6">
-        <h2 className="mb-2 font-semibold text-red-800">这个页面出错了</h2>
-        <pre className="overflow-auto text-xs text-red-700">{this.state.error.message}</pre>
+      <div className="rounded-lg border border-danger-line bg-danger-soft p-6">
+        <h2 className="mb-2 font-semibold text-danger-strong">这个页面出错了</h2>
+        <pre className="overflow-auto text-xs text-danger">{this.state.error.message}</pre>
         <button
           type="button"
-          className="mt-4 rounded border border-red-300 bg-white px-3 py-1.5 text-sm"
+          className="mt-4 rounded border border-danger-field bg-surface px-3 py-1.5 text-sm"
           onClick={() => this.setState({ error: null })}
         >
           重试

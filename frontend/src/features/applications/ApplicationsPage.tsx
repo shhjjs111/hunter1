@@ -64,7 +64,7 @@ export function ApplicationsPage() {
       {applications.isLoading ? (
         // 显式加载态：否则首帧会渲染一张空表，与「一条都没有」看起来一样
         <Card>
-          <p className="px-4 py-6 text-sm text-slate-500">加载中…</p>
+          <p className="px-4 py-6 text-sm text-muted">加载中…</p>
         </Card>
       ) : items.length === 0 ? (
         <EmptyState>还没有投递记录。去「岗位库」找岗位，点「记录投递」。</EmptyState>
@@ -75,7 +75,7 @@ export function ApplicationsPage() {
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm whitespace-nowrap">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
+                <tr className="border-b border-line text-left text-muted">
                   <th className="px-4 py-2 font-medium">公司</th>
                   <th className="px-4 py-2 font-medium">岗位</th>
                   <th className="px-4 py-2 font-medium">阶段</th>
@@ -86,12 +86,12 @@ export function ApplicationsPage() {
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.id} className="border-b border-slate-100 last:border-0">
+                  <tr key={item.id} className="border-b border-line-soft last:border-0">
                     <td className="px-4 py-2">{item.company}</td>
                     <td className="px-4 py-2">{item.title}</td>
                     <td className="px-4 py-2">
                       <select
-                        className="rounded border border-slate-300 bg-white px-2 py-1"
+                        className="rounded border border-field bg-surface px-2 py-1"
                         aria-label={`「${item.title}」（${item.company}）的投递阶段`}
                         value={stageDraft[item.id] ?? item.stage}
                         onChange={(event) => {
@@ -140,8 +140,8 @@ export function ApplicationsPage() {
                         ))}
                       </select>
                     </td>
-                    <td className="px-4 py-2 text-slate-500">{formatDate(item.updated_at)}</td>
-                    <td className="px-4 py-2 text-slate-500">{item.note ?? "—"}</td>
+                    <td className="px-4 py-2 text-muted">{formatDate(item.updated_at)}</td>
+                    <td className="px-4 py-2 text-muted">{item.note ?? "—"}</td>
                     <td className="px-4 py-2 text-right">
                       <Button
                         onClick={() => {
@@ -166,7 +166,7 @@ export function ApplicationsPage() {
         </Card>
       )}
 
-      <p className="mt-4 text-xs text-slate-500">
+      <p className="mt-4 text-xs text-muted">
         投递记录里的公司名与岗位名是<b>下单时刻的快照</b> —— 岗位被重抓或改名时，
         这里仍保留当时的说法。
       </p>

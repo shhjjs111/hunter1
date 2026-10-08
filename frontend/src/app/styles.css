@@ -1,8 +1,47 @@
 @import "tailwindcss";
 
-/* 全局基调。设计系统原语（shared/ui）在 Wave 5 成型后细化。 */
+/*
+ * 语义令牌 —— 全站颜色的**唯一来源**。
+ *
+ * 为什么要有这一层：组件里直接写 `text-slate-500` / `border-slate-300` 等于把
+ * Tailwind 的调色板当成了设计系统 —— 想改一个语义色（「次要文字」「输入框描边」）
+ * 得全仓搜 class，而且没人说得清某处的 `slate-500` 是「次要文字」还是碰巧同色。
+ * 现在组件只用语义名（`text-muted` / `border-field`），取值只在这里定义一次。
+ *
+ * 取值刻意与迁移前的调色板**逐一对齐**（例如 `--color-muted` = slate-500），
+ * 所以这次迁移是纯重命名、像素级不变；语义名一旦定下，将来换色只动这一处。
+ */
+@theme {
+  /* 文字 */
+  --color-ink: #0f172a; /* 正文（slate-900） */
+  --color-ink-soft: #334155; /* 次级正文 / 导航（slate-700） */
+  --color-muted: #64748b; /* 说明文字（slate-500，白底 4.76:1） */
+  --color-muted-strong: #475569; /* 略强的说明文字（slate-600） */
+  --color-subtle: #94a3b8; /* 最弱提示，如「未评分」（slate-400） */
+  /* 面与线 */
+  --color-canvas: #f8fafc; /* 页面底色（slate-50） */
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f1f5f9; /* 次级面 / 悬停底色（slate-100） */
+  --color-line: #e2e8f0; /* 分区与表格边框（slate-200） */
+  --color-line-soft: #f1f5f9; /* 行分隔线（slate-100） */
+  --color-field: #cbd5e1; /* 输入框 / 次要按钮描边（slate-300） */
+  /* 状态色。下面三个主色是**对比度**修过的取值：迁移前用的 emerald-600
+     (3.77:1)、amber-600 (3.19:1)、slate-400 (2.56:1) 都低于正文 4.5:1 门槛。 */
+  --color-success: #047857; /* emerald-700，4.9:1 */
+  --color-success-soft: #ecfdf5; /* emerald-50 */
+  --color-warning: #b45309; /* amber-700，4.8:1 */
+  --color-warning-soft: #fffbeb; /* amber-50 */
+  --color-warning-line: #fde68a; /* amber-200 */
+  --color-warning-strong: #78350f; /* amber-900 */
+  --color-danger: #b91c1c; /* red-700 */
+  --color-danger-strong: #991b1b; /* red-800 */
+  --color-danger-soft: #fef2f2; /* red-50 */
+  --color-danger-line: #fecaca; /* red-200 */
+  --color-danger-field: #fca5a5; /* red-300 */
+}
+
 body {
-  background-color: var(--color-slate-50);
-  color: var(--color-slate-900);
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
 }
