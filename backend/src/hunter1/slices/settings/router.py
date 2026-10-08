@@ -25,6 +25,19 @@ from hunter1.slices.settings.schemas import (
 from hunter1.slices.settings.store import SettingsStore
 
 
+def _redact(message: str, settings: LLMSettings) -> str:
+    """把错误文案里可能出现的 API Key 抹掉。
+
+    底层 HTTP 客户端的异常会带上请求细节（有的厂商直接把 Authorization 回显在
+    4xx 体里），而这段文案是要显示给用户、也可能是用户贴给维护者的 ——
+    它绝不能含完整密钥。掩码形态与 `masked_key()` 一致（`***`）。
+    """
+    key = settings.api_key
+    if key:
+        message = message.replace(key, "***")
+    return message
+
+
 def _view(settings: LLMSettings) -> SettingsView:
     return SettingsView(
         base_url=settings.base_url,
@@ -36,12 +49,29 @@ def _view(settings: LLMSettings) -> SettingsView:
     )
 
 
-def _readable(exc: ValidationError) -> str:
-    """把 pydantic 报错压成一句人能读的话。"""
+def _validation_detail(exc: ValidationError) -> list[dict[str, object]]:
+    """把 pydantic 报错转成 **FastAPI 同款**的 422 detail。
+
+    契约里 422 的 `detail` 是 `ValidationError[]`（元素 `{loc, msg, type}`）。这里手工
+    抛 422（表单本身合法、但拼出来的配置不合法）时必须给同一形状 —— 否则同一个
+    端点上会出现两种 422 体，前端和契约都得写两套解析。此前是压成字符串，前端
+    `features/settings/api.ts` 里那句「只接受字符串 detail，形状一变就退化」的
+    注释就是被这件事逼出来的。
+
+    `loc` 加 `body` 前缀是为了与 FastAPI 自己的请求校验错误对齐（它写成
+    `["body","base_url"]`），界面要按字段提示时不用区分两种来源。
+    """
     errors = exc.errors()
     if not errors:
-        return str(exc)
-    return str(errors[0].get("msg", exc)).removeprefix("Value error, ")
+        return [{"loc": ["body"], "msg": str(exc), "type": "value_error"}]
+    return [
+        {
+            "loc": ["body", *(str(part) for part in error.get("loc", ()))],
+            "msg": str(error.get("msg", exc)).removeprefix("Value error, "),
+            "type": str(error.get("type", "value_error")),
+        }
+        for error in errors
+    ]
 
 
 def build_router(
@@ -85,8 +115,9 @@ def build_router(
                 api_key=key,
             )
         except ValidationError as exc:
-            # 就地回显错误原因 —— 用户要知道哪儿错了，而不是一个 500
-            raise HTTPException(status_code=422, detail=_readable(exc)) from exc
+            # 就地回显错误原因 —— 用户要知道哪儿错了，而不是一个 500。
+            # 形状与 FastAPI 的请求校验 422 一致（见 `_validation_detail`）。
+            raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
         store.save_llm(candidate)
         return _view(candidate)
 
@@ -110,18 +141,28 @@ def build_router(
             return ConnectionTestResponse(
                 ok=False, message="配置不完整：base_url / 模型 / API Key 都要填。"
             )
-        llm = llm_factory(settings)
+        llm = None
         try:
+            # 工厂也在 try **之内**：它同样可能因配置里表达不出的原因炸掉
+            # （客户端库对 URL 形态的限制、代理设置等）。放在外面时异常会穿透成
+            # 500，前端只显示一句「探测失败」—— 与上面那条注释同一个教训。
+            llm = llm_factory(settings)
             response = llm.complete(
                 system_prompt="你是连通性测试助手。",
                 user_prompt="只回复两个字：可用",
                 max_tokens=16,
             )
         except Exception as exc:
-            return ConnectionTestResponse(ok=False, message=f"{type(exc).__name__}: {exc}")
+            return ConnectionTestResponse(
+                ok=False,
+                message=_redact(f"{type(exc).__name__}: {exc}", settings),
+            )
         finally:
-            # 探测也是一次完整使用 —— 客户端每请求新建，用完释放
-            llm.close()
+            # 探测也是一次完整使用 —— 客户端每请求新建，用完释放。
+            # `if llm is not None`：工厂自己抛错时没有可关的对象（裸调 `llm.close()`
+            # 会在 finally 里抛 UnboundLocalError，把真正的失败原因盖掉）。
+            if llm is not None:
+                llm.close()
         return ConnectionTestResponse(
             ok=True, message=f"连接成功，模型 {response.model or settings.model} 已应答。"
         )

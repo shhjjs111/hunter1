@@ -35,6 +35,11 @@ class FakeLLM:
         return LLMResponse(content="可用", model="fake-model")
 
 
+def _boom_factory(_settings: LLMSettings) -> Any:
+    """工厂自己抛错 —— 客户端库可能因 URL / 代理配置在构造期就失败。"""
+    raise RuntimeError("factory exploded")
+
+
 @pytest.fixture()
 def db(tmp_path: Path) -> Database:
     database = Database(tmp_path / "settings.db")
@@ -107,11 +112,22 @@ class TestSaveSettings:
             assert saved is not None and saved.api_key == "sk-new"
 
     def test_invalid_base_url_is_422_with_reason(self, db: Database) -> None:
-        """校验失败就地给原因，不是 500、不是静默丢弃。"""
+        """校验失败就地给原因，不是 500、不是静默丢弃。
+
+        detail 的形状与 FastAPI 的请求校验 422 **一致**（`[{loc, msg, type}]`）：
+        同一个端点上两种 422 体，前端就得写两套解析。文案本身仍要人读得懂。
+        """
         for client in _client(db):
             response = client.put("/api/settings", json={**FORM, "base_url": "not-a-url"})
             assert response.status_code == 422
-            assert "http(s)" in response.json()["detail"]
+            detail = response.json()["detail"]
+            assert isinstance(detail, list), (
+                f"422 的 detail 应是 FastAPI 同款数组，实际 {type(detail)}"
+            )
+            first = detail[0]
+            assert set(first) >= {"loc", "msg", "type"}
+            assert first["loc"][0] == "body"
+            assert "http(s)" in first["msg"]
             assert db.settings().get_llm() is None  # 没有落库
 
 
@@ -135,6 +151,58 @@ class TestConnectionProbe:
             payload = client.post("/api/settings/test").json()
             assert payload["ok"] is False
             assert "配置不完整" in payload["message"]
+
+    def test_error_message_never_carries_the_full_key(self, db: Database) -> None:
+        """探测失败原因里不许出现完整 API Key。
+
+        底层 HTTP 客户端的异常会带上请求细节，有的厂商把 Authorization 回显在
+        4xx 体里；这段文案会显示在配置页上、也可能被用户贴给别人看。
+        """
+        stored = SettingsStore(db)
+        client_app = FastAPI()
+        captured: dict[str, str] = {}
+
+        class EchoingLLM:
+            def close(self) -> None:
+                """端口要求：释放资源。"""
+
+            def complete(self, **_kw: Any) -> LLMResponse:
+                raise RuntimeError(f"401 unauthorized (api_key={captured['key']})")
+
+        def factory(settings: LLMSettings) -> EchoingLLM:
+            captured["key"] = settings.api_key
+            return EchoingLLM()
+
+        client_app.include_router(
+            build_router(store=stored, llm_factory=factory),
+            prefix="/api",  # type: ignore[arg-type]
+        )
+        with TestClient(client_app) as client:
+            client.put("/api/settings", json=FORM)
+            settings = stored.get_llm()
+            assert settings is not None and settings.api_key, "配置必须真的存进去了"
+            payload = client.post("/api/settings/test").json()
+        assert payload["ok"] is False
+        assert settings.api_key not in payload["message"], "完整 key 被回显了"
+        assert "***" in payload["message"], "该抹成掩码，而不是整句丢掉"
+
+    def test_factory_failure_is_reported_not_raised(self, db: Database) -> None:
+        """工厂自己抛错时也要给可读原因（且不能因为关闭对象未创建而盖掉原因）。"""
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                store=SettingsStore(db),
+                llm_factory=_boom_factory,  # type: ignore[arg-type]
+            ),
+            prefix="/api",
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            client.put("/api/settings", json=FORM)
+            response = client.post("/api/settings/test")
+        assert response.status_code == 200, "工厂炸了不该是 500（配置页会丢掉全部指引）"
+        payload = response.json()
+        assert payload["ok"] is False
+        assert "factory exploded" in payload["message"]
 
 
 def test_api_key_input_must_not_leak_through_settings_view(db: Database) -> None:
