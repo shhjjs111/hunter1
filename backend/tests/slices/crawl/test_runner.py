@@ -90,6 +90,28 @@ class TestRun:
         assert snapshot.sites[0].fetched == 2
         assert snapshot.sites[1].fetched == 1
 
+    def test_records_created_and_updated_per_site(self, db: Database) -> None:
+        """逐站的「新增/更新」要真的落到快照上 —— 抓取页那几列直接读它。
+
+        实测：把 `_record` 里 `target.created = result.created` 改成 0，125 条 crawl
+        用例**全绿** —— 此前只断言过 `fetched`。而「抓到 3 条」看不出有没有重复
+        入库，新增/更新这两列才是用户判断这一轮干了什么的东西。
+        """
+        runner = _runner(db, [FakeCrawler("甲", count=2), FakeCrawler("乙")])
+        runner.run()
+        first = runner.snapshot()
+        assert [site.fetched for site in first.sites] == [2, 1]
+        assert [site.created for site in first.sites] == [2, 1]
+        assert [site.updated for site in first.sites] == [0, 0]
+        assert first.total_created == 3
+
+        # 再抓一轮：同样两个岗位 → 不新增、全算更新（幂等 upsert 的对外证据）
+        runner.run()
+        again = runner.snapshot()
+        assert [site.created for site in again.sites] == [0, 0]
+        assert [site.updated for site in again.sites] == [2, 1]
+        assert db.jobs().count() == 3
+
     def test_factory_failure_does_not_leave_it_running(self, db: Database) -> None:
         """装配阶段就炸了也必须收敛到「已结束」——否则进度页永远转圈。"""
 
