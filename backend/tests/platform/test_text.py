@@ -11,6 +11,19 @@ import pytest
 from hunter1.platform.text import normalize_job_title
 
 
+class TestBlankAndNonStringInputs:
+    """文档承诺「对空串、纯空白、纯括号输入返回空串」—— 这条此前从没被断言过。
+
+    实测：把 `if not isinstance(raw, str) or not raw: return ""` 改成 `if False:`，
+    platform + jobs + scoring + crawl 的用例照样全绿；真走到的时候
+    `unicodedata.normalize("NFKC", None)` 直接抛 TypeError（非 str 输入）。
+    """
+
+    @pytest.mark.parametrize("raw", ["", "   ", "（）", "(  )", "()", None, 123])
+    def test_blank_or_non_string_yields_empty(self, raw: object) -> None:
+        assert normalize_job_title(raw) == ""  # type: ignore[arg-type]
+
+
 class TestNormalizeJobTitle:
     """归一化后应可直接用于同题判定。"""
 

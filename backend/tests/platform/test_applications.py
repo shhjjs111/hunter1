@@ -136,6 +136,22 @@ class TestApplicationRepository:
         repo.insert_for_job(_application(id="a2", job_id="j2"))
         assert repo.count() == 2
 
+    def test_unrelated_integrity_error_is_not_swallowed(self, db: Database) -> None:
+        """撞的**不是**「同岗位唯一」那条约束时必须原样抛 —— 不把别的问题藏起来。
+
+        实测：把那句 `raise exc` 改成 `pass`（或把 `if existing is None:` 改成
+        `if False:`），全部 applications 用例照样绿 —— 「不要吞掉无关约束错误」
+        这条规则此前零覆盖。构造方式：同一主键、不同岗位 → 撞 PRIMARY KEY，
+        而按 `job_id` 反查当然查不到 → 必须把 IntegrityError 抛出去。
+        """
+        from sqlalchemy.exc import IntegrityError as SqlIntegrityError
+
+        repo = db.applications()
+        repo.insert_for_job(_application(id="a1", job_id="j1"))
+        with pytest.raises(SqlIntegrityError):
+            repo.insert_for_job(_application(id="a1", job_id="j2"))
+        assert repo.count() == 1, "第二条不该落库"
+
     def test_update_existing_does_not_insert_missing_row(self, db: Database) -> None:
         """已被删的记录不得被「更新」步骤插回去（静默撤销删除）。"""
         repo = db.applications()

@@ -26,6 +26,38 @@ def _limiter(
     )
 
 
+class TestConstructorValidation:
+    """构造期的取值域守卫：两个都写了，此前**只有一个**有用例。
+
+    实测：`if per_host < 1:` 改成 `if False:` 后全部 limits 用例照样绿
+    （`min_interval must be >= 0` 那条有用例，`per_host` 这条没有）。
+    而 `per_host=0` 会让该主机的名额永远借不到 —— 抓取会一直等到超时。
+    """
+
+    def test_per_host_below_one_is_rejected(self, clock: FakeClock) -> None:
+        with pytest.raises(ValueError) as excinfo:
+            _limiter(clock, per_host=0)
+        assert "per_host" in str(excinfo.value)
+
+
+class TestLeaseIsAContextManager:
+    """`with limiter.acquire(...) as lease:` 必须拿到租约对象。
+
+    实测：把 `_Lease.__enter__` 的 `return self` 改成 `return None`，全部 limits
+    用例照样绿 —— 因为每条用例都手写 `lease.release()`，没人走 `with`。
+    而拿到 `None` 的调用方 `lease.release()` 会 AttributeError，名额**永远不归还**
+    （随后该主机所有请求都等到超时）。
+    """
+
+    def test_with_yields_the_lease_and_releases_on_exit(self, clock: FakeClock) -> None:
+        limiter = _limiter(clock, per_host=1)
+        with limiter.acquire("https://a.com/x") as lease:
+            assert lease is not None
+        # 退出 with 后名额必须已归还：同一主机再借一次不该阻塞
+        with limiter.acquire("https://a.com/x", timeout=1) as again:
+            assert again is not None
+
+
 class TestAcquire:
     def test_acquires_up_to_limit(self, clock: FakeClock) -> None:
         limiter = _limiter(clock, per_host=2)
