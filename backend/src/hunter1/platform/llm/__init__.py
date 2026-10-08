@@ -380,7 +380,18 @@ class OpenAICompatibleClient:
                 last_error = exc
                 raise
 
-            content = _extract_content(data)
+            # 空 content 要按「本次尝试失败」处理、降级到下一档，而不是直接抛出去
+            # 终结整条降级链：`_extract_content` 抛的 `response_empty` 原先会穿透
+            # for 循环，而同一类失败（不可解析）却会 continue —— 两条失败路径两种
+            # 命运，且被终结的这条本来更可能被下一档救回（模型只是不肯照 schema 说）。
+            try:
+                content = _extract_content(data)
+            except LLMError as exc:
+                if exc.code != "response_empty":
+                    raise
+                last_error = exc
+                continue
+
             try:
                 parsed = _parse_json_payload(content)
             except ValueError as exc:

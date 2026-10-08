@@ -10,6 +10,13 @@
 - 参数不是合法 JSON 时保留原文（`{"__raw__": ...}`），
   让模型在下一轮看到自己的错误并纠正；
 - 缺工具名的残缺片段直接丢弃 —— 一次没有名字的调用没有意义。
+
+**例外：`error` 帧不宽容。** 兼容网关在余额不足 / 风控 / 过载时用
+`data: {"error": {...}}` 报告失败（正文里没有 `choices`）。把它当作「一条无关的
+数据」跳过，整条流就会以「空回复」**正常收尾**：助手把失败当答案落库，错误信息
+全部丢失；若失败发生在已吐出一段文本之后，半截内容还会被当成最终回答展示。
+非流式路径对同一失败会抛 `response_invalid` —— 两条路径的行为必须一致，
+所以这里抛 `LLMError("stream_error")`（由消费方按「上游失败」处理）。
 """
 
 from __future__ import annotations
@@ -18,8 +25,8 @@ import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-from hunter1.domain.assistant import ToolCall
-from hunter1.domain.llm import StreamComplete, TextDelta
+from hunter1.domain.assistant import ToolCall, synthetic_call_id
+from hunter1.domain.llm import LLMError, StreamComplete, TextDelta
 
 _DATA_PREFIX = "data:"
 _DONE_MARKER = "[DONE]"
@@ -67,6 +74,12 @@ def parse_sse_lines(
         if not isinstance(payload, dict):
             continue
 
+        error = payload.get("error")
+        if error is not None:
+            # 见模块 docstring：`error` 帧是**失败**，不是「无关数据」——
+            # 跳过它会让整条流以空回复正常收尾（助手把失败当答案落库）。
+            raise LLMError("stream_error", _error_text(error))
+
         reported = payload.get("model")
         if isinstance(reported, str) and reported.strip():
             model = reported.strip()
@@ -108,8 +121,7 @@ def parse_sse_lines(
 
 def _absorb(slots: dict[int, _ToolSlot], fragment: dict[str, object]) -> None:
     """把一片工具调用增量并进对应槽位。"""
-    index = fragment.get("index")
-    slot = slots.setdefault(index if isinstance(index, int) else 0, _ToolSlot())
+    slot = _slot_for(slots, fragment)
 
     # id / name 只在第一片出现；重复出现时以先到的为准（有的实现会重发）。
     call_id = fragment.get("id")
@@ -127,6 +139,46 @@ def _absorb(slots: dict[int, _ToolSlot], fragment: dict[str, object]) -> None:
         slot.arguments += arguments
 
 
+def _slot_for(slots: dict[int, _ToolSlot], fragment: dict[str, object]) -> _ToolSlot:
+    """决定这一片片段该归哪个槽位。
+
+    带 `index` 时按它归位（OpenAI 系）。**不带 `index` 时不能一律并进 0 号槽**：
+    有的兼容网关把每次调用当作一个完整片段发出（没有 `index`）—— 全并进 0 号槽
+    会把两个调用合成一个：第二个调用消失，arguments 拼成
+    `{"__raw__": "{\"city\":}{}"}` 这类垃圾。
+
+    没有 `index` 时的判据是「这片片段里的身份信息是不是**另一个**调用」：
+    带 id 且与当前槽不同、或带 name 且与当前槽不同 → 新调用；否则是续片。
+
+    刻意不把「name 相同」当新调用：`id`/`name` 有的实现会重发，按名字判新会把
+    一次调用劈成两半。「连续两次同名工具调用、且都不带 id」这种形态仍会合并 ——
+    数据上分辨不出来，这里选择偏向「不劈」。
+    """
+    index = fragment.get("index")
+    if isinstance(index, int):
+        return slots.setdefault(index, _ToolSlot())
+    if not slots:
+        return slots.setdefault(0, _ToolSlot())
+
+    current = slots[max(slots)]
+    if _starts_new_call(current, fragment):
+        return slots.setdefault(max(slots) + 1, _ToolSlot())
+    return current
+
+
+def _starts_new_call(current: _ToolSlot, fragment: dict[str, object]) -> bool:
+    """无 `index` 的片段是在开启一次新调用，还是当前调用的续片？"""
+    call_id = fragment.get("id")
+    if isinstance(call_id, str) and call_id and current.id and call_id != current.id:
+        return True
+    function = fragment.get("function")
+    if isinstance(function, dict):
+        name = function.get("name")
+        if isinstance(name, str) and name and current.name and name != current.name:
+            return True
+    return False
+
+
 def _finalize(slots: dict[int, _ToolSlot]) -> list[ToolCall]:
     calls: list[ToolCall] = []
     for index in sorted(slots):
@@ -135,7 +187,7 @@ def _finalize(slots: dict[int, _ToolSlot]) -> list[ToolCall]:
             continue  # 没有名字的调用没有意义
         calls.append(
             ToolCall(
-                id=slot.id or f"call_{index}",
+                id=slot.id or synthetic_call_id(),
                 name=slot.name,
                 arguments=_parse_arguments(slot.arguments),
             )
@@ -156,6 +208,22 @@ def _parse_arguments(raw: str) -> dict[str, object]:
 
 def _token(value: object, fallback: int | None) -> int | None:
     return value if isinstance(value, int) and value >= 0 else fallback
+
+
+def _error_text(error: object) -> str:
+    """把 `error` 帧的内容压成一句可读的失败原因。
+
+    形状各家不一：OpenAI 系是 `{"message": ..., "type": ...}`，有的网关直接给
+    字符串，个别给 `{"detail": ...}`。取不到已知字段就退回原样的 JSON 片段 ——
+    宁可难看也不要空着：这行文本是用户唯一能看到的失败线索。
+    """
+    if isinstance(error, dict):
+        for key in ("message", "detail", "msg", "type"):
+            value = error.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:200]
+        return json.dumps(error, ensure_ascii=False)[:200]
+    return str(error).strip()[:200]
 
 
 __all__ = ["parse_sse_lines"]

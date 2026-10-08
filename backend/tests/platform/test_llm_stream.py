@@ -256,6 +256,153 @@ class TestParseSseLines:
         assert _done(events).content == ""
         assert _done(events).degraded is False
 
+    def test_error_frame_raises_instead_of_empty_completion(self) -> None:
+        """网关用 `data: {"error": ...}` 报失败 —— 不能当「空回复」正常收尾。
+
+        跳过它的后果是静默的：助手把失败当答案落库，用户看不到任何失败线索
+        （而非流式路径对同一失败会抛 `response_invalid`）。
+        """
+        lines = _wire(
+            json.dumps({"error": {"message": "Insufficient Balance", "type": "quota"}}),
+            "[DONE]",
+        )
+        with pytest.raises(LLMError) as excinfo:
+            self._run(lines)
+        assert excinfo.value.code == "stream_error"
+        assert "Insufficient Balance" in str(excinfo.value)
+
+    def test_error_frame_accepts_plain_string_and_detail_shapes(self) -> None:
+        for payload in ({"error": "rate limited"}, {"error": {"detail": "overloaded"}}):
+            with pytest.raises(LLMError) as excinfo:
+                self._run(_wire(json.dumps(payload)))
+            assert excinfo.value.code == "stream_error"
+
+    def test_null_error_field_is_not_a_failure(self) -> None:
+        """`"error": null` 是常见的字段占位 —— 不能误判成失败。"""
+        lines = _wire(json.dumps({"error": None, "choices": [{"delta": {"content": "好"}}]}))
+        assert _texts(self._run(lines)) == ["好"]
+
+    def test_indexless_parallel_calls_are_not_merged(self) -> None:
+        """不带 `index` 的两次调用不能被合并成一个。
+
+        有的兼容网关把每次调用当作一个完整片段发出（没有 index）。一律并进 0 号槽
+        的后果：第二个调用消失，arguments 拼成 `{"__raw__": '{"city":}{}'}` 这类垃圾。
+        """
+        lines = _wire(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "id": "c1",
+                                        "function": {
+                                            "name": "weather",
+                                            "arguments": '{"city": "北京"}',
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {"id": "c2", "function": {"name": "search", "arguments": "{}"}}
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+        )
+        done = _done(self._run(lines))
+        assert [(call.id, call.name, call.arguments) for call in done.tool_calls] == [
+            ("c1", "weather", {"city": "北京"}),
+            ("c2", "search", {}),
+        ]
+
+    def test_indexless_continuation_fragments_join_one_call(self) -> None:
+        """续片（只带 arguments）仍要拼回同一个调用 —— 别把一次调用劈成两条。"""
+        lines = _wire(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "id": "c1",
+                                        "function": {"name": "search_jobs", "arguments": '{"key'},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "choices": [
+                        {"delta": {"tool_calls": [{"function": {"arguments": 'word": "产品"}'}}]}}
+                    ]
+                }
+            ),
+        )
+        done = _done(self._run(lines))
+        assert len(done.tool_calls) == 1
+        assert done.tool_calls[0].name == "search_jobs"
+        assert done.tool_calls[0].arguments == {"keyword": "产品"}
+
+    def test_repeated_identity_fragment_is_not_a_new_call(self) -> None:
+        """有的实现每一片都重发同一个 id/name —— 那是续片，不是新调用。"""
+        lines = _wire(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "id": "c1",
+                                        "function": {"name": "search_jobs", "arguments": '{"key'},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "id": "c1",
+                                        "function": {
+                                            "name": "search_jobs",
+                                            "arguments": 'word": "产品"}',
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+        )
+        done = _done(self._run(lines))
+        assert len(done.tool_calls) == 1
+        assert done.tool_calls[0].arguments == {"keyword": "产品"}
+
 
 class TestStreamWithTools:
     """HTTP 层：请求形态、降级与错误处理。"""
@@ -453,6 +600,32 @@ class TestStreamWithTools:
 
         list(_client(handler).stream_with_tools(messages=[], tools=[]))
         assert "tools" not in seen["body"]
+
+    def test_error_frame_after_content_raises_instead_of_partial_answer(self) -> None:
+        """已吐过一部分文本时出错：抛错，不得把半截内容当最终回答交出去。
+
+        「半截当答案」比报错危险得多 —— 界面会把它当完整回复展示并落库。
+        """
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return _sse(
+                [
+                    _delta("前半段"),
+                    json.dumps({"error": {"message": "quota exceeded"}}),
+                    "[DONE]",
+                ]
+            )
+
+        events: list[Any] = []
+        with pytest.raises(LLMError) as excinfo:
+            for event in _client(handler).stream_with_tools(messages=[], tools=[]):
+                events.append(event)
+        assert excinfo.value.code == "stream_error"
+        assert _texts(events) == ["前半段"]
+        assert [e for e in events if isinstance(e, StreamComplete)] == []
+        assert calls["n"] == 1, "错误帧不得触发降级重发（内容会重复）"
 
 
 class _BreakAfterDeltas(httpx.SyncByteStream):

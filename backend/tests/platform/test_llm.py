@@ -4,7 +4,7 @@
 旧系统 `model_policy.py` 用白名单硬绑 DeepSeek（非官方端点直接抛错），
 hunter1 必须**接受任意 OpenAI 兼容端点**。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations
@@ -275,6 +275,40 @@ class TestStructuredOutput:
                 system_prompt="s", user_prompt="u", schema=self.SCHEMA
             )
         assert excinfo.value.code == "structured_response_invalid"
+
+    def test_empty_response_degrades_instead_of_aborting(self) -> None:
+        """空回复要降级到下一档，而不是终结整条降级链。
+
+        同一类失败（不可解析）会 continue 试下一档，空回复原先却直接抛 ——
+        两条失败路径两种命运，而被终结的这条本来更可能被下一档救回。
+        """
+        modes: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            fmt = body.get("response_format", {}).get("type", "none")
+            modes.append(fmt)
+            if fmt == "json_schema":
+                return _ok_response("")  # 模型没吐内容
+            return _ok_response('{"score": 77}')
+
+        result = _client(handler).complete_structured(
+            system_prompt="s", user_prompt="u", schema=self.SCHEMA
+        )
+        assert modes == ["json_schema", "json_object"]
+        assert json.loads(result.content) == {"score": 77}
+
+    def test_empty_response_everywhere_raises_response_empty(self) -> None:
+        """全部档位都空时仍要如实报错（不能假装成功）。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _ok_response("")
+
+        with pytest.raises(LLMError) as excinfo:
+            _client(handler).complete_structured(
+                system_prompt="s", user_prompt="u", schema=self.SCHEMA
+            )
+        assert excinfo.value.code == "response_empty"
 
 
 class TestPresets:
