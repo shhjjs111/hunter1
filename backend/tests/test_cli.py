@@ -190,6 +190,23 @@ class TestServeReleasesDatabase:
         assert "Traceback" not in out
 
 
+class TestVersionFlag:
+    def test_version_prints_package_version_and_exits_zero(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`hunter1 --version` 是打包/更新链自查的那条命令。
+
+        版本号只有一个来源（包内 `__version__`）—— 这里断言 CLI 打出的就是它，
+        而不是另写一份字符串（那样两处会漂移）。
+        """
+        from hunter1 import __version__
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--version"])
+        assert excinfo.value.code == 0
+        assert __version__ in capsys.readouterr().out
+
+
 class TestUtf8Console:
     """控制台编码那条路径不能把程序搞挂 —— 显示不好是小事，起不来是大事。"""
 

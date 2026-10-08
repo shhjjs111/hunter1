@@ -46,6 +46,9 @@ def _site_keys(raw: str) -> list[str] | None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hunter1", description="Hunter1 求职工作台")
+    # 版本号只有一个来源（包内的 `__version__`，见 pyproject.toml 的注释）——
+    # 打包/更新链都从它派生，所以自查版本必须走同一条路。
+    parser.add_argument("--version", action="version", version=f"hunter1 {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="启动本地 Web UI")

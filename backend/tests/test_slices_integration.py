@@ -205,8 +205,6 @@ def _seeded_job() -> Job:
 
 def _make_app(tmp_path: Path, *, frontend: Path | None) -> tuple[TestClient, Database]:
     """按指定前端目录装配一个 app（None = 不提供产物）。"""
-    from hunter1.main import frontend_dir as _fd
-
     db = Database(tmp_path / f"app-{frontend is not None}.db")
     db.initialize()
     db.jobs().upsert(_seeded_job())
@@ -216,26 +214,16 @@ def _make_app(tmp_path: Path, *, frontend: Path | None) -> tuple[TestClient, Dat
         llm_factory=lambda _settings: _FakeLLM(),  # type: ignore[arg-type,return-value]
         clock=lambda: NOW,
     )
-    if frontend is not None:
-        monkey_target = frontend
-        import hunter1.main as main_module
+    # 产物目录由**显式指定**决定，不依赖本机是否 build 过（否则测试结果随开发机变化）。
+    # 直接把 frontend_dir 换成返回值（None 也算），两个方向走同一条路径。
+    import hunter1.main as main_module
 
-        original = main_module.frontend_dir
-        main_module.frontend_dir = lambda: monkey_target  # type: ignore[assignment]
-        try:
-            app = create_app(context)
-        finally:
-            main_module.frontend_dir = original  # type: ignore[assignment]
-    else:
-        import hunter1.main as main_module
-
-        original = main_module.frontend_dir
-        main_module.frontend_dir = lambda: None  # type: ignore[assignment]
-        try:
-            app = create_app(context)
-        finally:
-            main_module.frontend_dir = original  # type: ignore[assignment]
-    assert _fd is not None
+    original = main_module.frontend_dir
+    main_module.frontend_dir = lambda: frontend  # type: ignore[assignment]
+    try:
+        app = create_app(context)
+    finally:
+        main_module.frontend_dir = original  # type: ignore[assignment]
     return TestClient(app), db
 
 
