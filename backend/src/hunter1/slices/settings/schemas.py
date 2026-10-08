@@ -37,6 +37,9 @@ class SettingsView(BaseModel):
     #: 已保存的配置不合法（数据损坏 / 旧版本遗留）。界面据此提示「请重新填写」，
     #: 而不是把它当成「还没配过」——那会让用户填过的内容无声消失。
     broken: bool = False
+    #: 非致命提示（如明文 http:// 指向公网）。与 scoring 的 ProfileView 同形：
+    #: 值仍可用，但用户该知道这层风险 —— 静默接受等于把风险藏起来。
+    warning: str | None = None
 
 
 class ConnectionTestResponse(BaseModel):

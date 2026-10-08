@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from hunter1.domain.settings import LLMSettings
+from hunter1.domain.settings import LLMSettings, plaintext_warning
 
 
 def _settings(**overrides: object) -> LLMSettings:
@@ -20,6 +20,47 @@ def _settings(**overrides: object) -> LLMSettings:
     }
     base.update(overrides)
     return LLMSettings(**base)  # type: ignore[arg-type]
+
+
+class TestPlaintextWarning:
+    """明文 http:// 指向公网时要提示（本地/内网不提示）。
+
+    此前整条链路对这件事一个字都不提：Key 与对话内容明文过网，而界面看起来
+    和 https 一模一样。提示而不是拒绝 —— 本机 / 内网自建端点用 http 是合理的。
+    """
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://api.example.com/v1",
+            "http://8.8.8.8/v1",
+            "http://llm.example.cn:8000/v1",
+        ],
+    )
+    def test_public_plaintext_is_flagged(self, base_url: str) -> None:
+        warning = plaintext_warning(base_url)
+        assert warning is not None
+        assert "http://" in warning
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "https://api.example.com/v1",  # 本来就加密
+            "http://localhost:11434/v1",  # 本机 ollama
+            "http://127.0.0.1:8000/v1",
+            "http://192.168.1.10:8000/v1",  # 内网
+            "http://10.0.0.5/v1",
+            "http://172.16.3.4:8080/v1",
+            "http://ollama:11434/v1",  # 内网单标签名
+            "http://llm.local/v1",
+            "http://[::1]:8000/v1",
+        ],
+    )
+    def test_local_and_private_are_not_flagged(self, base_url: str) -> None:
+        assert plaintext_warning(base_url) is None
+
+    def test_empty_url_is_not_flagged(self) -> None:
+        assert plaintext_warning("") is None
 
 
 class TestLLMSettings:

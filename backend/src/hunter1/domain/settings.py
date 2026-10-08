@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -63,4 +64,40 @@ class LLMSettings(_Config):
         return f"{self.api_key[:3]}…{self.api_key[-4:]}"
 
 
-__all__ = ["LLMSettings"]
+__all__ = ["LLMSettings", "plaintext_warning"]
+
+
+def plaintext_warning(base_url: str) -> str | None:
+    """`base_url` 是明文 `http://` 且指向**公网**时的提示；否则 None。
+
+    本地/内网用 http 是**合理**的（Ollama、vLLM、公司内网网关），所以只提示、
+    不拒绝 —— 拒绝会把最常见的自建场景挡在门外。但公网明文意味着 API Key 与
+    全部对话内容以明文过网，用户至少要知道自己在冒什么险（此前整条链路一个字
+    都不提）。
+    """
+    parts = urlsplit((base_url or "").strip())
+    if parts.scheme != "http":
+        return None
+    host = (parts.hostname or "").lower()
+    if not host or _is_internal_host(host):
+        return None
+    return (
+        f"base_url 用的是明文 http://（{host} 不是本机或内网地址）："
+        "API Key 与对话内容会以明文过网，建议改用 https://。"
+    )
+
+
+def _is_internal_host(host: str) -> bool:
+    """本机 / 私有网段 / 内网单标签名 —— 这些用 http 不提示。"""
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    if host.endswith(".local"):
+        return True
+    if "." not in host and ":" not in host:
+        # 单标签名（`ollama`、`gateway`、`llm-host`）：内网名，不是公网域名
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local

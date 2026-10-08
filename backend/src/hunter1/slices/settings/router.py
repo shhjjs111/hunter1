@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
 from hunter1.application.ports import LLMProvider
-from hunter1.domain.settings import LLMSettings
+from hunter1.domain.settings import LLMSettings, plaintext_warning
 from hunter1.slices.settings.schemas import (
     ConnectionTestResponse,
     SettingsForm,
@@ -31,6 +31,8 @@ def _view(settings: LLMSettings) -> SettingsView:
         model=settings.model,
         masked_key=settings.masked_key(),
         configured=settings.is_configured,
+        # 明文 http 指向公网 → 提示（不拒绝：本机/内网用 http 是合理的）
+        warning=plaintext_warning(settings.base_url),
     )
 
 

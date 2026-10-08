@@ -571,6 +571,8 @@ export interface components {
              * @default
              */
             model: string;
+            /** Warning */
+            warning?: string | null;
         };
         /**
          * SiteProgressView

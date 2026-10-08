@@ -643,6 +643,17 @@
             "default": "",
             "title": "Model",
             "type": "string"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
           }
         },
         "title": "SettingsView",

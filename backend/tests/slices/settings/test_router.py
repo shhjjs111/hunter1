@@ -238,3 +238,29 @@ class TestCorruptedConfigIsRepairable:
             response = client.post("/api/settings/test")
         assert response.status_code == 200, f"非对象配置也要给可读结论，实际 {response.status_code}"
         assert response.json()["ok"] is False
+
+
+class TestPlaintextWarningIsExposed:
+    """明文公网 base_url 的提示必须一路走到响应里（后端算、前端显示）。
+
+    判断逻辑只有一处（`domain.settings.plaintext_warning`），路由负责把它放进
+    `warning` 字段 —— 前端读 `settings.data.warning` 显示，不再自己判一遍。
+    """
+
+    def test_public_http_url_is_flagged(self, db: Database) -> None:
+        form = {**FORM, "base_url": "http://api.example.com/v1"}
+        for client in _client(db):
+            response = client.put("/api/settings", json=form)
+            assert response.status_code == 200
+            assert response.json()["warning"], "明文公网端点必须给出提示"
+            assert "http://" in response.json()["warning"]
+
+    def test_https_url_has_no_warning(self, db: Database) -> None:
+        for client in _client(db):
+            assert client.put("/api/settings", json=FORM).json()["warning"] is None
+
+    def test_local_http_url_has_no_warning(self, db: Database) -> None:
+        """本机/内网用 http 是合理的（ollama 等）—— 不该被反复念叨。"""
+        form = {**FORM, "base_url": "http://127.0.0.1:11434/v1"}
+        for client in _client(db):
+            assert client.put("/api/settings", json=form).json()["warning"] is None
