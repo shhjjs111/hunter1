@@ -403,6 +403,53 @@ class TestParseSseLines:
         assert len(done.tool_calls) == 1
         assert done.tool_calls[0].arguments == {"keyword": "产品"}
 
+    def test_multiline_data_event_is_joined(self) -> None:
+        """SSE 协议允许一个事件的 data 分在多行 —— 要拼起来再解析。
+
+        逐行独立 `json.loads` 时两行各自失败、被当坏数据跳过：内容静默丢失，
+        流以「空回复正常收尾」（助手把失败当答案落库）。
+        """
+        payload = json.dumps(
+            {"choices": [{"delta": {"content": "多行"}}]},
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        # 在 token 边界处拆开（拼回来仍是合法 JSON；拆开的两半各自都不是）。
+        marker = '"content":"多行"'
+        cut = payload.index(marker) + len(marker)
+        assert payload[:cut] != payload and payload[cut:] != payload
+        lines = [f"data: {payload[:cut]}", f"data: {payload[cut:]}", ""]
+        events = self._run(lines)
+        assert _texts(events) == ["多行"]
+        assert _done(events).content == "多行"
+
+    def test_consecutive_full_json_data_lines_still_parse(self) -> None:
+        """不合规但在野的形态：没有空行分隔、连发两个完整 JSON —— 退回逐行解析。"""
+        lines = [f"data: {_delta('甲')}", f"data: {_delta('乙')}", ""]
+        assert _texts(self._run(lines)) == ["甲", "乙"]
+
+    def test_current_slot_follows_last_seen_not_max_index(self) -> None:
+        """不带 index 的续片要归**最近**的调用，不是下标最大的那个。
+
+        实测：先来 index=5 的调用、再来 index=0 的调用，随后一个不带 index 的续片
+        —— 用 `max(slots)` 会把续片并进 5 号槽，两个调用的 arguments 拼成 `{}{}`，
+        两个调用一起变坏。
+        """
+
+        def frag(**kwargs: Any) -> str:
+            return json.dumps({"choices": [{"delta": {"tool_calls": [kwargs]}}]})
+
+        lines = _wire(
+            frag(index=5, id="a", function={"name": "first", "arguments": '{"x": 1}'}),
+            frag(index=0, id="b", function={"name": "second", "arguments": '{"y":'}),
+            frag(function={"arguments": '"z"}'}),  # 续片：只有 arguments，没有 index
+        )
+        done = _done(self._run(lines))
+        assert {call.name: call.arguments for call in done.tool_calls} == {
+            "first": {"x": 1},
+            "second": {"y": "z"},
+        }
+
 
 class TestStreamWithTools:
     """HTTP 层：请求形态、降级与错误处理。"""
