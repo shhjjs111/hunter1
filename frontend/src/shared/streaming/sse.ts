@@ -57,7 +57,9 @@ export async function streamSse(
     }
   }
 
-  // 收尾：流结束时 buffer 里可能还有最后一条（某些实现末尾不带空行）
+  // 收尾：流结束时 buffer 里可能还有最后一条（某些实现末尾不带空行），
+  // 并且解码器里可能还扣着半个 UTF-8 序列 —— `decode()` 不收尾就**静默丢**。
+  buffer += decoder.decode();
   const tail = parseBlock(buffer);
   if (tail !== null) {
     onEvent(tail);

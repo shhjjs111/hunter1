@@ -23,6 +23,23 @@ function stubFetch(chunks: string[], status = 200): ReturnType<typeof vi.fn> {
   return mock;
 }
 
+/** 字节级推送 —— 用来制造「UTF-8 序列被流截断」这种 string 造不出来的边界。 */
+function stubFetchBytes(chunks: Uint8Array[]): ReturnType<typeof vi.fn> {
+  let index = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(chunks[index++]);
+    },
+  });
+  const mock = vi.fn(async () => new Response(stream, { status: 200 }));
+  vi.stubGlobal("fetch", mock);
+  return mock;
+}
+
 describe("streamSse", () => {
   it("解析单条事件", async () => {
     stubFetch(['data: {"type":"text","text":"你好"}\n\n']);
@@ -78,6 +95,26 @@ describe("streamSse", () => {
     const events: Record<string, unknown>[] = [];
     await streamSse("/x", {}, (event) => events.push(event));
     expect(events).toEqual([{ type: "done" }]);
+  });
+
+  it("流结束时把解码器里残留的半个字符冲出来", async () => {
+    // 全程 `decode(value, {stream:true})` 会把不完整的 UTF-8 序列扣在解码器内部；
+    // 流结束时若不再 `decode()` 收尾，那几个字节就被**静默丢弃**（连替换字符
+    // 都没有）。这里让最后一段止于「中」的前两个字节，再用 console.warn 观察
+    // 收尾解码确实发生了。
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    const head = encoder.encode('data: {"text":"');
+    const broken = encoder.encode("中").slice(0, 2); // E4 B8 —— 少最后一个字节
+    stubFetchBytes([head, broken]);
+    const events: Record<string, unknown>[] = [];
+
+    await streamSse("/x", {}, (event) => events.push(event));
+
+    expect(events).toEqual([]); // 残缺的帧不该被当成事件
+    const warned = warn.mock.calls.map((call) => call.map(String).join(" ")).join("\n");
+    expect(warned).toContain("\uFFFD"); // 收尾解码把残留字节解成了替换字符
+    warn.mockRestore();
   });
 
   it("非 2xx 抛出可读错误（开流前的失败走 JSON 体）", async () => {
