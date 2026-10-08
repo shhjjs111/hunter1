@@ -9,6 +9,28 @@ export type CrawlStatus = components["schemas"]["CrawlStatusResponse"];
 
 const POLL_MS = 1000;
 
+/**
+ * 轮询间隔的**策略**（纯函数，单独可测）。
+ *
+ * 收敛条件挂在「拿到明确结论」上，不挂在「成功数据」上：
+ *
+ * - `running: true` → 继续轮询；
+ * - `running: false` → 停（后端明确说空闲了）；
+ * - **快照缺失**（首次请求还没回来，或上一次请求失败）→ 继续轮询。
+ *
+ * 第三档是修出来的。原先写成 `query.state.data?.running ? POLL_MS : false`：
+ * 一次瞬时失败（后端重启、代理闪断）拿不到快照，于是返回 `false`、**轮询永久停止**
+ * —— 而后端 runner 还在跑（它不依赖这个页面）。界面的后果是：停在旧快照、按钮被
+ * `running` 永久禁用、页面没有任何刷新入口，用户只能重启进程。这正是
+ * `slices/crawl/runner.py` 立意要消灭的那种「静默失败」。
+ */
+export function crawlPollInterval(snapshot: { running: boolean } | undefined): number | false {
+  if (snapshot === undefined) {
+    return POLL_MS;
+  }
+  return snapshot.running ? POLL_MS : false;
+}
+
 async function fetchStatus(): Promise<CrawlStatus> {
   const { data, error, response } = await api.GET("/api/crawl/status");
   if (error || !data) {
@@ -20,6 +42,10 @@ async function fetchStatus(): Promise<CrawlStatus> {
 /**
  * 抓取进度。**只在抓取进行中轮询** —— 空闲时每分钟一次就够，没必要每秒打后端。
  * （旧界面对快照的用法一致：开始抓取后才密集拉。）
+ *
+ * 「进行中」的判据见 `crawlPollInterval`：没有明确结论就继续问，而不是一击不中
+ * 就永久停摆。代价是后端暂时不可达时会以 1s 的间隔重试 —— 换来的是「后端回来
+ * 后界面自己恢复」，比「永远停在旧快照」划算。
  */
 export function useCrawlStatus() {
   const queryClient = useQueryClient();
@@ -27,7 +53,7 @@ export function useCrawlStatus() {
   const query = useQuery({
     queryKey: ["crawl", "status"],
     queryFn: fetchStatus,
-    refetchInterval: (query) => (query.state.data?.running ? POLL_MS : false),
+    refetchInterval: (query) => crawlPollInterval(query.state.data),
   });
 
   // 一轮抓取从「进行中」变成「结束」时失效岗位库。
