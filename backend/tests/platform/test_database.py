@@ -167,6 +167,51 @@ class TestCrossThreadWrites:
         assert options.get("check_same_thread") is False
 
 
+class TestColumnBackfill:
+    """后加的列要能补到**老库**上。
+
+    `create_all` 只对不存在的表生效 —— 老库不会被加列，而应用启动后就会 SELECT
+    新列，结果是 `no such column`、应用起不来。与唯一索引那两处同一个理由。
+    """
+
+    def _drop_new_columns(self, db: Database) -> None:
+        import sqlalchemy as sa
+
+        with db.engine.begin() as conn:
+            for name in ("score_model", "score_prompt_version", "scored_at"):
+                conn.execute(sa.text(f"ALTER TABLE jobs DROP COLUMN {name}"))
+
+    def test_old_database_gets_the_new_columns(self, tmp_path: Path) -> None:
+        import sqlalchemy as sa
+
+        path = tmp_path / "old.db"
+        first = Database(path)
+        first.initialize()
+        self._drop_new_columns(first)
+        first.dispose()
+
+        reopened = Database(path)
+        reopened.initialize()  # 修复前这里之后读 jobs 会炸
+
+        with reopened.engine.connect() as conn:
+            names = {column["name"] for column in sa.inspect(conn).get_columns("jobs")}
+        assert {"score_model", "score_prompt_version", "scored_at"} <= names
+        reopened.jobs().get("missing")  # 读一次确认 SELECT 不再报 no such column
+        reopened.dispose()
+
+    def test_backfill_is_idempotent(self, tmp_path: Path) -> None:
+        """补过的库再 initialize 不该重复 ALTER（返回值即「这次补了什么」）。"""
+
+        db = Database(tmp_path / "twice.db")
+        db.initialize()
+        with db.engine.begin() as conn:
+            assert Database._add_missing_columns(conn) == []
+        self._drop_new_columns(db)
+        with db.engine.begin() as conn:
+            added = Database._add_missing_columns(conn)
+        assert sorted(added) == ["jobs.score_model", "jobs.score_prompt_version", "jobs.scored_at"]
+
+
 class TestSchemaExports:
     """schema.py 的 `__all__` 只能有一处 —— 重复赋值会让后者静默覆盖前者。"""
 
