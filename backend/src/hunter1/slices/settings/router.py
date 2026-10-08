@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from hunter1.application.ports import LLMProvider
 from hunter1.domain.settings import LLMSettings, plaintext_warning
+from hunter1.platform.text import redact_secret
 from hunter1.slices.settings.schemas import (
     ConnectionTestResponse,
     SettingsForm,
@@ -30,12 +31,10 @@ def _redact(message: str, settings: LLMSettings) -> str:
 
     底层 HTTP 客户端的异常会带上请求细节（有的厂商直接把 Authorization 回显在
     4xx 体里），而这段文案是要显示给用户、也可能是用户贴给维护者的 ——
-    它绝不能含完整密钥。掩码形态与 `masked_key()` 一致（`***`）。
+    它绝不能含完整密钥。实现见 `platform.text.redact_secret`（与 LLM 客户端
+    自身出错时的抹除共用同一份，避免两处措辞/规则分叉）。
     """
-    key = settings.api_key
-    if key:
-        message = message.replace(key, "***")
-    return message
+    return redact_secret(message, settings.api_key)
 
 
 def _view(settings: LLMSettings) -> SettingsView:
