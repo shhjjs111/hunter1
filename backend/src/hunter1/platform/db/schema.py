@@ -66,6 +66,12 @@ class JobRow(Base):
     city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     jd_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
     match_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 评分溯源：这一版分是**哪个模型、哪版提示词**打的，以及什么时候打的。
+    # 没有它们，「这条分是哪版打出来的」只能靠猜 —— 而 prompts.py 明确宣称
+    # PROMPT_VERSION 就是为此存在的（原先它只出现在 HTTP 响应里、不落库）。
+    score_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    score_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     capture_status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
     first_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True, index=True)
@@ -110,7 +116,10 @@ class ApplicationRow(Base):
     # 所以 `job_id` 只是个**弱引用**（便于回溯原岗位），不是完整性约束。
     # 改这里之前先想清楚：你要的是「投递历史」还是「岗位的附属记录」。
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    job_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # 不给 index=True：`uq_applications_job`（UNIQUE(job_id)，见 database.py 的
+    # _initialize_schema）已经覆盖按岗位查询 —— 再留一个非唯一索引只是同列冗余。
+    # 「一个岗位至多一条投递」也由那条唯一索引兜底（并发下的先读后写会漏）。
+    job_id: Mapped[str] = mapped_column(String(255), nullable=False)
     company: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     stage: Mapped[str] = mapped_column(String(32), nullable=False, default="applied")

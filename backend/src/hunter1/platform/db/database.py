@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
@@ -108,6 +108,97 @@ class Database:
             # 它与上面的唯一索引同列冗余 —— 多一份索引既占空间也拖慢写入，且两个索引
             # 描述同一组列会让读代码的人困惑）。IF EXISTS 兼顾从未建过它的库。
             connection.execute(text("DROP INDEX IF EXISTS ix_conv_messages_conv_seq"))
+
+            # 「一个岗位至多一条投递」同样必须由数据库保证（`applications/service.py`
+            # 的先读后写在并发下失效：两个请求都读到空、各插一条）。老库里可能已经
+            # 存在这种竞态留下的重复行 —— 先收敛再建索引，否则启动路径直接抛裸
+            # IntegrityError、应用起不来（与上面消息序号同款处理）。
+            removed = self._collapse_duplicate_applications(connection)
+            if removed:
+                print(
+                    f"检测到 {removed} 条同一岗位的重复投递记录，已保留各岗位最新的一条"
+                    "并补建唯一索引。",
+                    file=sys.stderr,
+                )
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_applications_job ON applications (job_id)"
+                )
+            )
+            # 清掉被取代的旧非唯一索引（旧代码建在 ORM 的 index=True 上）——
+            # 与上面的消息索引同因：同列冗余只占空间、拖慢写入，还让读代码的人困惑。
+            connection.execute(text("DROP INDEX IF EXISTS ix_applications_job_id"))
+
+            # 新列：`create_all` 只对**新表**生效，老库补不上列（与上面的索引同因）。
+            # SQLite 的 ADD COLUMN 没有 IF NOT EXISTS，先查 PRAGMA 再补。
+            self._add_missing_columns(connection)
+
+    @staticmethod
+    def _add_missing_columns(connection: Connection) -> list[str]:
+        """给已存在的表补上后加的列，返回补了哪些（`表.列`）。
+
+        与索引那两处同一个理由：`create_all` 不会给老表加列，而应用启动后就会
+        `SELECT` 新列 —— 不补会直接报 `no such column`，且用户无从自救。
+
+        增删列时**同时**改这里与 `schema.py`：以 DDL 文本为准（SQLAlchemy 的一次性
+        迁移工具对本项目是过度工程）。
+        """
+        wanted: dict[str, dict[str, str]] = {
+            "jobs": {
+                # 评分溯源（见 schema.py 的 JobRow）
+                "score_model": "VARCHAR(128)",
+                "score_prompt_version": "VARCHAR(64)",
+                "scored_at": "DATETIME",
+            },
+        }
+        added: list[str] = []
+        inspector = inspect(connection)
+        for table, columns in wanted.items():
+            existing = {column["name"] for column in inspector.get_columns(table)}
+            for name, ddl in columns.items():
+                if name in existing:
+                    continue
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                added.append(f"{table}.{name}")
+        return added
+
+    @staticmethod
+    def _collapse_duplicate_applications(connection: Connection) -> int:
+        """同一岗位有多条投递时只留最新那条，返回删除的行数。
+
+        这些重复行只可能来自旧版的先读后写竞态，内容几乎相同（同一岗位、同一时刻
+        的两条投递）。保留 `(updated_at DESC, id ASC)` 的第一条 = 更新的那条，
+        并列时取 id 小的 —— 排序键确定，结果可复现。
+
+        删除是**改用户数据**，不能静默：调用处把行数打到 stderr（与消息序号重排同款）。
+        只处理确有重复的岗位（干净库上这条查询只做一次 GROUP BY）。
+        """
+        duplicated = (
+            connection.execute(
+                text("SELECT job_id FROM applications GROUP BY job_id HAVING COUNT(*) > 1")
+            )
+            .scalars()
+            .all()
+        )
+        removed = 0
+        for job_id in duplicated:
+            rows = (
+                connection.execute(
+                    text(
+                        "SELECT id FROM applications WHERE job_id = :job "
+                        "ORDER BY updated_at DESC, id ASC"
+                    ),
+                    {"job": job_id},
+                )
+                .scalars()
+                .all()
+            )
+            for application_id in rows[1:]:
+                connection.execute(
+                    text("DELETE FROM applications WHERE id = :id"), {"id": application_id}
+                )
+                removed += 1
+        return removed
 
     @staticmethod
     def _repair_duplicate_message_sequences(connection: Connection) -> int:
