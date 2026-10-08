@@ -134,10 +134,26 @@ class TestCooldown:
         lease = limiter.acquire("https://b.com/x", timeout=1)  # 不受影响
         lease.release()
 
-    def test_bad_retry_after_is_ignored(self, clock: FakeClock) -> None:
+    def test_bad_retry_after_falls_back_to_the_backoff(self, clock: FakeClock) -> None:
+        """坏 `Retry-After` 要被**忽略**、退回指数退避 —— 而不是「不冷却」。
+
+        原先断言 `<= 60.0`：与「退避被 cap 夹住」那条不变量重合，完全不上冷却
+        （0.0 <= 60.0）也绿，`_parse_retry_after` 坏掉也绿。这里钉住**具体时长**：
+        首次失败、base=1.0 → 冷却恰好 1.0 秒（= base × 2^(1-1)）。
+        """
         limiter = _limiter(clock, per_host=2, base=1.0, cap=60.0)
         limiter.record("https://a.com/x", status=429, retry_after="not-a-number")
-        assert limiter.cooldown_remaining("a.com") <= 60.0
+        assert limiter.cooldown_remaining("a.com") == pytest.approx(1.0)
+
+    def test_valid_retry_after_longer_than_backoff_wins(self, clock: FakeClock) -> None:
+        """合法的 `Retry-After` 比退避更长时以它为准（主机明说了要等多久）。
+
+        与上一条配对：一条钉「坏值被忽略」，一条钉「好值被采纳」——
+        只钉前者的写法在「永远忽略 retry_after」的实现下照样绿。
+        """
+        limiter = _limiter(clock, per_host=2, base=1.0, cap=60.0)
+        limiter.record("https://a.com/x", status=429, retry_after="30")
+        assert limiter.cooldown_remaining("a.com") == pytest.approx(30.0)
 
 
 class TestRequestSpacing:
