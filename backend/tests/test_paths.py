@@ -20,7 +20,8 @@ class TestDevelopmentLayout:
         assert paths.is_frozen() is False
 
     def test_app_dir_is_repository_root(self) -> None:
-        # src/hunter1/paths.py → 上溯找到含 pyproject.toml 的工程根（backend/）
+        # src/hunter1/paths.py → 上溯找到含 pyproject.toml 的工程根（本仓 monorepo
+        # 里那是 `backend/`，Python 工程根；仓库根再往上一级是 D:\hunter1）
         assert (paths.app_dir() / "pyproject.toml").is_file()
 
     def test_data_dir_is_repository_local_dot_data(self) -> None:
@@ -97,6 +98,80 @@ class TestInstalledLayout:
     ) -> None:
         self._installed(monkeypatch)
         assert paths.default_db_path() == paths.user_data_dir() / "hunter1.db"
+
+
+class TestHostVirtualenvCollision:
+    """hunter1 被装进**宿主项目自己仓库里**的 `.venv` 时，不能认宿主项目的根。
+
+    这是「上溯找 pyproject.toml」判据的真实翻车面：`site-packages/hunter1/paths.py`
+    的上溯路径会依次经过 `site-packages → Lib → .venv → 宿主项目根`，而在宿主项目根
+    上恰好有一份 `pyproject.toml`。原先的判据会把它当自己的仓库根 —— 于是
+    `data_dir()` 变成 `<宿主>/.data/`，**把数据写进别人的项目**。
+
+    修法：见到虚拟环境边界（`site-packages` / `pyvenv.cfg`）就停止上溯。
+    """
+
+    def _fake_install(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        """搭出「宿主项目里有个 .venv，hunter1 装在它的 site-packages 里」。"""
+        host = tmp_path / "host-project"
+        host.mkdir(parents=True)
+        (host / "pyproject.toml").write_text("[project]\nname = 'host'\n", encoding="utf-8")
+        venv = host / ".venv"
+        venv.mkdir()
+        (venv / "pyvenv.cfg").write_text("home = ...\n", encoding="utf-8")
+        package = venv / "Lib" / "site-packages" / "hunter1"
+        package.mkdir(parents=True)
+        fake_file = package / "paths.py"
+        fake_file.write_text("", encoding="utf-8")
+        monkeypatch.setattr(paths, "__file__", str(fake_file))
+        return host
+
+    def test_host_project_root_is_not_adopted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._fake_install(monkeypatch, tmp_path)
+        assert paths._repo_root() is None
+
+    def test_data_does_not_land_in_the_host_project(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        host = self._fake_install(monkeypatch, tmp_path)
+        chosen = paths.data_dir()
+        assert chosen == paths.user_data_dir()
+        assert not chosen.is_relative_to(host)
+
+    def test_site_packages_alone_stops_the_search(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """没有 `pyvenv.cfg` 也算边界（`pip install --target` / 系统级安装）。"""
+        host = tmp_path / "host"
+        host.mkdir(parents=True)
+        (host / "pyproject.toml").write_text("[project]\nname = 'host'\n", encoding="utf-8")
+        package = host / "site-packages" / "hunter1"
+        package.mkdir(parents=True)
+        fake_file = package / "paths.py"
+        fake_file.write_text("", encoding="utf-8")
+        monkeypatch.setattr(paths, "__file__", str(fake_file))
+        assert paths._repo_root() is None
+
+    def test_pyvenv_cfg_alone_stops_the_search(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """边界也可以是环境根本身（`.venv/pyvenv.cfg`）—— 链上不叫 site-packages 时靠它。"""
+        host = tmp_path / "host"
+        host.mkdir(parents=True)
+        (host / "pyproject.toml").write_text("[project]\nname = 'host'\n", encoding="utf-8")
+        venv = host / ".venv"
+        (venv / "Lib" / "hunter1").mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = ...\n", encoding="utf-8")
+        fake_file = venv / "Lib" / "hunter1" / "paths.py"
+        fake_file.write_text("", encoding="utf-8")
+        monkeypatch.setattr(paths, "__file__", str(fake_file))
+        assert paths._repo_root() is None
+
+    def test_development_layout_is_unaffected(self) -> None:
+        """对照：真实开发树里没有虚拟环境边界，仍能找到工程根。"""
+        assert paths._repo_root() is not None
 
 
 class TestUserDataDir:
