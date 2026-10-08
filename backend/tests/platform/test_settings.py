@@ -1,6 +1,6 @@
 """配置仓储测试 —— LLM 配置的读写往返。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations

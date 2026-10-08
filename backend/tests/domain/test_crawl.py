@@ -1,6 +1,6 @@
 """domain.crawl 单元测试 —— 抓取领域类型，纯函数，无 IO。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations

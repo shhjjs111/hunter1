@@ -54,15 +54,108 @@ SLICE_LEGACY_ALLOW: dict[str, tuple[str, ...]] = {}
 SHARED_PORT_MODULE = "hunter1.application.ports"
 
 
-def _imported_modules(path: Path) -> set[str]:
+def _module_name(path: Path, root: Path = SRC) -> str:
+    """文件的绝对模块名（如 `hunter1.slices.jobs.router`）。
+
+    纯路径推导，不执行、不导入任何代码 —— 只用来给相对 import 定位基准包。
+    """
+    rel = path.resolve().relative_to(root.parent)
+    parts = list(rel.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _resolve_relative(package: str, level: int) -> str | None:
+    """把相对 import 的层级（`.` 的个数）还原成绝对包名；越出顶层时返回 None。"""
+    parts = package.split(".") if package else []
+    drop = level - 1
+    if drop > len(parts):
+        return None
+    kept = parts[: len(parts) - drop] if drop else parts
+    return ".".join(kept) or None
+
+
+def _is_module_in_tree(dotted: str, root: Path) -> bool:
+    """`hunter1.slices.jobs.store` 在源码树里是不是一个真实模块（或包）？
+
+    用来分辨 `from hunter1.slices.jobs import store` 里的名字是**子模块**还是
+    **公开面符号** —— AST 里两者长得一样，只有源码树能分辨。
+    """
+    parts = dotted.split(".")
+    if not parts or parts[0] != root.name:
+        return False
+    path = root.joinpath(*parts[1:])
+    return path.with_suffix(".py").is_file() or (path / "__init__.py").is_file()
+
+
+def _submodules_of(prefix: str, names: list[ast.alias], root: Path) -> set[str]:
+    """`from <prefix> import a, b` 里那些**确实是子模块**的名字。
+
+    ⚠️ 只看 `node.module`（前缀）是不够的：`from hunter1.slices.jobs import store`
+    与 `from hunter1.slices.jobs.store import JobStore` 是同一件事 —— 都深链了
+    切片的内部模块，但前者在 AST 里只是一条 `ImportFrom` 的 name。只收前缀会让
+    它读起来像「走公开面」，从深链守卫下溜过去。
+
+    反过来也不能无脑展开名字：`from hunter1.slices.jobs import JobStore` 是
+    **合法**的公开面导入（AGENTS.md 明确允许），把 `JobStore` 也当成模块就会
+    把合法写法误判成违规。判据只能是「这个名字在源码树里存在对应文件吗」。
+    """
+    found: set[str] = set()
+    for alias in names:
+        candidate = f"{prefix}.{alias.name}"
+        if _is_module_in_tree(candidate, root):
+            found.add(candidate)
+    return found
+
+
+def _imported_modules(path: Path, *, root: Path = SRC) -> set[str]:
+    """收集一个文件 import 的全部模块（相对 import 统一还原成绝对名）。
+
+    ⚠️ 相对 import 必须一并解析：`from ..jobs.store import JobStore` 与
+    `from hunter1.slices.jobs.store import JobStore` 语义完全相同，但裸 AST 里
+    前者 node.level=1、module="jobs.store"。只认 level==0 时，那个相对写法
+    **完全绕过下面的分层与深链守卫** —— 「越权即红灯」这扇门就没锁
+    （当前 src 里恰好没有相对 import，所以是潜伏漏洞而非现存违规）。
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    package = _module_name(path, root).rsplit(".", 1)[0]
     modules: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            modules.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                if node.module:
+                    modules.add(node.module)
+                    modules.update(_submodules_of(node.module, node.names, root))
+                continue
+            base = _resolve_relative(package, node.level)
+            if base is None:
+                continue
+            if node.module:
+                qualified = f"{base}.{node.module}"
+                modules.add(qualified)
+                modules.update(_submodules_of(qualified, node.names, root))
+            else:
+                modules.add(base)
+                modules.update(_submodules_of(base, node.names, root))
     return modules
+
+
+def _deep_link_offender(path: Path, slice_name: str, *, root: Path = SRC) -> str | None:
+    """该文件是否深链了**别的**切片的内部模块？返回第一个违规模块名。
+
+    抽成函数是为了让它自己也能被测（见 TestDeepLinkRule）——
+    守卫的判据若只活在断言里，「永远返回空」的实现可以一路绿下去。
+    """
+    for module in sorted(_imported_modules(path, root=root)):
+        if not module.startswith("hunter1.slices."):
+            continue
+        parts = module.split(".")
+        if len(parts) > 3 and parts[2] != slice_name:
+            return module
+    return None
 
 
 def _py_files(layer: str) -> list[Path]:
@@ -210,18 +303,29 @@ def test_slices_do_not_reach_into_each_other() -> None:
 
     `from hunter1.slices.jobs import JobStore` 合法（公开面）；
     `from hunter1.slices.jobs.store import JobStore` 违规（深链内部）。
-    深链让领地边界失效，并行改动的冲突会从这里回来。
+    `from hunter1.slices.jobs import store` 同样是深链 —— 名字指向的是内部模块，
+    不是公开面符号（判据见 `_submodules_of`）。深链让领地边界失效，并行改动的
+    冲突会从这里回来。
     """
     offenders: list[str] = []
     for slice_dir in _slice_dirs():
         name = slice_dir.name
         for path in sorted(slice_dir.rglob("*.py")):
-            for module in _imported_modules(path):
-                if module.startswith("hunter1.slices."):
-                    parts = module.split(".")
-                    if len(parts) > 3 and parts[2] != name:
-                        offenders.append(f"{_rel(path)} imports {module}")
+            module = _deep_link_offender(path, name)
+            if module is not None:
+                offenders.append(f"{_rel(path)} imports {module}")
     assert not offenders, "切片深链违规：\n" + "\n".join(offenders)
+
+
+def test_import_collection_is_not_silently_empty() -> None:
+    """守卫自己不能「永远空」—— 收集器整体失效时，所有「offenders 为空」的断言
+    都会照常通过（真实违规也就跟着隐形了）。
+
+    这里钉一个必然成立的正面事实：真实文件确实收集到了 import。
+    """
+    collected = _imported_modules(SRC / "main.py")
+    assert any(module.startswith("hunter1.") for module in collected)
+    assert any(module.startswith("fastapi") for module in collected)
 
 
 def test_release_source_port_matches_client_signature() -> None:
@@ -244,3 +348,125 @@ def test_release_source_port_matches_client_signature() -> None:
         assert port_params == impl_params, (
             f"{method} 参数集不一致：端口 {port_params} vs 实现 {impl_params}"
         )
+
+
+def _write_tree(
+    tmp_path: Path, relative: str, source: str, *, modules: tuple[str, ...] = ()
+) -> tuple[Path, Path]:
+    """造一棵最小源码树：`relative` 处写 `source`，`modules` 处写空的模块文件。
+
+    子模块识别的判据是「源码树里存在对应文件」（见 `_is_module_in_tree`），
+    所以构造深链用例时必须把目标模块**真的建出来** —— 否则测的是一个空树，
+    通过的结论对真实仓库没有意义。
+    """
+    root = tmp_path / "src" / "hunter1"
+    for module in modules:
+        extra = root.joinpath(*module.split(".")[1:]).with_suffix(".py")
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_text("", encoding="utf-8")
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source, encoding="utf-8")
+    return root, target
+
+
+class TestRelativeImportResolution:
+    """相对 import 必须被还原成绝对模块名 —— 否则分层/深链守卫对它是瞎的。
+
+    报告项 M6：`_imported_modules` 原先只收 `node.level == 0`，
+    `from ..slices.jobs.store import X` 这类相对写法完全绕过检查。
+    """
+
+    def _mods(
+        self, tmp_path: Path, relative: str, source: str, modules: tuple[str, ...] = ()
+    ) -> set[str]:
+        root, target = _write_tree(tmp_path, relative, source, modules=modules)
+        return _imported_modules(target, root=root)
+
+    def test_parent_relative_import_resolves_to_absolute(self, tmp_path: Path) -> None:
+        """`..` 越级：切片深链另一个切片的内部模块。"""
+        mods = self._mods(tmp_path, "slices/crawl/runner.py", "from ..jobs.store import JobStore\n")
+        assert "hunter1.slices.jobs.store" in mods
+
+    def test_sibling_relative_import_resolves_to_absolute(self, tmp_path: Path) -> None:
+        """`.` 同级：切片内部模块。"""
+        mods = self._mods(tmp_path, "slices/jobs/router.py", "from .store import JobStore\n")
+        assert "hunter1.slices.jobs.store" in mods
+
+    def test_from_dot_import_names_resolves_each(self, tmp_path: Path) -> None:
+        """`from . import store` 的 node.module 为 None，需靠 names 还原。"""
+        mods = self._mods(
+            tmp_path,
+            "slices/jobs/router.py",
+            "from . import store\n",
+            modules=("hunter1.slices.jobs.store",),
+        )
+        assert "hunter1.slices.jobs.store" in mods
+
+    def test_relative_submodule_alias_resolves(self, tmp_path: Path) -> None:
+        """`from ..jobs import store` —— name 是子模块，同样是深链。"""
+        mods = self._mods(
+            tmp_path,
+            "slices/crawl/runner.py",
+            "from ..jobs import store\n",
+            modules=("hunter1.slices.jobs.store",),
+        )
+        assert "hunter1.slices.jobs.store" in mods
+
+    def test_relative_beyond_top_returns_nothing(self, tmp_path: Path) -> None:
+        """越出顶层的相对层级不应拼出畸形模块名。"""
+        mods = self._mods(tmp_path, "x.py", "from ....nowhere import y\n")
+        assert not any(m.endswith("nowhere.y") for m in mods)
+
+
+class TestDeepLinkRule:
+    """深链判据本身要有**能变红**的用例。
+
+    报告项 M6 的另一半：原先所有守卫断言都是「offenders 为空」，收集逻辑整体
+    失效（永远返回空集）时 874 个测试照样全绿 —— 守卫缺的是负向用例。
+    这里同时钉住两个方向：真深链必须被认出，公开面导入不许误伤。
+    """
+
+    def _offender(
+        self, tmp_path: Path, relative: str, source: str, modules: tuple[str, ...] = ()
+    ) -> str | None:
+        root, target = _write_tree(tmp_path, relative, source, modules=modules)
+        # relative 形如 `slices/<切片名>/<文件>`：第二段就是切片名（与真实守卫传
+        # `slice_dir.name` 一致）
+        return _deep_link_offender(target, relative.split("/")[1], root=root)
+
+    def test_flags_submodule_alias_in_absolute_from_import(self, tmp_path: Path) -> None:
+        """`from hunter1.slices.jobs import store` → 深链（名字是内部模块）。"""
+        offender = self._offender(
+            tmp_path,
+            "slices/crawl/runner.py",
+            "from hunter1.slices.jobs import store\n",
+            modules=("hunter1.slices.jobs.store",),
+        )
+        assert offender == "hunter1.slices.jobs.store"
+
+    def test_flags_submodule_alias_in_relative_from_import(self, tmp_path: Path) -> None:
+        offender = self._offender(
+            tmp_path,
+            "slices/crawl/runner.py",
+            "from ..jobs import store\n",
+            modules=("hunter1.slices.jobs.store",),
+        )
+        assert offender == "hunter1.slices.jobs.store"
+
+    def test_public_symbol_import_is_not_flagged(self, tmp_path: Path) -> None:
+        """`from hunter1.slices.jobs import JobStore` 是 AGENTS.md 允许的公开面导入。"""
+        offender = self._offender(
+            tmp_path,
+            "slices/crawl/runner.py",
+            "from hunter1.slices.jobs import JobStore, find_job\n",
+        )
+        assert offender is None
+
+    def test_same_slice_internal_import_is_not_flagged(self, tmp_path: Path) -> None:
+        offender = self._offender(
+            tmp_path,
+            "slices/jobs/router.py",
+            "from hunter1.slices.jobs.store import JobStore\n",
+        )
+        assert offender is None

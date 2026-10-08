@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
@@ -71,13 +72,40 @@ class TestReadToken:
 
 
 class TestNoTokenLeakInArgv:
-    def test_remote_url_is_built_without_token(self) -> None:
-        """远端地址里不该出现令牌 —— 那会写进 .git/config 并可被读到。"""
-        source = (ROOT / "scripts" / "gh_publish.py").read_text(encoding="utf-8")
-        assert "{owner}/{repo}.git" in source  # 地址模板不含凭据占位
-        # 令牌只经 GIT_ASKPASS 的临时脚本传递
-        assert "GIT_ASKPASS" in source
-        assert "HUNTER1_GH_TOKEN" in source
+    def test_token_goes_via_env_not_argv_or_disk(self, monkeypatch) -> None:
+        """令牌只经 GIT_ASKPASS 脚本读的**环境变量**传递。
+
+        原先只断言源码里存在 `GIT_ASKPASS` / `HUNTER1_GH_TOKEN` 两个子串 ——
+        模板照留、另把令牌拼进 argv（`git push https://token@host/...` 那种）的改法
+        照样全绿。这里真跑一次 `git()`，直接检查三处：
+        argv 里没有令牌、askpass 脚本里没有令牌、令牌只在环境变量里。
+        """
+
+        @dataclass
+        class Seen:
+            cmd: list[str] = field(default_factory=list)
+            env: dict[str, str] = field(default_factory=dict)
+            script: str = ""
+            askpass: Path | None = None
+
+        seen = Seen()
+
+        def fake_run(cmd, **kwargs):
+            seen.cmd = [str(part) for part in cmd]
+            env = dict(kwargs.get("env") or {})
+            seen.env = {str(k): str(v) for k, v in env.items()}
+            seen.askpass = Path(seen.env["GIT_ASKPASS"])
+            seen.script = seen.askpass.read_text(encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        gh.git("push", "origin", "HEAD:refs/heads/main", token="ghp_SECRET_TOKEN_123")
+
+        assert "ghp_SECRET_TOKEN_123" not in " ".join(seen.cmd)  # 不进 argv（ps 可见）
+        assert "ghp_SECRET_TOKEN_123" not in seen.script  # 不落盘
+        assert seen.env["HUNTER1_GH_TOKEN"] == "ghp_SECRET_TOKEN_123"  # 只经环境变量
+        assert "x-access-token" in seen.script  # PAT 约定的用户名
+        assert seen.askpass is not None and not seen.askpass.exists()  # 用完即删
 
 
 class TestResolveTarget:
@@ -717,3 +745,117 @@ class TestEnsureReleaseUsesStatus:
         monkeypatch.setattr(gh, "api_request", fake_api)
         with pytest.raises(gh.ApiError):
             gh.ensure_release("a", "b", "t", "v1", "notes")
+
+
+class TestVerifyTokenStatus:
+    """L14：只有明确的鉴权失败（401/403）才算「令牌被拒」。
+
+    GitHub 自身故障（5xx）与限流（429）**不是**令牌问题 —— 原先 `except ApiError`
+    一把抓全归成 None，用户会被告知「GitHub 拒绝了令牌」而去反复折腾令牌，
+    而真正的问题在 GitHub 那一侧。这也与该模块刻意区分 `NetworkError` 的初衷一致。
+    """
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_auth_failures_return_none(self, monkeypatch, status: int) -> None:
+        def boom(method, path, token, **kw):
+            raise gh.ApiError(method, path, status, "denied")
+
+        monkeypatch.setattr(gh, "api_request", boom)
+        assert gh.verify_token("t") is None
+
+    @pytest.mark.parametrize("status", [500, 502, 429])
+    def test_github_failures_propagate(self, monkeypatch, status: int) -> None:
+        def boom(method, path, token, **kw):
+            raise gh.ApiError(method, path, status, "server side")
+
+        monkeypatch.setattr(gh, "api_request", boom)
+        with pytest.raises(gh.ApiError):
+            gh.verify_token("t")
+
+
+class TestTokenFileEnvOverride:
+    """L13：令牌文件位置必须与 scripts/gh_setup.sh 用**同一个**环境变量。
+
+    原先 gh_publish.py 硬编码 `~/.hunter1_gh_token`，而 gh_setup.sh 认
+    `HUNTER1_GH_TOKEN_FILE` —— 设了该变量的用户会被告知「已保存」，
+    发布脚本却去读另一个文件、读不到。
+
+    行为断言：真设上该变量、重新导入模块，常量必须落在它指的位置。
+    （只 grep 源码文本挡不住「名字在、取值写死」这类改法。）
+    """
+
+    def test_env_var_decides_token_path_at_import(self, monkeypatch, tmp_path: Path) -> None:
+        target = tmp_path / "custom_token"
+        monkeypatch.setenv("HUNTER1_GH_TOKEN_FILE", str(target))
+        module = _load()  # 常量在导入时求值 —— 重新导入才是真实生效路径
+        assert target == module.DEFAULT_TOKEN_FILE
+
+    def test_setup_script_writes_that_same_variable(self) -> None:
+        """另一半只能在源码里认名字：gh_setup.sh 是 shell，没有可调用的函数面。"""
+        setup = (ROOT / "scripts" / "gh_setup.sh").read_text(encoding="utf-8")
+        assert "HUNTER1_GH_TOKEN_FILE" in setup
+
+
+class TestReuploadCheckOrdering:
+    """M9：`--reupload` 的产物校验必须发生在 owner 解析**之后**、dry-run 返回**之前**。
+
+    两个错位都会造成误导：
+
+    - 在 owner 解析前 → owner 为空时拼出 `https://github.com//hunter1/...`
+      必然取不到，fail-closed 报「请正常发布一次」，把人指向完全错误的方向
+      （而「省略 owner」正是双击入口的默认路径）；
+    - 在 dry-run 返回前 → `--dry-run` 也会发一次网络请求，破坏只读承诺。
+
+    断言按**实际调用顺序与实参**，不再按源码文本里两个字符串的 `.index()`：
+    后者等价重构就假红（这段挪进辅助函数、或前面多一行打印都会挪位置），
+    真错位也可能假绿（字符串先出现在注释/文档串里）。
+    """
+
+    @pytest.fixture
+    def harness(self, monkeypatch, tmp_path: Path) -> list[tuple[str, tuple[object, ...]]]:
+        root = tmp_path / "repo"
+        (root / "dist" / "hunter1").mkdir(parents=True)
+        (root / "dist" / "hunter1-win32.zip").write_bytes(b"zip")
+        (root / "dist" / "hunter1" / "hunter1.exe").write_bytes(b"exe")
+        monkeypatch.setattr(gh, "ROOT", root)
+
+        calls: list[tuple[str, tuple[object, ...]]] = []
+
+        def fake_run(cmd, **kwargs):
+            # `git status --porcelain` 必须干净，`git rev-parse` 给个稳定 sha
+            out = "" if "status" in cmd else "cafebabe1234\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        monkeypatch.setattr(gh, "read_token", lambda: "fake-token")
+
+        def fake_api(method: str, path: str, token: str, **kw: object) -> dict[str, str]:
+            calls.append(("api", (method, path)))
+            return {"login": "acme"}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+
+        def fake_check(owner: str, repo: str, tag: str, zip_path: Path) -> str:
+            calls.append(("check", (owner, repo)))
+            return "a" * 64
+
+        monkeypatch.setattr(gh, "check_reupload_is_same_artifact", fake_check)
+        for name in ("ensure_repo", "ensure_release", "regenerate_manifest", "upload_asset"):
+            monkeypatch.setattr(gh, name, lambda *a, **k: None)
+        return calls
+
+    def test_check_sees_the_resolved_owner(
+        self, harness: list[tuple[str, tuple[object, ...]]]
+    ) -> None:
+        # 走「省略 owner」这条路（双击入口的默认路径）：owner 必须由令牌账号补上，
+        # 校验拿到的不能是空串。
+        assert gh.main(["--reupload"]) == 0
+        kinds = [name for name, _ in harness]
+        check_args = next(args for name, args in harness if name == "check")
+        assert check_args[0] == "acme"
+        assert kinds.index("api") < kinds.index("check")
+
+    def test_dry_run_sends_no_request(self, harness: list[tuple[str, tuple[object, ...]]]) -> None:
+        # --dry-run 是只读承诺：不解析令牌，也不发产物校验请求
+        assert gh.main(["--reupload", "--dry-run"]) == 0
+        assert harness == []
