@@ -116,6 +116,26 @@ def _is_llm_configured(context: AppContext) -> bool:
     return settings is not None and settings.is_configured
 
 
+def _port_is_free(host: str, port: int) -> bool:
+    """能否在 (host, port) 上绑定 —— 宣布「已启动」、开浏览器之前先探一次。
+
+    这是**预检**（bind 一次即关），真正的绑定仍由 uvicorn 完成。要解决的是最常见
+    的那种失败：端口被占时先打印一句「已启动」，还开一个指向死服务的浏览器页，
+    用户得自己从 uvicorn 的报错里反推发生了什么。
+
+    预检与真正绑定之间仍有一次 TOCTOU 窗口 —— 但那是毫秒级，且真撞上时 uvicorn
+    自己会报错退出，不会留下错误的状态说明。
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -128,6 +148,11 @@ def _serve(args: argparse.Namespace) -> int:
     context = AppContext.default(db_path=db_path, site_keys=_site_keys(args.sites))
     app = create_app(context)
     url = f"http://{args.host}:{args.port}"
+
+    if not _port_is_free(args.host, args.port):
+        print(f"端口 {args.port} 已被占用：换一个 --port，或先停掉占用它的进程。")
+        context.db.dispose()
+        return 2
 
     print(f"Hunter1 已启动：{url}")
     print(f"数据库：{db_path}")
@@ -156,18 +181,25 @@ def _crawl(args: argparse.Namespace) -> int:
     from hunter1.slices.crawl import crawl_all
 
     context = AppContext.default(db_path=args.db, site_keys=_site_keys(args.sites))
-    batch = crawl_all(context.crawler_factory(), jobs=context.db.jobs())
-    for result in batch.results:
-        flag = "OK  " if result.ok else "FAIL"
-        print(
-            f"[{flag}] {result.company:<12} 抓到 {result.fetched:>4}  "
-            f"新增 {result.created:>4} 更新 {result.updated:>4}"
-        )
-        if result.error:
-            print(f"         {result.error}")
-    print(f"合计：抓到 {batch.fetched}，新增 {batch.created}，失败站点 {len(batch.failures)}")
-    context.db.dispose()
-    return 0 if batch.fetched else 1
+    try:
+        batch = crawl_all(context.crawler_factory(), jobs=context.db.jobs())
+        for result in batch.results:
+            flag = "OK  " if result.ok else "FAIL"
+            print(
+                f"[{flag}] {result.company:<12} 抓到 {result.fetched:>4}  "
+                f"新增 {result.created:>4} 更新 {result.updated:>4}"
+            )
+            if result.error:
+                print(f"         {result.error}")
+        print(f"合计：抓到 {batch.fetched}，新增 {batch.created}，失败站点 {len(batch.failures)}")
+    finally:
+        # 与 `_serve` 同一约定：异常路径也必须释放连接 —— 否则 SQLite 的
+        # `-wal` / `-shm` 会留在数据目录里（「删目录即卸载」的便携定位）。
+        context.db.dispose()
+    # 退出码按「站点是否全部成功」判，不按「抓到几条」：
+    #   - 全部站点成功但本轮没有新岗位（都抓过了，很常见）→ 0，不是失败；
+    #   - 有站点失败 → 1，哪怕别的站点抓到了几百条 —— 失败要让定时任务/CI 看见。
+    return 0 if batch.ok else 1
 
 
 def _update(args: argparse.Namespace) -> int:
@@ -269,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 环境问题，不是程序缺陷：给一句人话 + 一个可行动的提示，
         # 而不是把 traceback 砸到用户脸上。
         print(f"数据库位置不可用：{exc}")
-        print("换一个可写的位置，例如 --db ./hunter1.db")
+        print("换一个可写的位置（--db ./hunter1.db），或检查该文件是否被占用/损坏。")
         return 2
     parser.print_help()
     return 1

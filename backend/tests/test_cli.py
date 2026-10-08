@@ -16,6 +16,7 @@ from hunter1.cli import (
     main,
 )
 from hunter1.paths import default_db_path
+from hunter1.slices.crawl.service import BatchCrawlResult, CrawlResult
 
 # tests/test_cli.py → 上溯一级是后端工程根（backend/）
 ROOT = Path(__file__).resolve().parents[1]
@@ -235,6 +236,61 @@ class TestUpdateCommand:
         assert "manifest_invalid" in out
         assert "Traceback" not in out
 
+    def test_non_zip_download_reports_instead_of_traceback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """端到端：清单指向一个「不是 zip」的产物 → 人话 + exit 1，不是 traceback。
+
+        修复前 `zipfile.BadZipFile`（mro: BadZipFile → Exception，**不是**
+        ValueError）直接穿出 CLI 的 `except (DownloadError, ValueError)`。
+        """
+        import hashlib
+        import json
+        import sys
+
+        import httpx
+
+        from hunter1.platform.update import ReleaseClient
+
+        payload = b"<html>404 from the mirror</html>"
+        manifest = json.dumps(
+            {
+                "version": "9.9.9",
+                "assets": [
+                    {
+                        "platform": sys.platform,
+                        "url": "https://mirror.example.com/w.zip",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                ],
+            }
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("manifest.json"):
+                return httpx.Response(200, text=manifest)
+            return httpx.Response(200, content=payload)
+
+        monkeypatch.setattr(
+            "hunter1.platform.update.ReleaseClient",
+            lambda: ReleaseClient(transport=httpx.MockTransport(handler)),
+        )
+        code = main(
+            [
+                "update",
+                "--source",
+                "https://mirror.example.com/manifest.json",
+                "--download",
+                "--dest",
+                str(tmp_path / "updates"),
+            ]
+        )
+        assert code == 1
+        out = capsys.readouterr().out
+        assert "下载失败" in out
+        assert "archive_invalid" in out
+        assert "Traceback" not in out
+
 
 class TestMain:
     def test_no_command_prints_help_and_fails(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -244,3 +300,126 @@ class TestMain:
     def test_parse_error_for_unknown_command_exits(self) -> None:
         with pytest.raises(SystemExit):
             main(["nonsense"])
+
+
+class TestCrawlExitCode:
+    """L9：抓取退出码按**站点成败**判，不按抓到条数判。
+
+    修复前是 `return 0 if batch.fetched else 1`：
+    - 站点全成功但本轮没有新岗位（都抓过了）→ 误报失败（1）；
+    - 5 站挂 4、1 站抓到 3 条 → 误报成功（0），失败被咽掉。
+
+    用**真件** `BatchCrawlResult` / `CrawlResult`（零 IO 的 dataclass）：替身复刻
+    一遍语义，真件改了它会照旧全绿，测的是一个不再存在的世界。
+    """
+
+    def _result(self, *, ok: bool, fetched: int) -> CrawlResult:
+        return CrawlResult(
+            company="某公司",
+            fetched=fetched,
+            created=fetched,
+            updated=0,
+            error=None if ok else "boom",
+        )
+
+    def _run(self, monkeypatch: pytest.MonkeyPatch, batch: BatchCrawlResult) -> int:
+        from hunter1 import cli
+        from hunter1.slices import crawl as crawl_pkg
+
+        class _FakeDb:
+            def jobs(self) -> object:
+                return object()
+
+            def dispose(self) -> None:
+                pass
+
+        class _FakeContext:
+            db = _FakeDb()
+
+            @classmethod
+            def default(cls, **_kw: object) -> _FakeContext:
+                return cls()
+
+            def crawler_factory(self) -> list[object]:
+                return []
+
+        monkeypatch.setattr(cli, "AppContext", _FakeContext)
+        # `_crawl` 是**函数内**导入 crawl_all 的，补丁要打在包上
+        monkeypatch.setattr(crawl_pkg, "crawl_all", lambda *_a, **_kw: batch)
+        return cli._crawl(_build_parser().parse_args(["crawl"]))
+
+    def test_all_sites_ok_with_zero_fetched_is_success(self, monkeypatch) -> None:
+        code = self._run(monkeypatch, BatchCrawlResult([self._result(ok=True, fetched=0)]))
+        assert code == 0
+
+    def test_partial_site_failure_is_reported(self, monkeypatch) -> None:
+        batch = BatchCrawlResult(
+            [self._result(ok=True, fetched=3), self._result(ok=False, fetched=0)]
+        )
+        code = self._run(monkeypatch, batch)
+        assert code == 1, "有站点失败必须让退出码非零（哪怕别的站点抓到了）"
+
+
+class TestCrawlReleasesDatabase:
+    """`_crawl` 也必须用 try/finally 释放连接（与 `_serve` 同一约定）。
+
+    原先 dispose 写在正常返回路径上：抓取中途抛异常时，SQLite 的 -wal/-shm
+    会留在数据目录里，与「删目录即卸载」的便携定位冲突。
+    """
+
+    def test_exception_still_releases_the_database(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from hunter1.slices import crawl as crawl_pkg
+
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("抓取中途炸了")
+
+        monkeypatch.setattr(crawl_pkg, "crawl_all", boom)
+
+        db_file = Path(__file__).resolve().parent / "_tmp_cli_release.db"
+        db_file.unlink(missing_ok=True)
+        try:
+            with pytest.raises(RuntimeError):
+                main(["crawl", "--db", str(db_file)])
+            leftovers = sorted(p.name for p in db_file.parent.glob("_tmp_cli_release.db*"))
+            assert leftovers == ["_tmp_cli_release.db"], f"连接没释放，残留 {leftovers}"
+        finally:
+            for path in db_file.parent.glob("_tmp_cli_release.db*"):
+                path.unlink()
+
+
+class TestPortProbe:
+    """端口被占时先给一句人话，**不要**先打印「已启动」再开一个死服务的页面。"""
+
+    def test_occupied_port_reports_readably(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import socket
+
+        import uvicorn
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen(1)
+            port = blocker.getsockname()[1]
+
+            # 预检就该拦下来 —— 走到 uvicorn.run 说明它没起作用
+            monkeypatch.setattr(
+                uvicorn,
+                "run",
+                lambda *_a, **_kw: pytest.fail("端口已被占用，不该走到 uvicorn.run"),
+            )
+            code = main(
+                [
+                    "serve",
+                    "--db",
+                    str(tmp_path / "data" / "h.db"),
+                    "--port",
+                    str(port),
+                    "--no-browser",
+                ]
+            )
+
+        assert code == 2
+        out = capsys.readouterr().out
+        assert "端口" in out and str(port) in out
+        assert "已启动" not in out, "还没绑上就不该宣布启动成功"
