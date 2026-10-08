@@ -5,6 +5,8 @@
 
 不变量：
 - 同一主机同时在飞的请求数 ≤ `per_host`；
+- **同一主机的两次请求之间至少间隔 `min_interval`**（默认 0 = 不额外等待；
+  生产装配在组装根打开这个开关 —— 平台层的默认值要保测试的确定性）；
 - 某主机失败后进入冷却窗口，窗口内对该主机的 acquire 会等待/超时；
 - 冷却时长随连续失败指数增长，且有上限；成功清零；
 - 冷却按主机隔离，不互相影响。
@@ -31,6 +33,8 @@ class _HostState:
     in_flight: int = 0
     failures: int = 0
     cooldown_until: float = 0.0
+    #: 下一次允许向该主机发请求的时刻（请求间隔约束）
+    next_allowed: float = 0.0
 
 
 @dataclass
@@ -57,6 +61,7 @@ class HostLimiter:
         self,
         *,
         per_host: int = 2,
+        min_interval: float = 0.0,
         backoff_base: float = 1.0,
         backoff_cap: float = 60.0,
         monotonic: Callable[[], float] = time.monotonic,
@@ -64,7 +69,10 @@ class HostLimiter:
     ) -> None:
         if per_host < 1:
             raise ValueError("per_host must be >= 1")
+        if min_interval < 0:
+            raise ValueError("min_interval must be >= 0")
         self.per_host = per_host
+        self.min_interval = float(min_interval)
         self.backoff_base = backoff_base
         self.backoff_cap = backoff_cap
         self._monotonic = monotonic
@@ -96,8 +104,8 @@ class HostLimiter:
     def acquire(self, url: str, *, timeout: float = 30.0) -> _Lease:
         """获取一次对 `url` 所在主机的请求许可。
 
-        冷却中或并发已满时会等待（用注入的 sleep），超出 `timeout` 抛
-        `ResourceLimitTimeoutError`。
+        冷却中、并发已满、或距上次请求不足 `min_interval` 时会等待（用注入的
+        sleep），超出 `timeout` 抛 `ResourceLimitTimeoutError`。
         """
         host = _host_of(url)
         deadline = self._monotonic() + max(0.0, timeout)
@@ -108,8 +116,10 @@ class HostLimiter:
                 now = self._monotonic()
                 cooling = state.cooldown_until > now
                 has_slot = state.in_flight < self.per_host
-                if not cooling and has_slot:
+                spaced = now >= state.next_allowed
+                if not cooling and has_slot and spaced:
                     state.in_flight += 1
+                    state.next_allowed = now + self.min_interval
                     return _Lease(_release=lambda: self._release(host))
 
             remaining = deadline - self._monotonic()

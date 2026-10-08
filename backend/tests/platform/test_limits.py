@@ -1,6 +1,6 @@
 """抓取资源治理单元测试 —— 全部离线，用注入的假时钟/假睡眠。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations
@@ -138,6 +138,55 @@ class TestCooldown:
         limiter = _limiter(clock, per_host=2, base=1.0, cap=60.0)
         limiter.record("https://a.com/x", status=429, retry_after="not-a-number")
         assert limiter.cooldown_remaining("a.com") <= 60.0
+
+
+class TestRequestSpacing:
+    """`min_interval`：同一主机的两次请求之间至少间隔这么久（默认 0 = 不等待）。
+
+    这是「对站点礼貌」里最容易被跳过的一环：并发/退避管的是「别打太密」，但一次
+    抓取一轮只有一个进程、一个接一个地打 —— 没有间隔就是连发。生产装配在组装根
+    打开它（默认关，保测试的确定性）。
+    """
+
+    def _spaced(self, clock: FakeClock, *, interval: float = 1.0) -> HostLimiter:
+        return HostLimiter(
+            per_host=2,
+            min_interval=interval,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+
+    def test_second_request_on_same_host_waits(self, clock: FakeClock) -> None:
+        limiter = self._spaced(clock)
+        with limiter.acquire("https://a.com/1"):
+            pass
+        before = clock.now
+        with limiter.acquire("https://a.com/2"):
+            pass
+        assert clock.now - before >= 1.0, "同一主机的第二次请求没有等待间隔"
+
+    def test_different_hosts_do_not_wait_for_each_other(self, clock: FakeClock) -> None:
+        limiter = self._spaced(clock)
+        with limiter.acquire("https://a.com/1"):
+            pass
+        before = clock.now
+        with limiter.acquire("https://b.com/1"):
+            pass
+        assert clock.now == before, "间隔约束不该跨主机生效"
+
+    def test_default_interval_is_zero(self, clock: FakeClock) -> None:
+        """默认不额外等待 —— 平台层的默认值要保测试与脚本的确定性/速度。"""
+        limiter = _limiter(clock)
+        with limiter.acquire("https://a.com/1"):
+            pass
+        before = clock.now
+        with limiter.acquire("https://a.com/2"):
+            pass
+        assert clock.now == before
+
+    def test_negative_interval_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            HostLimiter(min_interval=-1.0)
 
 
 class TestMalformedUrls:

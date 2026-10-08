@@ -1,12 +1,17 @@
-"""HTTP 抓取器 —— httpx + 资源治理 + 重试 + 浏览器 UA 轮换。
+"""HTTP 抓取器 —— httpx + 资源治理（限流/间隔/体积上限/robots）+ 重试 + UA 轮换。
 
 错误一律以 `FetchError`（带机器可读 `code`）抛出，不静默返回 None ——
 静默失败是旧系统最难查的一类问题（调用方拿到 None 却不知为什么）。
+
+「对站点礼貌」的三个机制都在这里，但**默认关**（生产装配在 `main.AppContext.default`
+打开）：每主机请求间隔（`min_interval`）、遵守 `robots.txt`（`respect_robots`）、
+单响应体积上限（`max_bytes`，这个默认开 —— 它是防内存暴涨的硬约束，不是礼貌问题）。
 """
 
 from __future__ import annotations
 
 import random
+import re
 from collections.abc import Iterable
 
 import httpx
@@ -16,6 +21,11 @@ from hunter1.platform.fetch.limits import (
     HostLimiter,
     ResourceLimitTimeoutError,
 )
+from hunter1.platform.fetch.robots import ROBOTS_MAX_BYTES, RobotsCache
+
+#: 单个响应体的上限。限流器管的是「同时打几个请求」，管不到「一个响应有多大」——
+#: 一次重定向落到大文件（或站点返了个巨型日志页）就能把内存吃满。
+DEFAULT_MAX_BYTES = 8 * 1024 * 1024
 
 DEFAULT_USER_AGENTS: tuple[str, ...] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -27,6 +37,13 @@ DEFAULT_USER_AGENTS: tuple[str, ...] = (
 
 DEFAULT_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
 
+# `<meta charset=...>` 声明（「编码只写在 meta 里、响应头不带 charset」是中文站
+# 常见形态）。标准要求它出现在前 1024 字节内，取 4KB 足够宽松。
+_META_CHARSET = re.compile(
+    rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9_\-]+)""",
+    re.IGNORECASE,
+)
+
 
 class FetchError(RuntimeError):
     """一次抓取最终失败。`code` 是稳定的机器可读标识。"""
@@ -35,6 +52,62 @@ class FetchError(RuntimeError):
         super().__init__(f"{code}: {url}")
         self.code = code
         self.url = url
+
+
+def _decode_text(response: httpx.Response) -> str:
+    """把响应体解成文本，带编码回退。
+
+    为什么不用 `response.text`：httpx 在「响应头没有 charset、且环境里没有
+    charset_normalizer / chardet」时固定按 utf-8 + `errors="replace"` 解码。中文站
+    常把编码写在 `<meta>` 里、响应头不带 charset，于是整页**静默**变成一串 U+FFFD
+    （本机实测：httpx 0.28.1、两个探测器均未安装）—— 而本层的承诺是「错误一律
+    FetchError、不静默失败」。乱码不是异常，所以这里显式回退。
+    """
+    return _decode_bytes(response.content, declared=response.charset_encoding)
+
+
+def _decode_bytes(content: bytes, *, declared: str | None) -> str:
+    if declared:
+        try:
+            return content.decode(declared)
+        except (LookupError, UnicodeDecodeError):
+            pass
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    candidates: list[str] = []
+    match = _META_CHARSET.search(content[:4096])
+    if match:
+        candidates.append(match.group(1).decode("ascii", "ignore"))
+    # gb18030 是 gbk/gb2312 的超集，big5 覆盖繁体站。仅在 utf-8 严格解码失败后用。
+    candidates += ["gb18030", "big5"]
+    for encoding in candidates:
+        try:
+            return content.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    # 全都失败：退回 httpx 的宽松解码，至少不制造新的失败面。
+    return content.decode("utf-8", "replace")
+
+
+def _read_capped(response: httpx.Response, limit: int, url: str) -> bytes:
+    """把响应体读进内存，但设上限；超限抛 `FetchError("too_large")`。
+
+    刻意**不**静默截断：半截 HTML 会让解析器产出一个看起来正常、实际缺了一半的
+    岗位列表 —— 比直接失败危险得多。
+    """
+    declared_length = response.headers.get("content-length")
+    if declared_length and declared_length.isdigit() and int(declared_length) > limit:
+        raise FetchError("too_large", url)
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_bytes(64 * 1024):
+        size += len(chunk)
+        if size > limit:
+            raise FetchError("too_large", url)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class HttpFetcher:
@@ -49,17 +122,25 @@ class HttpFetcher:
         user_agents: Iterable[str] = DEFAULT_USER_AGENTS,
         transport: httpx.BaseTransport | None = None,
         client: httpx.Client | None = None,
+        min_interval: float = 0.0,
+        respect_robots: bool = False,
+        max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> None:
-        self.limiter = limiter or HostLimiter()
+        # 「对站点多礼貌」的两个开关默认**关**：平台层的默认值要保测试的确定性
+        # （不然每个用例都要等间隔、每个主机都要多打一次 robots.txt）。
+        # 生产装配在组装根打开它们（见 main.AppContext.default）。
+        self.limiter = limiter or HostLimiter(min_interval=min_interval)
         self.timeout = max(1.0, float(timeout))
         self.retries = max(1, int(retries))
         self.user_agents = tuple(user_agents)
+        self.max_bytes = max(1, int(max_bytes))
         self._owns_client = client is None
         self._client = client or httpx.Client(
             timeout=self.timeout,
             transport=transport,
             follow_redirects=True,
         )
+        self._robots = RobotsCache(self._fetch_robots_text) if respect_robots else None
 
     def close(self) -> None:
         if self._owns_client:
@@ -72,8 +153,23 @@ class HttpFetcher:
         self.close()
 
     def get_text(self, url: str, *, headers: dict[str, str] | None = None) -> str:
-        """抓取并返回响应文本。失败抛 `FetchError`。"""
-        return self.get(url, headers=headers).text
+        """抓取并返回响应文本（带编码回退）。失败抛 `FetchError`。"""
+        return _decode_text(self.get(url, headers=headers))
+
+    def _fetch_robots_text(self, url: str) -> str | None:
+        """取 robots.txt 原文；不可用（4xx / 5xx / 网络错误）返回 None。
+
+        刻意不走 `get_text`：那会把 robots.txt 的 404 记进限流器的失败统计、
+        也会重试三次 —— 而「站点没写 robots.txt」是完全正常的情况。
+        """
+        try:
+            response = self._client.get(url)
+        except httpx.HTTPError:
+            return None
+        if response.status_code >= 400:
+            return None
+        body = response.content[:ROBOTS_MAX_BYTES]
+        return _decode_bytes(body, declared=response.charset_encoding)
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
         request_headers = {
@@ -84,11 +180,27 @@ class HttpFetcher:
         if headers:
             request_headers.update(headers)
 
+        if self._robots is not None and not self._robots.allows(
+            url, user_agent=request_headers["User-Agent"]
+        ):
+            # 站点明确说不许抓 → 不重试、也不记成主机失败（它不是故障）
+            raise FetchError("robots_disallowed", url)
+
         last_code = "transport_failed"
         for attempt in range(1, self.retries + 1):
             try:
-                with self.limiter.acquire(url, timeout=self.timeout):
-                    response = self._client.get(url, headers=request_headers)
+                with (
+                    self.limiter.acquire(url, timeout=self.timeout),
+                    self._client.stream("GET", url, headers=request_headers) as stream,
+                ):
+                    status = stream.status_code
+                    body = _read_capped(stream, self.max_bytes, url)
+                    response = httpx.Response(
+                        status,
+                        headers=stream.headers,
+                        content=body,
+                        request=stream.request,
+                    )
             except (ValueError, httpx.InvalidURL) as exc:
                 # 畸形 URL 没有可治理的主机：限流器 fail-closed 拒绝（ValueError），
                 # httpx 也可能在更深处拒绝（InvalidURL）。统一翻译成 FetchError ——
@@ -99,6 +211,9 @@ class HttpFetcher:
                 if attempt >= self.retries:
                     raise FetchError(last_code, url) from None
                 continue
+            except FetchError:
+                # 体积超限：重试也还是这么大，直接报出去
+                raise
             except httpx.HTTPError:
                 self.limiter.record(url, failed=True)
                 last_code = "transport_failed"
@@ -127,4 +242,10 @@ class HttpFetcher:
         raise FetchError(last_code, url)
 
 
-__all__ = ["DEFAULT_ACCEPT_LANGUAGE", "DEFAULT_USER_AGENTS", "FetchError", "HttpFetcher"]
+__all__ = [
+    "DEFAULT_ACCEPT_LANGUAGE",
+    "DEFAULT_MAX_BYTES",
+    "DEFAULT_USER_AGENTS",
+    "FetchError",
+    "HttpFetcher",
+]
