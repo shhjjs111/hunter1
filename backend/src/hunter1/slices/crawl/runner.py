@@ -141,6 +141,11 @@ class CrawlRunner:
                     for crawler in crawlers
                 ]
             crawl_all(crawlers, jobs=self._jobs, now=self._clock(), on_result=self._record)
+            # **正常结束**也要收敛：某个 key 没等到结果时（例如同一站点被写了两次、
+            # 结果只够结算一行），那一行会永远停在「抓取中」。原先只在 except 分支
+            # 收敛，这条路径漏了 —— 用户看到的是「跑完了但仍有一行在转」。
+            with self._lock:
+                self._settle_leftover_sites("整轮结束但未收到该站点的抓取结果")
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             with self._lock:
@@ -150,28 +155,33 @@ class CrawlRunner:
                 # 失败列表里也看不到它（用户只能重启进程脱困）。这里与
                 # `crawl_company` 的逐站收敛是两道独立的保险：那一道管单个站点，
                 # 这一道管整轮被打断。
-                for site in self._state.sites:
-                    if site.status == "running":
-                        site.status = "failed"
-                        site.error = message
+                self._settle_leftover_sites(message)
         finally:
             with self._lock:
                 self._state.running = False
                 self._state.finished_at = self._clock()
 
+    def _settle_leftover_sites(self, message: str) -> None:
+        """把仍停在 `running` 的行收敛成失败（调用方需持有 `self._lock`）。"""
+        for site in self._state.sites:
+            if site.status == "running":
+                site.status = "failed"
+                site.error = message
+
     def _record(self, result: CrawlResult) -> None:
         with self._lock:
-            for site in self._state.sites:
-                # 按 key 关联而不是显示名：两个站点恰好同名时，按名字匹配会把
-                # 第二个站点的结果记到第一行，第二行永远停在 running。
-                if site.key != result.site_key:
-                    continue
-                site.status = "ok" if result.ok else "failed"
-                site.fetched = result.fetched
-                site.created = result.created
-                site.updated = result.updated
-                site.error = result.error
+            candidates = [site for site in self._state.sites if site.key == result.site_key]
+            if not candidates:
                 return
+            # 同一 key 出现多行时（用户把同一个站点写了两次），结果要**依次**落到
+            # 还没结算的那一行 —— 原实现命中首个就 return，第二行永远停在 running；
+            # 而按名字匹配又会把第二个站点的结果记到第一行（key 才是身份）。
+            target = next((site for site in candidates if site.status == "running"), candidates[-1])
+            target.status = "ok" if result.ok else "failed"
+            target.fetched = result.fetched
+            target.created = result.created
+            target.updated = result.updated
+            target.error = result.error
 
 
 __all__ = ["CrawlRunner", "CrawlSnapshot", "SiteProgress"]

@@ -18,6 +18,7 @@ from hunter1.domain.crawl import RawJob
 from hunter1.domain.models import CaptureStatus
 from hunter1.platform.db import Database
 from hunter1.slices.crawl.runner import CrawlRunner
+from hunter1.slices.crawl.service import CrawlResult
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
@@ -148,6 +149,41 @@ class TestRun:
         jobs = db.jobs().list()
         assert len(jobs) == 1
         assert jobs[0].capture_status is CaptureStatus.PENDING
+
+    def test_duplicate_site_keys_all_settle(self, db: Database) -> None:
+        """同一 key 被写了两次（`--sites a,a`）时，两行都要结算。
+
+        原实现 `_record` 命中首个匹配就 return —— 第二行永远停在「抓取中」，直到
+        用户重启进程（快照的 running 却是 False，更让人困惑）。
+        """
+        runner = _runner(db, [FakeCrawler("甲", key="dup"), FakeCrawler("甲", key="dup")])
+        runner.run()
+
+        snapshot = runner.snapshot()
+        assert [site.status for site in snapshot.sites] == ["ok", "ok"]
+        assert not [site for site in snapshot.sites if site.status == "running"]
+
+    def test_missing_result_is_converged_on_normal_finish(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """整轮正常结束但某一行没等到结果 → 也要收敛（不能停在「抓取中」）。
+
+        原先只在 except 分支收敛，这条路漏了：用户看到「跑完了」但有一行还在转。
+        """
+        import hunter1.slices.crawl.runner as runner_module
+
+        def only_first(crawlers, *, jobs, now, on_result):
+            on_result(CrawlResult(company="乙", site_key="乙", fetched=1))  # 无 error 即 ok
+
+        monkeypatch.setattr(runner_module, "crawl_all", only_first)
+        runner = _runner(db, [FakeCrawler("甲", key="甲"), FakeCrawler("乙", key="乙")])
+        runner.run()
+
+        snapshot = runner.snapshot()
+        statuses = {site.key: site.status for site in snapshot.sites}
+        assert statuses == {"甲": "failed", "乙": "ok"}
+        leftover = next(site for site in snapshot.sites if site.key == "甲")
+        assert leftover.error is not None and "未收到" in leftover.error
 
     def test_as_dict_is_json_friendly(self, db: Database) -> None:
         runner = _runner(db, [FakeCrawler("甲")])
