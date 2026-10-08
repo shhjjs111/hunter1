@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}>
+    <div className={`rounded-lg border border-line bg-surface shadow-sm ${className}`}>
       {children}
     </div>
   );
@@ -22,6 +22,8 @@ type ButtonProps = {
   variant?: "primary" | "default";
   disabled?: boolean;
   className?: string;
+  /** `aria-describedby` —— 表格行内的按钮靠它补上下文（例如念出岗位名）。 */
+  describedBy?: string;
 };
 
 export function Button({
@@ -31,18 +33,20 @@ export function Button({
   variant = "default",
   disabled = false,
   className = "",
+  describedBy,
 }: ButtonProps) {
   const base =
     "rounded px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50";
   const look =
     variant === "primary"
-      ? "bg-slate-900 text-white hover:bg-slate-700"
-      : "border border-slate-300 bg-white hover:bg-slate-100";
+      ? "bg-ink text-white hover:bg-ink-soft"
+      : "border border-field bg-surface hover:bg-surface-sunken";
   return (
     <button
       type={type}
       onClick={onClick}
       disabled={disabled}
+      aria-describedby={describedBy}
       className={`${base} ${look} ${className}`}
     >
       {children}
@@ -58,10 +62,10 @@ export function Tag({
   tone?: "neutral" | "good" | "warn" | "bad";
 }) {
   const tones = {
-    neutral: "bg-slate-100 text-slate-700",
-    good: "bg-emerald-50 text-emerald-700",
-    warn: "bg-amber-50 text-amber-700",
-    bad: "bg-red-50 text-red-700",
+    neutral: "bg-surface-sunken text-ink-soft",
+    good: "bg-success-soft text-success",
+    warn: "bg-warning-soft text-warning",
+    bad: "bg-danger-soft text-danger",
   } as const;
   return (
     <span className={`inline-block rounded px-2 py-0.5 text-xs ${tones[tone]}`}>{children}</span>
@@ -70,7 +74,7 @@ export function Tag({
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
+    <div className="rounded-lg border border-dashed border-field p-8 text-center text-muted">
       {children}
     </div>
   );
@@ -78,12 +82,12 @@ export function EmptyState({ children }: { children: ReactNode }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <p className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{message}</p>
+    <p className="rounded border border-danger-line bg-danger-soft p-3 text-sm text-danger">{message}</p>
   );
 }
 
 export function SuccessNotice({ message }: { message: string }) {
-  return <p className="text-sm text-emerald-600">{message}</p>;
+  return <p className="text-sm text-success">{message}</p>;
 }
 
 export function PageHeader({
@@ -99,7 +103,7 @@ export function PageHeader({
     <header className="mb-6 flex items-baseline justify-between gap-4">
       <div>
         <h1 className="text-2xl font-semibold">{title}</h1>
-        {subtitle != null && <div className="text-sm text-slate-500">{subtitle}</div>}
+        {subtitle != null && <div className="text-sm text-muted">{subtitle}</div>}
       </div>
       {actions}
     </header>

@@ -1,7 +1,11 @@
+import { Button, EmptyState } from "../../../shared/ui";
 import type { JobSummary } from "../api";
 
 /**
  * 岗位表（纯展示）—— 数据与回调全由 props 注入，测试它可以零 mock。
+ *
+ * 空态与行内按钮都走 `shared/ui` 的原语：这两个位置原先各手写了一份边框与
+ * 悬停样式，改视觉时得记得两处（而且容易只改一处）。
  */
 export function JobsTable({
   jobs,
@@ -19,12 +23,12 @@ export function JobsTable({
   onScore: (jobId: string) => void;
 }) {
   if (loading) {
-    return <p className="mt-6 text-slate-500">正在加载岗位…</p>;
+    return <p className="mt-6 text-muted">正在加载岗位…</p>;
   }
   if (jobs.length === 0) {
     return (
-      <div className="mt-6 rounded-lg border border-dashed border-slate-300 p-8 text-center text-slate-500">
-        没有找到岗位。换个关键词，或先去「抓取」跑一轮。
+      <div className="mt-6">
+        <EmptyState>没有找到岗位。换个关键词，或先去「抓取」跑一轮。</EmptyState>
       </div>
     );
   }
@@ -34,7 +38,7 @@ export function JobsTable({
     <div className="mt-6 overflow-x-auto">
       <table className="w-full border-collapse text-sm whitespace-nowrap">
         <thead>
-          <tr className="border-b border-slate-200 text-left text-slate-500">
+          <tr className="border-b border-line text-left text-muted">
             <th className="py-2 pr-4 font-medium">岗位</th>
             <th className="py-2 pr-4 font-medium">公司</th>
             <th className="py-2 pr-4 font-medium">城市</th>
@@ -44,7 +48,7 @@ export function JobsTable({
         </thead>
         <tbody>
           {jobs.map((job) => (
-            <tr key={job.id} className="border-b border-slate-100">
+            <tr key={job.id} className="border-b border-line-soft">
               {/* 行内按钮的**可访问名**保持「评分 / 记录投递」（不覆盖可见文案：
                   WCAG 2.5.3 要求可访问名包含可见标签），岗位信息经
                   `aria-describedby` 补上 —— 屏幕阅读器会念「评分，AI产品经理 字节跳动」，
@@ -63,33 +67,31 @@ export function JobsTable({
               <td className="py-2 pr-4">{job.city ?? "—"}</td>
               <td className="py-2 pr-4">
                 {job.match_score != null ? (
-                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                  <span className="rounded bg-success-soft px-2 py-0.5 text-success">
                     {job.match_score}
                   </span>
                 ) : (
-                  <span className="text-slate-400">未评分</span>
+                  <span className="text-subtle">未评分</span>
                 )}
               </td>
               <td className="py-2 text-right">
                 <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
+                  <Button
                     disabled={scoringId === job.id}
                     onClick={() => onScore(job.id)}
-                    aria-describedby={`job-${job.id}-label`}
+                    describedBy={`job-${job.id}-label`}
+                    className="border border-field"
                   >
                     {scoringId === job.id ? "评分中…" : "评分"}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
+                  </Button>
+                  <Button
                     disabled={applyingId === job.id}
                     onClick={() => onApply(job.id)}
-                    aria-describedby={`job-${job.id}-label`}
+                    describedBy={`job-${job.id}-label`}
+                    className="border border-field"
                   >
                     {applyingId === job.id ? "记录中…" : "记录投递"}
-                  </button>
+                  </Button>
                 </div>
               </td>
             </tr>

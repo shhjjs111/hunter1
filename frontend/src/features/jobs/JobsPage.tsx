@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { ErrorNotice, PageHeader, SuccessNotice } from "../../shared/ui";
 import { useScoreJob } from "../scoring/api";
 import { useApplyToJob } from "../applications/api";
 import { useJobs } from "./api";
@@ -19,12 +20,16 @@ export function JobsPage() {
     // 再嵌一层就是两个 main 地标（无效嵌套，屏幕阅读器的跳转菜单里出现两个
     // 「主要内容」）。其余四个页面都是 <div>，只有这里曾写成 <main>。
     <div className="mx-auto max-w-5xl px-4 py-8">
-      <header className="mb-6 flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold">岗位库</h1>
-        <span className="text-sm text-slate-500">
-          {jobs.data ? `共 ${jobs.data.total} 条` : "加载中…"}
-        </span>
-      </header>
+      {/* 页头与提示都走 `shared/ui` 的原语 —— 原先这里是手写的 h1/span/提示条，
+          等于把设计系统的排版与配色又抄了一遍：改一处视觉要记得改两处。 */}
+      <PageHeader
+        title="岗位库"
+        actions={
+          <span className="text-sm text-muted">
+            {jobs.data ? `共 ${jobs.data.total} 条` : "加载中…"}
+          </span>
+        }
+      />
 
       <SearchBar
         initial={keyword}
@@ -35,9 +40,9 @@ export function JobsPage() {
       />
 
       {jobs.isError ? (
-        <p className="mt-6 rounded border border-red-200 bg-red-50 p-4 text-red-700">
-          {(jobs.error as Error).message}
-        </p>
+        <div className="mt-6">
+          <ErrorNotice message={(jobs.error as Error).message} />
+        </div>
       ) : (
         <JobsTable
           jobs={jobs.data?.items ?? []}
@@ -55,13 +60,27 @@ export function JobsPage() {
       <Pager page={page} hasNext={jobs.data?.has_next ?? false} onPageChange={setPage} />
 
       {apply.isError && (
-        <p className="mt-2 text-sm text-red-600">{(apply.error as Error).message}</p>
+        <div className="mt-2">
+          <ErrorNotice message={(apply.error as Error).message} />
+        </div>
       )}
-      {apply.isSuccess && <p className="mt-2 text-sm text-emerald-600">已记录投递。</p>}
+      {apply.isSuccess && (
+        <div className="mt-2">
+          <SuccessNotice message="已记录投递。" />
+        </div>
+      )}
 
       {/* 评分失败原因原样透出：最常见的是「画像未配置」，后端已给可行动指引 */}
-      {score.isError && <p className="mt-2 text-sm text-red-600">{(score.error as Error).message}</p>}
-      {score.isSuccess && <p className="mt-2 text-sm text-emerald-600">已评分并写回。</p>}
+      {score.isError && (
+        <div className="mt-2">
+          <ErrorNotice message={(score.error as Error).message} />
+        </div>
+      )}
+      {score.isSuccess && (
+        <div className="mt-2">
+          <SuccessNotice message="已评分并写回。" />
+        </div>
+      )}
     </div>
   );
 }

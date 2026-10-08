@@ -113,6 +113,18 @@ describe("App 整体渲染", () => {
     }
   });
 
+  it("当前页面的导航项带 aria-current，其余项没有", async () => {
+    // 屏幕阅读器靠 `aria-current` 才知道「你在哪一页」。react-router 的 `NavLink`
+    // 默认会加它 —— 但这是**库的默认**，换回 `<Link>`、或哪天手写导航就会静默丢掉。
+    stubBackend();
+    renderAt("/");
+    const nav = await screen.findByRole("navigation");
+    expect(within(nav).getByRole("link", { name: "岗位库" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    expect(within(nav).getByRole("link", { name: "抓取" }).getAttribute("aria-current")).toBeNull();
+  });
+
   it("抓取页渲染", async () => {
     stubBackend();
     renderAt("/crawl");
