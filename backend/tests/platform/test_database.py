@@ -46,6 +46,24 @@ def test_busy_timeout_pragma_is_explicit(tmp_path: Path) -> None:
     db.dispose()
 
 
+def test_foreign_keys_pragma_is_on(tmp_path: Path) -> None:
+    """外键开关必须显式打开（SQLite 默认**不检查**外键）。
+
+    当前 schema 刻意不建外键（`applications` 是岗位快照，加 CASCADE 会在删岗位时
+    连带删掉投递历史 —— 那条有专门的用例），所以现在删掉这一行**没有任何行为
+    差异**：实测删掉后 14 条 database 用例全绿。正因为「无行为差异」，它只能靠直接
+    问 pragma 来钉 —— 将来任何一张表加外键时，这行是唯一的开关。
+    """
+    from sqlalchemy import text
+
+    db = Database(tmp_path / "fk.db")
+    db.initialize()
+    with db.engine.connect() as connection:
+        enabled = connection.execute(text("PRAGMA foreign_keys")).scalar()
+    assert enabled == 1
+    db.dispose()
+
+
 def _job(index: int) -> Job:
     return Job(
         id=f"j{index}",
