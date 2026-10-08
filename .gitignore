@@ -39,3 +39,15 @@ build/
 # 编辑器
 .vscode/
 .idea/
+
+# 契约流水线的临时产物（contracts.sh 生成，正常路径会自己删，脚本里也有 trap）。
+# 这里再兜一层：被 `kill -9` 打断时 trap 不执行，留下的小文件会让
+# `git status --porcelain` 变脏 —— 而发布脚本以「工作区干净」为硬门禁，
+# 报错还只是一句笼统的「工作区有未提交改动」，排查方向完全不对。
+/contracts/.openapi.generated.json
+/frontend/src/shared/api/.schema.generated.d.ts
+
+# 协作 agent 的本地工作区（与 .rivet/ 同理：不是项目源码、体量可观、
+# 一条 `git add -A` 就能卷进提交）。不忽略它的话，agent 跑过一轮之后
+# 发布脚本必然以「工作区有未提交改动」拒绝执行。
+/.workbuddy/
