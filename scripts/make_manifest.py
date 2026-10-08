@@ -10,10 +10,13 @@
 1. **`version` 取自包本身**（`hunter1.__version__`），不是命令行传进来的 ——
    清单版本与二进制版本不一致时，`is_newer` 的比较会长期失准而**不报任何错**。
    `--version` 只用于「断言一致」，不一致就拒绝生成。
-2. **`platform` 用 `sys.platform` 词汇**（`win32` / `darwin` / `linux`）。
+2. **产物必须自带同一版本**：zip 里要有 `hunter1/VERSION` 且与源码一致，否则拒绝
+   生成 —— 一份忘了重建的旧 `dist/` 会让清单写新版本、包里装旧程序（见
+   `asset_version_problem`）。
+3. **`platform` 用 `sys.platform` 词汇**（`win32` / `darwin` / `linux`）。
    `asset_for()` 是精确匹配，写 `windows` 不会报错、只会永远匹配不上 ——
    即「有产物却永远收不到更新」。已知的错词直接拒绝，不留给发布日去发现。
-3. **产物必须真算 sha256**（分块读，大包不吃内存）—— 清单里 `sha256` 缺失或
+4. **产物必须真算 sha256**（分块读，大包不吃内存）—— 清单里 `sha256` 缺失或
    格式不对，`ReleaseManifest` 解析就会拒；生成端先算对，别把问题推给用户端。
 
 最后一步用 `ReleaseManifest` 回读自己产出的 JSON：**生成物必须能被消费端的
@@ -25,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -39,6 +43,13 @@ from hunter1.platform.update import ReleaseManifest, file_sha256  # noqa: E402
 
 #: 与更新链的 `asset_for()` 输入对齐 —— 这份词汇表是 `sys.platform` 的值。
 PLATFORM_VOCAB = ("win32", "darwin", "linux")
+
+#: 产物 zip 的布局（`scripts/build.py` 打的包）：单一根目录 + 根下 `VERSION`。
+#: 这两个常量必须与 build.py 的 `APP_NAME` / `VERSION_FILE_NAME` 一致 ——
+#: 由 tests/test_make_manifest.py 断言（各留一份字面量会让布局悄悄漂移，
+#: 而漂移的表现是「发布时核对不到版本」，正是这道闸要防的事）。
+_ZIP_ROOT = "hunter1"
+_VERSION_ENTRY = "VERSION"
 
 #: 容易写错、且错了不报错的词。`paths.py` 用的是另一套（windows/macos），
 #: 混淆两者的后果是「有产物但永远匹配不上」。在这里挡住，而非留给发布日。
@@ -118,6 +129,45 @@ def _check_platform(platform: str) -> str:
     return cleaned
 
 
+def asset_version_problem(path: Path) -> str | None:
+    """核对 zip 产物自带的 `VERSION` 与源码版本。合格返回 None。
+
+    为什么必须核对：清单里的 `version` 取自**源码**（`hunter1.__version__`），而二进制
+    是构建时烧进去的。若手边是一份**上次**构建、忘了重建的 `dist/`，清单会写上新版本
+    号、包里却是旧程序 —— 用户看到「有新版本」，装回去的是旧的，`is_newer` 从此长期
+    失准且不报任何错。构建端与发布端各自都对，只有中间那个文件是旧的。
+
+    判据按「产物类型」分开：zip 必须带 VERSION 且一致（缺了就拒绝，否则这道闸形同
+    不存在）；其它形态（tar.gz 等）读不出，提示一句「无法核对」但不拦。
+    """
+    if path.suffix.lower() != ".zip":
+        print(
+            f"提示：{path.name} 不是 zip，无法核对产物↔源码版本（这是本项目的发行形态？）",
+            file=sys.stderr,
+        )
+        return None
+
+    entry = f"{_ZIP_ROOT}/{_VERSION_ENTRY}"
+    try:
+        with zipfile.ZipFile(path) as bundle:
+            names = set(bundle.namelist())
+            if entry not in names:
+                return (
+                    f"产物 {path.name} 里没有 {entry} —— 无法核对「这份二进制是不是 "
+                    f"{__version__} 构建的」。请用 scripts/build.py --zip 重新打包。"
+                )
+            found = bundle.read(entry).decode("utf-8", "replace").strip()
+    except (OSError, zipfile.BadZipFile) as exc:
+        return f"产物 {path.name} 打不开：{type(exc).__name__}: {exc}"
+
+    if found != __version__:
+        return (
+            f"产物版本 {found!r} 与源码 {__version__!r} 不一致 —— 这是一份旧构建"
+            "（清单写新版本、包里是旧程序，用户的更新判断会长期失准）。"
+        )
+    return None
+
+
 def build_manifest(
     *,
     version: str,
@@ -139,6 +189,11 @@ def build_manifest(
         canonical = _check_platform(platform)
         if not path.is_file():
             raise ManifestError(f"产物不存在：{path}")
+        # 产物自带版本与源码不一致时**拒绝生成**：清单发出去之后，用户端只能看到
+        # 「版本号」这一个信号，装错版本没有任何办法被发现。
+        version_problem = asset_version_problem(path)
+        if version_problem is not None:
+            raise ManifestError(version_problem)
         entries.append(
             {
                 "platform": canonical,
