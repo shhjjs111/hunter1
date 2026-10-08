@@ -401,13 +401,16 @@ NORMAL_PAGE = (
 
 class TestDetectBlocking:
     def test_detects_boss_challenge(self) -> None:
-        assert detect_blocking(BOSS_CHALLENGE) is not None
+        # 断言**具体信号名**（不是「检出了就行」）：原先只验 `is not None`，
+        # 把词表里任意一个词换掉仍绿 —— 检出的是哪个信号从没被钉住。
+        assert detect_blocking(BOSS_CHALLENGE) == "安全验证"
 
     def test_detects_cloudflare_challenge(self) -> None:
-        assert detect_blocking(CLOUDFLARE_CHALLENGE) is not None
+        # 该页标题与结构标记都命中 —— 断言标题信号，顺带钉住「标题优先于结构标记」。
+        assert detect_blocking(CLOUDFLARE_CHALLENGE) == "just a moment"
 
     def test_detects_access_denied(self) -> None:
-        assert detect_blocking(ACCESS_DENIED) is not None
+        assert detect_blocking(ACCESS_DENIED) == "access denied"
 
     def test_normal_page_is_not_flagged(self) -> None:
         assert detect_blocking(NORMAL_PAGE) is None
