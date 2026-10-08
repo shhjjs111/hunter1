@@ -20,32 +20,36 @@ const STATUS_LABEL = {
 /** 逐站进度表（纯展示）。 */
 export function SiteProgressList({ sites }: { sites: SiteProgress[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-slate-200 text-left text-slate-500">
-          <th className="px-4 py-2 font-medium">站点</th>
-          <th className="px-4 py-2 font-medium">状态</th>
-          <th className="px-4 py-2 font-medium">抓到</th>
-          <th className="px-4 py-2 font-medium">新增</th>
-          <th className="px-4 py-2 font-medium">更新</th>
-        </tr>
-      </thead>
-      <tbody>
-        {sites.map((site) => (
-          <tr key={site.label} className="border-b border-slate-100 last:border-0">
-            <td className="px-4 py-2">{site.label}</td>
-            <td className="px-4 py-2">
-              <Tag tone={STATUS_TONE[site.status as keyof typeof STATUS_TONE] ?? "neutral"}>
-                {STATUS_LABEL[site.status as keyof typeof STATUS_LABEL] ?? site.status}
-              </Tag>
-            </td>
-            <td className="px-4 py-2">{site.fetched}</td>
-            <td className="px-4 py-2">{site.created}</td>
-            <td className="px-4 py-2">{site.updated}</td>
+    // 窄屏横向滚动：与岗位表、投递表同理 —— 375px 下五个数字列放不下，
+    // 没有这层兜底就会把表格挤到溢出容器（其余两张表都包了，只有这里漏了）。
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-sm whitespace-nowrap">
+        <thead>
+          <tr className="border-b border-line text-left text-muted">
+            <th className="px-4 py-2 font-medium">站点</th>
+            <th className="px-4 py-2 font-medium">状态</th>
+            <th className="px-4 py-2 font-medium">抓到</th>
+            <th className="px-4 py-2 font-medium">新增</th>
+            <th className="px-4 py-2 font-medium">更新</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {sites.map((site) => (
+            <tr key={site.label} className="border-b border-line-soft last:border-0">
+              <td className="px-4 py-2">{site.label}</td>
+              <td className="px-4 py-2">
+                <Tag tone={STATUS_TONE[site.status as keyof typeof STATUS_TONE] ?? "neutral"}>
+                  {STATUS_LABEL[site.status as keyof typeof STATUS_LABEL] ?? site.status}
+                </Tag>
+              </td>
+              <td className="px-4 py-2">{site.fetched}</td>
+              <td className="px-4 py-2">{site.created}</td>
+              <td className="px-4 py-2">{site.updated}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -56,7 +60,7 @@ export function FailedSites({ sites }: { sites: SiteProgress[] }) {
     return null;
   }
   return (
-    <ul className="mt-4 space-y-1 text-sm text-red-700">
+    <ul className="mt-4 space-y-1 text-sm text-danger">
       {failed.map((site) => (
         <li key={site.label}>
           <strong>{site.label}</strong>：{site.error ?? "未知错误"}
