@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
@@ -59,11 +60,17 @@ PROFILE_INVALID_DETAIL = (
 )
 
 
+def _now() -> datetime:
+    """当前时刻（UTC）。注入 `clock` 是为了让测试固定时间。"""
+    return datetime.now(UTC)
+
+
 def build_router(
     *,
     store: ScoreStore,
     llm_factory: Callable[[], LLMProvider],
     profile_provider: Callable[[], CandidateProfile | None],
+    clock: Callable[[], datetime] | None = None,
 ) -> APIRouter:
     """构造 scoring 的 APIRouter（依赖由组装处注入）。
 
@@ -71,6 +78,7 @@ def build_router(
     都属于「用户改了要立刻生效」的运行时可变状态。
     """
     router = APIRouter()
+    now = clock or _now
 
     def _load_profile_or_409() -> CandidateProfile | None:
         """取当前画像；存储损坏时报 409 + 原因（**不是 500**）。
@@ -131,7 +139,16 @@ def build_router(
             # 客户端是每请求新建的 —— 用完即释放，别把连接池攒在进程里
             llm.close()
 
-        if store.save_score(job_id, card.score) is None:
+        if (
+            store.save_score(
+                job_id,
+                card.score,
+                model=card.model,
+                prompt_version=card.prompt_version,
+                scored_at=now(),
+            )
+            is None
+        ):
             # 窄竞态：上面 load 到了、写分前岗位被删。store.save_score 的契约就是
             # 「岗位不存在时返回 None，调用方据此报 404」—— 不接就会返回 200
             # 声称已写分。

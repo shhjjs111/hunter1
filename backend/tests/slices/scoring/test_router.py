@@ -16,6 +16,7 @@ from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
 from hunter1.platform.llm import LLMError, LLMResponse
 from hunter1.slices.scoring.models import CandidateProfile
+from hunter1.slices.scoring.prompts import PROMPT_VERSION
 from hunter1.slices.scoring.router import build_router
 from hunter1.slices.scoring.store import ScoreStore
 
@@ -93,6 +94,28 @@ class TestScoreEndpoint:
             assert reloaded is not None
             assert reloaded.match_score == 88
 
+    def test_provenance_is_persisted_not_only_returned(self, db: Database) -> None:
+        """模型与提示词版本要落库 —— `prompts.py` 说 PROMPT_VERSION 就是为此存在的。
+
+        原先它们只出现在 HTTP 响应里：刷新页面就再也查不到「这条分是哪版打的」，
+        而那正是评分辨识度出问题时唯一需要的线索。
+        """
+        import sqlalchemy as sa
+
+        for client in _client(db, FakeLLM({"score": 77})):
+            assert client.post(f"/api/scoring/{JOB_ID}").status_code == 200
+
+        with db.session() as session:
+            row = session.execute(
+                sa.text(
+                    "SELECT score_model, score_prompt_version, scored_at FROM jobs WHERE id = :job"
+                ),
+                {"job": JOB_ID},
+            ).one()
+        assert row.score_model == "fake", "模型名取自 LLM 响应"
+        assert row.score_prompt_version == PROMPT_VERSION
+        assert row.scored_at is not None, "还缺打分时间 —— 回溯需要它"
+
     def test_missing_job_is_404(self, db: Database) -> None:
         for client in _client(db, FakeLLM()):
             assert client.post("/api/scoring/zzzz").status_code == 404
@@ -104,7 +127,7 @@ class TestScoreEndpoint:
         """
 
         class VanishingStore(ScoreStore):
-            def save_score(self, job_id: str, score: int):  # type: ignore[override]
+            def save_score(self, job_id: str, score: int, **overrides: object):  # type: ignore[override]
                 return None  # 岗位在 load 与 save 之间被删
 
         app = FastAPI()

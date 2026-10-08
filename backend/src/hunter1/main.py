@@ -226,6 +226,7 @@ def create_app(context: AppContext) -> FastAPI:
             store=scoring_store,
             llm_factory=_runtime_llm,
             profile_provider=scoring_store.load_profile,
+            clock=context.clock,
         )
     )
 

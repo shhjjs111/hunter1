@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import ValidationError
 
 from hunter1.domain.models import Job
@@ -32,16 +34,30 @@ class ScoreStore:
     def load(self, job_id: str) -> Job | None:
         return self._db.jobs().get(job_id)
 
-    def save_score(self, job_id: str, score: int) -> Job | None:
+    def save_score(
+        self,
+        job_id: str,
+        score: int,
+        *,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        scored_at: datetime | None = None,
+    ) -> Job | None:
         """把分数写回岗位；岗位不存在时返回 None（调用方据此报 404）。
 
-        **定向只写 match_score 一列**，不是整行读-改-写：否则抓取线程用它的旧快照
+        **定向只写评分那几列**，不是整行读-改-写：否则抓取线程用它的旧快照
         整行回写时，会把这里刚打的分覆盖回 None（丢更新竞态）。代价是绕过 pydantic
         约束，故写库前显式校验取值域。
+
+        `model` / `prompt_version` / `scored_at` 是**溯源**：`prompts.py` 说
+        PROMPT_VERSION 就是为了「回溯这条分是哪版打出来的」，那就得真的落库
+        （原先只在 HTTP 响应里回显，刷新页面即无据可查）。
         """
         if not (SCORE_MIN <= score <= SCORE_MAX):
             raise ValueError(f"match_score 越界：{score}（应在 {SCORE_MIN}..{SCORE_MAX}）")
-        if not self._db.jobs().set_match_score(job_id, score):
+        if not self._db.jobs().set_match_score(
+            job_id, score, model=model, prompt_version=prompt_version, scored_at=scored_at
+        ):
             return None
         return self._db.jobs().get(job_id)
 
