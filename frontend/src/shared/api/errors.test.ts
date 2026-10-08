@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { apiErrorMessage } from "./errors";
+import { apiErrorMessage, CLIENT_AUTHORED_ERROR_HEADER } from "./errors";
 
 describe("apiErrorMessage", () => {
   it("优先用后端给的 detail（那才是可读原因）", () => {
@@ -15,6 +15,20 @@ describe("apiErrorMessage", () => {
     expect(
       apiErrorMessage({ detail: "Internal Server Error" }, "加载岗位失败", { status: 500 }),
     ).toBe("加载岗位失败（HTTP 500）");
+  });
+
+  it("5xx 但带自造标记时用 detail —— 别与漏斗造的错误互相抵消", () => {
+    // client.ts 的错误漏斗给「2xx 但不是 JSON」造的是 {detail: "后端返回了非 JSON…"}
+    // + 502，并带上标记头（那条 detail 是**我们**写给用户的，不是服务端内部消息）。
+    // 一刀切按状态码丢掉它，漏斗写好的中文说明就会在**所有**调用点失效。
+    const headers = new Headers({ [CLIENT_AUTHORED_ERROR_HEADER]: "1" });
+    expect(
+      apiErrorMessage(
+        { detail: "后端返回了非 JSON 响应（HTTP 200，Content-Type: text/html）。" },
+        "加载配置失败",
+        { status: 502, headers },
+      ),
+    ).toContain("非 JSON");
   });
 
   it("4xx 时优先 detail（那是写给用户看的原因）", () => {

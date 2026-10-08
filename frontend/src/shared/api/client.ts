@@ -1,5 +1,6 @@
 import createClient, { type Middleware } from "openapi-fetch";
 
+import { CLIENT_AUTHORED_ERROR_HEADER } from "./errors";
 import type { paths } from "./schema";
 
 /**
@@ -30,7 +31,13 @@ const UNUSABLE_RESPONSE_STATUS = 502;
 function jsonErrorResponse(status: number, detail: string): Response {
   return new Response(JSON.stringify({ detail }), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // 标记「这条 detail 是**我们**写给用户的」：502 属 5xx，而 `errors.ts` 按
+      // 「5xx 的 detail 是服务端内部消息」的规则会丢掉它 —— 标记头让它放行，
+      // 否则漏斗写好的中文原因在所有调用点被顶成「操作失败（HTTP 502）」。
+      [CLIENT_AUTHORED_ERROR_HEADER]: "1",
+    },
   });
 }
 

@@ -46,8 +46,9 @@ describe("api 客户端错误漏斗", () => {
     // 契约里 /api/settings 只声明了 200，`error` 的类型是 undefined —— 拿到的是
     // 漏斗合成的 JSON 体，这里按运行时形状读（先过 unknown）。
     expect((error as unknown as { detail?: string }).detail).toContain("非 JSON");
-    // 502 属 5xx，界面显示的是「操作失败 + 状态码」（见 errors.ts 的分工）
-    expect(apiErrorMessage(error, "加载配置失败", response)).toBe("加载配置失败（HTTP 502）");
+    // 漏斗写好的中文原因必须真的到达用户 —— 502 属 5xx，但它的 detail 是可读的，
+    // 不该被 errors.ts 用「加载配置失败（HTTP 502）」顶掉（两个模块曾互相抵消）。
+    expect(apiErrorMessage(error, "加载配置失败", response)).toContain("非 JSON");
   });
 
   it("正常 JSON 响应不受漏斗影响", async () => {

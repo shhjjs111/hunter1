@@ -26,6 +26,8 @@ const LIST = {
       note: null,
     },
   ],
+  total: 1,
+  has_more: false,
 };
 
 /** openapi-fetch 传的是 Request 对象（method 在对象上），SSE 才是 url+init。 */
@@ -109,7 +111,7 @@ describe("ApplicationsPage 阶段乐观值", () => {
           serverStage = "interview";
           return jsonResponse({ application_id: "app1", stage: serverStage });
         }
-        return jsonResponse({ items: [{ ...LIST.items[0], stage: serverStage }] });
+        return jsonResponse({ ...LIST, items: [{ ...LIST.items[0], stage: serverStage }] });
       }),
     );
 
@@ -130,6 +132,29 @@ describe("ApplicationsPage 阶段乐观值", () => {
       await client.refetchQueries({ queryKey: ["applications"] });
     });
     expect(select.value).toBe("rejected");
+  });
+});
+
+describe("ApplicationsPage 截断信号", () => {
+  // 列表有固定上限（后端 LIST_LIMIT=200）。响应里的 total/has_more 后端特意算了
+  // 「让截断不再静默」—— 页面必须用它，而不是拿 items.length 冒充「共 N 条」。
+  it("列表被截断时显示真实总数与「只显示最近 N 条」", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ ...LIST, total: 350, has_more: true })),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText("共 350 条，只显示最近 1 条")).toBeTruthy();
+  });
+
+  it("未截断时只显示总数", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(LIST)));
+
+    renderPage();
+
+    expect(await screen.findByText("共 1 条")).toBeTruthy();
   });
 });
 

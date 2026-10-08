@@ -5,6 +5,8 @@ import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type ApplicationSummary = components["schemas"]["ApplicationSummary"];
+/** 列表响应整体 —— `total` / `has_more` 是**截断信号**（见后端 router 的 `LIST_LIMIT`）。 */
+export type ApplicationList = components["schemas"]["ApplicationListResponse"];
 /** 契约里的阶段枚举（后端 `ApplicationStage`）—— 现已进契约，不再是魔法字符串。 */
 export type ApplicationStage = components["schemas"]["ApplicationStage"];
 
@@ -26,12 +28,14 @@ export const STAGE_ORDER: ApplicationStage[] = [
   "withdrawn",
 ];
 
-async function fetchApplications(): Promise<ApplicationSummary[]> {
+async function fetchApplications(): Promise<ApplicationList> {
   const { data, error, response } = await api.GET("/api/applications");
   if (error || !data) {
     throw new Error(apiErrorMessage(error, "加载投递记录失败", response));
   }
-  return data.items;
+  // 整份响应（含 `total` / `has_more`）交出去 —— 只留 `items` 会让后端特意算的
+  // 截断信号在全链路丢失，页面只能拿 `items.length` 冒充「共 N 条」。
+  return data;
 }
 
 export function useApplications() {

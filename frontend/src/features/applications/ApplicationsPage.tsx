@@ -23,6 +23,18 @@ export function ApplicationsPage() {
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
 
+  // 列表有固定上限（后端 `LIST_LIMIT`）。用响应里的 `total` / `has_more` 显示真实
+  // 条数并提示截断 —— 拿 `items.length` 冒充「共 N 条」会让用户以为投递只有 200 条。
+  const items = applications.data?.items ?? [];
+  const total = applications.data?.total ?? 0;
+  const shown = items.length;
+  const truncated = applications.data?.has_more ?? false;
+  const subtitle = applications.data
+    ? truncated
+      ? `共 ${total} 条，只显示最近 ${shown} 条`
+      : `共 ${total} 条`
+    : "加载中…";
+
   // 阶段选择的**乐观值**：不设它的话，用户在下拉里选中的值在请求回来前会被
   // 服务端旧值覆盖（视觉回弹），失败时选择被静默撤销 —— 两种都像「点了没反应」。
   // 失败时清掉草稿，让选择回落到服务端真值，并保留上面的 ErrorNotice 提示。
@@ -43,10 +55,7 @@ export function ApplicationsPage() {
 
   return (
     <>
-      <PageHeader
-        title="投递记录"
-        subtitle={applications.data ? `共 ${applications.data.length} 条` : "加载中…"}
-      />
+      <PageHeader title="投递记录" subtitle={subtitle} />
 
       {applications.isError && <ErrorNotice message={(applications.error as Error).message} />}
       {changeStage.isError && <ErrorNotice message={(changeStage.error as Error).message} />}
@@ -57,7 +66,7 @@ export function ApplicationsPage() {
         <Card>
           <p className="px-4 py-6 text-sm text-slate-500">加载中…</p>
         </Card>
-      ) : applications.data?.length === 0 ? (
+      ) : items.length === 0 ? (
         <EmptyState>还没有投递记录。去「岗位库」找岗位，点「记录投递」。</EmptyState>
       ) : (
         <Card>
@@ -76,7 +85,7 @@ export function ApplicationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(applications.data ?? []).map((item) => (
+                {items.map((item) => (
                   <tr key={item.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-4 py-2">{item.company}</td>
                     <td className="px-4 py-2">{item.title}</td>
