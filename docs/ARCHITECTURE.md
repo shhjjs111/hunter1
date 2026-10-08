@@ -81,7 +81,8 @@ flowchart LR
 | `slices` | platform、domain、`application.ports` | 业务切片；切片间只经公开面，禁深链 |
 | `domain` | 仅 `platform.text` | 共享模型（过渡期，见下） |
 | `application` | domain | 端口协议（进程边界） |
-| `main.py` | 全部 | **唯一**认识所有切片的地方 |
+| `main.py` | 全部 | **HTTP 应用的唯一**组装根：认识所有切片 | 
+| `cli.py` | 全部 | **第二个组装根**（`serve` / `crawl` / `update`）：`crawl` 子命令也要认识 `crawl` 切片 —— 所以说「唯一」并不准确，是**两个**组装根，其余代码一律不得横跨切片 |
 
 **不得存在**：`web/`（旧 SSR 层已删，有断言钉死）。
 

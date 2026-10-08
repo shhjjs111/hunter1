@@ -165,7 +165,12 @@ def _company_id(raw: RawJob) -> str:
 
     公司身份一律由公司名推导 —— `RawJob` 里没有 source_ref 字段，抓取层
     不产它。basis 格式（`ct:<公司名>:__company__`）是身份契约的一部分：
-    改动它会让全库公司关联断裂且无法自动修复（有测试锁定，见 test_service）。
+    改动它会让**已经写进 `jobs.company_id` 的取值**与后续抓取对不上
+    （同一家公司在库里出现两个 id）。有测试锁定，见 test_service。
+
+    诚实的边界：`companies` 表目前**没有任何写入点**（`Company` 模型是死代码），
+    所以「改动会让全库公司关联断裂」这句话把影响说大了 —— 眼下的实际后果只是
+    `jobs.company_id` 的分组错乱，再往后接公司维度的功能时才会真的疼。
     """
     return job_identity(detail_url="", company=raw.company, title="__company__")[:32]
 
