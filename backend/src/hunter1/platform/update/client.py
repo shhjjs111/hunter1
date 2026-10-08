@@ -51,14 +51,18 @@ def download_verified(
     expected_sha256: str,
     on_progress: ProgressCallback | None = None,
 ) -> Path:
-    """流式下载到 `dest`，边下边校验 sha256；不一致则什么都不留。"""
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    """流式下载到 `dest`，边下边校验 sha256；不一致则什么都不留。
+
+    失败一律以 `DownloadError` 抛出（`code` 稳定可判）—— 这层是调用方唯一认识的
+    错误词汇，任何逃逸的裸异常都会在 CLI 里变成 traceback 砸到用户脸上。
+    """
     part = dest.with_name(dest.name + ".part")
     expected = (expected_sha256 or "").strip().lower()
     digest = hashlib.sha256()
     received = 0
 
     try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
         with client.stream("GET", url, follow_redirects=True) as response:
             if response.status_code >= 400:
                 raise DownloadError(f"http_{response.status_code}", url)
@@ -71,6 +75,12 @@ def download_verified(
                     received += len(chunk)
                     if on_progress is not None:
                         on_progress(received, total)
+    except httpx.InvalidURL as exc:
+        # 清单里的 URL 非法（坏端口、坏 IDNA 主机名…）。`InvalidURL` 的 mro 是
+        # `InvalidURL → Exception` —— **不是** `HTTPError`，只 catch HTTPError 会让
+        # 它裸穿到调用方（CLI 只捕 DownloadError / ValueError）→ 裸 traceback。
+        part.unlink(missing_ok=True)
+        raise DownloadError("invalid_url", f"{url}：{exc}") from exc
     except httpx.HTTPError as exc:
         part.unlink(missing_ok=True)
         raise DownloadError("transport_failed", str(exc)) from exc
@@ -78,6 +88,7 @@ def download_verified(
         part.unlink(missing_ok=True)
         raise
     except OSError as exc:
+        # 建目录失败与写盘失败同属「这台机器上落不了位」
         part.unlink(missing_ok=True)
         raise DownloadError("write_failed", str(exc)) from exc
 

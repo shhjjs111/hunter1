@@ -191,6 +191,28 @@ class TestPrepareUpdate:
                 source=source, status=self._status(source), dest_dir=tmp_path / "updates"
             )
 
+    def test_non_zip_payload_becomes_download_error(self, tmp_path: Path) -> None:
+        """拿到的不是 zip（镜像返 HTML / 传输被截断）→ DownloadError，不是 BadZipFile。
+
+        `zipfile.BadZipFile` 的 mro 是 `BadZipFile → Exception`（不是 ValueError），
+        CLI 的 `except (DownloadError, ValueError)` 兜不住 → 裸 traceback。
+        """
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=b"<html>not a zip</html>")
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+        assert excinfo.value.code == "archive_invalid"
+
+    def test_unwritable_dest_becomes_download_error(self, tmp_path: Path) -> None:
+        """目标目录建不出来 → DownloadError("write_failed")，不是裸 OSError。"""
+        blocker = tmp_path / "blocked"
+        blocker.write_bytes(b"x")
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(source=source, status=self._status(source), dest_dir=blocker / "updates")
+        assert excinfo.value.code == "write_failed"
+
 
 def test_status_is_a_plain_dataclass() -> None:
     """状态对象要能直接打印/序列化，方便 CLI 与将来的界面复用。"""
@@ -225,6 +247,13 @@ class TestManifestVersionIsNotAPath:
             "a/b",
             r"C:\Windows\Temp\evil",  # 盘符 + 反斜杠
             "c:/windows/temp/evil",  # 盘符 + 正斜杠
+            # 以下五项在加上 Windows 文件名规则前**全部放行**（实测）：
+            "1:2",  # 冒号 → `hunter1-1:2.zip` 是 NTFS 交替数据流
+            "CON",  # 保留设备名 → `dest_dir/CON` 指向控制台
+            "1.0.",  # 尾点被 Windows 剥掉 → 与 `1.0` 撞成同一目录
+            "1.0.0?x",  # 非法字符
+            "1.0|0",  # 非法字符
+            "nul.txt",  # 保留名带扩展名同样保留
         ],
     )
     def test_rejects_path_like_versions(self, bad: str) -> None:

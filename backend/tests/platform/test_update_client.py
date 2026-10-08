@@ -116,6 +116,41 @@ class TestDownloadVerified:
             )
         assert excinfo.value.code == "transport_failed"
 
+    def test_invalid_url_is_wrapped_not_leaked(self, tmp_path: Path) -> None:
+        """清单里的 URL 非法 → DownloadError，而不是裸的 httpx.InvalidURL。
+
+        `InvalidURL` 的 mro 是 `InvalidURL → Exception`（**不是** `HTTPError`），
+        只 catch HTTPError 会让它穿过 CLI 的 `except (DownloadError, ValueError)`，
+        用户看到的是一段 traceback。
+        """
+        with _http(_blob()) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client,
+                "http://[::1:80/x.zip",  # 端口非法：httpx 构造请求时即拒绝
+                tmp_path / "a.zip",
+                expected_sha256=PAYLOAD_SHA,
+            )
+        assert excinfo.value.code == "invalid_url"
+        assert not (tmp_path / "a.zip").exists()
+
+    def test_unwritable_parent_directory_is_wrapped(self, tmp_path: Path) -> None:
+        """父目录建不出来（被同名文件占着）→ DownloadError("write_failed")。
+
+        建目录原在 try 之外，OSError 会裸穿 —— 与「失败一律 DownloadError」的
+        承诺不符。
+        """
+        blocker = tmp_path / "afile"
+        blocker.write_bytes(b"x")
+
+        with _http(_blob()) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client,
+                "https://example.com/a.zip",
+                blocker / "a.zip",
+                expected_sha256=PAYLOAD_SHA,
+            )
+        assert excinfo.value.code == "write_failed"
+
     def test_overwrites_existing_file_on_success(self, tmp_path: Path) -> None:
         target = tmp_path / "a.zip"
         target.write_bytes(b"stale")

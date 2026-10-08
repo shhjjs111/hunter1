@@ -1,4 +1,4 @@
-"""更新清单与版本规则的测试 —— 纯逻辑，无 IO。
+"""更新清单与版本规则（`platform.update.rules`）的测试 —— 纯逻辑，无 IO。
 
 版本比较是更新功能里最容易出错、又最难看出来的地方：按字符串比较会让
 `1.10` 小于 `1.9`，于是新版本被判成旧版本，用户永远等不到更新，而且
@@ -62,6 +62,16 @@ class TestIsNewer:
 
     def test_missing_patch_component_is_equal(self) -> None:
         assert is_newer("1.0", "1.0.0") is False
+
+    def test_missing_patch_component_is_equal_both_directions(self) -> None:
+        """M4：原来只钉了一个方向 —— 反方向 `1.0.0 > 1.0` 会误报「有新版」。"""
+        assert is_newer("1.0.0", "1.0") is False
+        assert is_newer("1.2.0.0", "1.2") is False
+
+    def test_patch_zero_does_not_shadow_a_real_bump(self) -> None:
+        """归掉尾部 0 不能伤到真实递增：1.0.1 仍比 1.0 新。"""
+        assert is_newer("1.0.1", "1.0") is True
+        assert is_newer("1.0", "1.0.1") is False
 
     def test_multi_digit_components_compare_numerically(self) -> None:
         """按字符串比会得出 1.10 < 1.9 —— 这条就是防它的。"""
@@ -128,3 +138,10 @@ class TestReleaseManifest:
     def test_empty_version_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             ReleaseManifest(version="")
+
+    def test_control_chars_in_version_are_rejected(self) -> None:
+        """L10：version 会被拼进文件名/目录名，控制字符必须在解析层挡掉。"""
+        with pytest.raises(ValidationError):
+            ReleaseManifest(version="1.0.0\x00")
+        with pytest.raises(ValidationError):
+            ReleaseManifest(version="1.0\n.0")

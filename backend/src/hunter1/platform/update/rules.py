@@ -19,6 +19,24 @@ _VERSION = re.compile(r"^v?(\d+(?:\.\d+)*)")
 # 所以含分隔符 / 上跳 / 盘符的值必须挡在解析层。`..` 单独列是因为它不带分隔符
 # 也可能成段（`..` 自身就是一个路径段）。
 _PATH_IN_VERSION = re.compile(r"[/\\]|\.\.|^[A-Za-z]:")
+# 控制字符同样不能进 version：它会被拼进文件名/目录名（`dest_dir / latest`、
+# `hunter1-{latest}.zip`），在 Windows 上触发非法路径异常，且肉眼不可见、
+# 排查成本高。藏在解析层挡掉，比在下载路径上补更靠前。
+_CONTROL_IN_VERSION = re.compile(r"[\x00-\x1f\x7f]")
+# 上面两条还不够：`version` 会原样成为**文件名/目录名**，Windows 的文件名规则
+# 必须在这里一并挡住。实测（未修前）这些值全部放行：
+#   `1:2`  → `hunter1-1:2.zip` 在 NTFS 上是「交替数据流」，写的是别的文件；
+#   `CON`  → `dest_dir/CON` 指向**控制台设备**而不是目录；
+#   `1.0.` → 尾点被 Windows 静默剥掉，与 `1.0` 撞成同一个目录（版本串味）；
+#   `1.0.0?x` / `1.0|0` → 非法字符，拼出来的路径在 Windows 上直接不可用。
+_WINDOWS_BAD_IN_VERSION = re.compile(r'[<>:"|?*]')
+# 尾点/尾空格会被 Windows 静默剥掉 → 两个不同版本落进同一个目录。
+_TRAILING_DOT_OR_SPACE = re.compile(r"[. ]$")
+# 保留设备名：大小写不敏感，且**带扩展名也保留**（`CON.txt` 同样指向设备）。
+_WINDOWS_RESERVED_IN_VERSION = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9]|CONIN\$|CONOUT\$)(?:\..*)?$",
+    re.IGNORECASE,
+)
 
 
 class _Model(BaseModel):
@@ -82,6 +100,16 @@ class ReleaseManifest(_Model):
         # 本校验不触碰它们（那些值不含分隔符/上跳/盘符）。
         if _PATH_IN_VERSION.search(cleaned):
             raise ValueError(f"version 不能含路径分隔符、上跳或盘符：{value!r}")
+        if _CONTROL_IN_VERSION.search(cleaned):
+            raise ValueError(f"version 不能含控制字符：{value!r}")
+        # 见上面三组正则的说明：version 会成为文件名/目录名，Windows 的文件名
+        # 规则必须一并满足，否则失败方式不是「报错」而是「写错地方/写不进去」。
+        if _WINDOWS_BAD_IN_VERSION.search(cleaned):
+            raise ValueError(f'version 不能含 Windows 非法字符（<>:"|?*）：{value!r}')
+        if _TRAILING_DOT_OR_SPACE.search(cleaned):
+            raise ValueError(f"version 不能以点或空格结尾（Windows 会剥掉它）：{value!r}")
+        if _WINDOWS_RESERVED_IN_VERSION.match(cleaned):
+            raise ValueError(f"version 不能是 Windows 保留设备名：{value!r}")
         return cleaned
 
     def asset_for(self, platform: str) -> ReleaseAsset | None:
@@ -105,13 +133,24 @@ def parse_version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def _canonical(version: tuple[int, ...]) -> tuple[int, ...]:
+    """去掉尾部的 0 —— 让 `1.0` 与 `1.0.0` 在比较时是同一个版本。"""
+    end = len(version)
+    while end > 0 and version[end - 1] == 0:
+        end -= 1
+    return version[:end]
+
+
 def is_newer(candidate: str, current: str) -> bool:
     """`candidate` 是否比 `current` 新。
 
     用数字元组比较，所以 `1.10.0 > 1.9.0`（字符串比较会判反）；
-    `1.0` 与 `1.0.0` 视为相同。
+    `1.0` 与 `1.0.0` 视为相同 —— **两个方向都要相等**。原先直接比原始元组，
+    而 Python 元组在公共前缀相同时「更长者更大」，于是
+    `is_newer("1.0.0", "1.0")` 返回 True（反方向却 False）：运行版本是两段式、
+    清单写三段式时会误报「可更新」并重复下载解压同一版本。
     """
-    return parse_version(candidate) > parse_version(current)
+    return _canonical(parse_version(candidate)) > _canonical(parse_version(current))
 
 
 __all__ = ["ReleaseAsset", "ReleaseManifest", "is_newer", "parse_version"]

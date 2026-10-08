@@ -15,6 +15,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from hunter1.platform.update.client import DownloadError
 from hunter1.platform.update.ports import ReleaseSource
 from hunter1.platform.update.rules import ReleaseAsset, is_newer
 
@@ -73,16 +74,32 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
 
     下载由端口负责（含 sha256 校验）；这里只管落位与解压，
     并且对压缩包做**越界路径检查** —— 宁可拒绝一个可疑包，也不要它写到目录外。
+
+    失败词汇只有两种，且都是调用方（CLI）已经认识的：
+    - `ValueError`：没有可更新的版本、包里有越界路径（包可疑，不「修正」）；
+    - `DownloadError`：下载失败、**不是合法 zip**、磁盘写入失败。
+
+    后两类原先裸穿（`zipfile.BadZipFile` 与 `OSError` 都不是 `ValueError`），
+    于是 CLI 的 `except (DownloadError, ValueError)` 兜不住，用户看到的是一段
+    traceback 而不是「下载失败：…」。
     """
     if not status.available or status.asset is None or status.latest is None:
         raise ValueError("没有可用的更新")
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    archive = dest_dir / f"hunter1-{status.latest}.zip"
-    source.download_asset(status.asset, archive)
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        archive = dest_dir / f"hunter1-{status.latest}.zip"
+        source.download_asset(status.asset, archive)
 
-    extracted = dest_dir / status.latest
-    _extract_within(archive, extracted)
+        extracted = dest_dir / status.latest
+        _extract_within(archive, extracted)
+    except (DownloadError, ValueError):
+        raise
+    except zipfile.BadZipFile as exc:
+        # 拿到的不是 zip（镜像返了一段 HTML / 传输被截断）—— FAIL 而不是 traceback
+        raise DownloadError("archive_invalid", str(exc)) from exc
+    except OSError as exc:
+        raise DownloadError("write_failed", str(exc)) from exc
     return extracted
 
 
