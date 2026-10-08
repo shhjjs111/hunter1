@@ -64,6 +64,21 @@ describe("JobsPage", () => {
     expect(await screen.findByText(/加载岗位失败/)).toBeTruthy();
   });
 
+  it("后端连不上时给出可读提示，而不是英文 Failed to fetch", async () => {
+    // 这是审查里那条「用户看到的是英文 Failed to fetch」的验收：fetch 直接 reject
+    // （后端没起、连接被拒）时，界面必须说清怎么办。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    renderPage();
+    const message = await screen.findByText(/无法连接后端/);
+    expect(message.textContent).toContain("请确认 Hunter1 服务还在运行");
+    expect(screen.queryByText(/^Failed to fetch$/)).toBeNull();
+  });
+
   it("记录投递：POST 后给出成功提示", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       // openapi-fetch 以 Request 对象调用 fetch（method 在对象上，无第二参数）

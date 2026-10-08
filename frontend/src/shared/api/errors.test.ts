@@ -26,6 +26,26 @@ describe("apiErrorMessage", () => {
     );
   });
 
+  it("detail 为 FastAPI 校验错误数组时取出 msg（PUT /settings 的 422 就是这形状）", () => {
+    // 后端手工抛 422 时按 FastAPI 同款构造：[{loc, msg, type}]。
+    // 只认字符串 detail 的话，用户看到的是「保存失败（HTTP 422）」，字段信息全丢。
+    expect(
+      apiErrorMessage(
+        { detail: [{ loc: ["body", "base_url"], msg: "base_url 必须是 http(s) 地址", type: "value_error" }] },
+        "保存失败",
+        { status: 422 },
+      ),
+    ).toBe("base_url 必须是 http(s) 地址");
+    // 多条错误合成一句（用「；」分隔，不丢其中任何一条）
+    expect(
+      apiErrorMessage(
+        { detail: [{ msg: "模型名不合法" }, { msg: "密钥不能为空" }] },
+        "保存失败",
+        { status: 422 },
+      ),
+    ).toBe("模型名不合法；密钥不能为空");
+  });
+
   it("detail 为空串/非字符串时不硬用", () => {
     expect(apiErrorMessage({ detail: "" }, "加载岗位失败", { status: 400 })).toBe(
       "加载岗位失败（HTTP 400）",

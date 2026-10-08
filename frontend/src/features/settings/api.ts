@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
+import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type SettingsView = components["schemas"]["SettingsView"];
@@ -24,14 +25,10 @@ export function useSaveSettings() {
     mutationFn: async (form: SettingsForm) => {
       const { data, error, response } = await api.PUT("/api/settings", { body: form });
       if (error || !data) {
-        // 校验失败时后端给的是可读原因（detail）—— 原样交给用户，别吞掉。
-        // ⚠ 只接受**字符串** detail：契约里 PUT /api/settings 的 422 是
-        // HTTPValidationError{detail: ValidationError[]}，结构化 detail 直接塞进
-        // Error 会变成 "[object Object]"。当前后端用 _readable() 压成字符串，
-        // 但这里不该依赖它 —— 形状一变就会退化，所以显式判类型。
-        const detail = (error as { detail?: unknown } | undefined)?.detail;
-        const message = typeof detail === "string" && detail.trim() !== "" ? detail : null;
-        throw new Error(message ?? `保存失败（HTTP ${response.status}）`);
+        // 校验失败时后端给的是可读原因（detail）—— 统一走共享转换，别在这儿手写一份。
+        // 后端的 422 detail 是 FastAPI 同款数组（`[{loc, msg, type}]`），
+        // `apiErrorMessage` 认得两种形状（字符串 / 数组）。
+        throw new Error(apiErrorMessage(error, "保存失败", response));
       }
       return data;
     },
