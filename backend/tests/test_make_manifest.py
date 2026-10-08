@@ -137,6 +137,52 @@ class TestBuildManifest:
         assert again == manifest
 
 
+class TestAssetPlatformMatchesItsFilename:
+    """清单里的 `platform` 必须与产物名里的平台一致。
+
+    两者不一致时清单**合法**（形状、sha256、url 全对，`ReleaseManifest` 照收），
+    只在用户端发作：Windows 用户下到一个 Linux 包、Linux 用户永远看到「本平台没有
+    产物」。实测 `release.sh` 曾把 `win32=` 写死，非 Windows 上必然踩中 —— 而它是
+    发布文档指的那条路径。所以这里 fail-closed。
+    """
+
+    @staticmethod
+    def _zip(tmp_path: Path, name: str) -> Path:
+        path = tmp_path / name
+        with zipfile.ZipFile(path, "w") as bundle:
+            bundle.writestr(
+                f"{make_manifest._ZIP_ROOT}/{make_manifest._VERSION_ENTRY}",
+                f"{make_manifest.__version__}\n",
+            )
+            bundle.writestr(f"{make_manifest._ZIP_ROOT}/hunter1.exe", "stub")
+        return path
+
+    def _build(self, path: Path, platform: str) -> object:
+        return make_manifest.build_manifest(
+            version=make_manifest.__version__,
+            assets=[(platform, path)],
+            url_for=lambda _p, name: f"https://example.com/{name}",
+        )
+
+    def test_matching_name_and_platform_passes(self, tmp_path: Path) -> None:
+        manifest = self._build(self._zip(tmp_path, "hunter1-linux.zip"), "linux")
+        assert manifest.assets[0].platform == "linux"  # type: ignore[attr-defined]
+
+    def test_mismatch_is_rejected_and_names_both_sides(self, tmp_path: Path) -> None:
+        path = self._zip(tmp_path, "hunter1-linux.zip")
+        with pytest.raises(make_manifest.ManifestError) as excinfo:
+            self._build(path, "win32")
+        message = str(excinfo.value)
+        assert "hunter1-linux.zip" in message and "win32" in message and "'linux'" in message
+
+    def test_other_shapes_are_not_policed(self, tmp_path: Path) -> None:
+        """非约定命名（tar.gz、手搓的包）不套这条规则 —— 它们本来就没有平台约定。"""
+        path = tmp_path / "hunter1-linux.tar.gz"
+        path.write_bytes(b"payload")
+        manifest = self._build(path, "win32")
+        assert manifest.assets[0].platform == "win32"  # type: ignore[attr-defined]
+
+
 class TestAssetCarriesItsVersion:
     """产物↔源码版本：清单里的 version 取自源码，而二进制是构建时烧进去的。
 

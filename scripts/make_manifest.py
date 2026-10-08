@@ -189,6 +189,23 @@ def build_manifest(
         canonical = _check_platform(platform)
         if not path.is_file():
             raise ManifestError(f"产物不存在：{path}")
+        # 产物名自带平台（`hunter1-<platform>.zip`，由 `scripts/artifact.py` 统一命名），
+        # 声明的 `platform` 必须与它一致。不一致时清单**合法但不可用**：Linux 包声明成
+        # win32，Windows 用户下载后跑不起来，而 Linux 用户永远被告知「本平台没有产物」——
+        # 两头都不报错（实测 `release.sh` 曾把 `win32=` 写死，非 Windows 上必然踩中）。
+        # 只对符合命名约定的 `.zip` 检查：别的形态（tar.gz、手搓的测试包）没有这个约定。
+        prefix = f"{_ZIP_ROOT}-"
+        if (
+            path.suffix == ".zip"
+            and path.stem.startswith(prefix)
+            and path.stem != f"{prefix}{canonical}"
+        ):
+            raise ManifestError(
+                f"产物的平台名与声明不一致：{path.name} 声明成 {canonical!r}，"
+                f"但文件名里的平台是 {path.stem[len(prefix) :]!r}。"
+                f"清单的 platform、产物名、更新端的 sys.platform 三者必须一致 —— "
+                f"不一致时不会有任何报错，只会让某个平台的用户永远收不到更新。"
+            )
         # 产物自带版本与源码不一致时**拒绝生成**：清单发出去之后，用户端只能看到
         # 「版本号」这一个信号，装错版本没有任何办法被发现。
         version_problem = asset_version_problem(path)
