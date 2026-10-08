@@ -23,8 +23,27 @@ from pathlib import Path
 import pytest
 
 from hunter1.domain.models import Job
-from hunter1.platform.db import Database
+from hunter1.platform.db import BUSY_TIMEOUT_MS, Database
 from hunter1.platform.db.database import DatabaseLocationError
+
+
+def test_busy_timeout_pragma_is_explicit(tmp_path: Path) -> None:
+    """`busy_timeout` 必须显式设置，不能靠驱动的隐式默认（5 秒）。
+
+    抓取线程与 FastAPI 线程池并发写同一个库：隐式 5 秒一到就抛 `database is
+    locked`，而那是运行期错误、不在 `initialize()` 的 `except DatabaseError`
+    覆盖内（用户看到裸 traceback）。
+    """
+    from sqlalchemy import text
+
+    db = Database(tmp_path / "pragmas.db")
+    db.initialize()
+    with db.engine.connect() as connection:
+        timeout = connection.execute(text("PRAGMA busy_timeout")).scalar()
+        journal = connection.execute(text("PRAGMA journal_mode")).scalar()
+    assert timeout == BUSY_TIMEOUT_MS
+    assert str(journal).lower() == "wal"
+    db.dispose()
 
 
 def _job(index: int) -> Job:

@@ -7,7 +7,7 @@ from hunter1.platform.db.conversations import (
     Conversation,
     SqliteConversationRepository,
 )
-from hunter1.platform.db.database import Database, DatabaseLocationError
+from hunter1.platform.db.database import BUSY_TIMEOUT_MS, Database, DatabaseLocationError
 from hunter1.platform.db.repository import (
     SqliteCompanyRepository,
     SqliteJobRepository,
@@ -24,6 +24,7 @@ from hunter1.platform.db.schema import (
 from hunter1.platform.db.settings import SqliteSettingsRepository
 
 __all__ = [
+    "BUSY_TIMEOUT_MS",
     "ApplicationRow",
     "Base",
     "CompanyRow",

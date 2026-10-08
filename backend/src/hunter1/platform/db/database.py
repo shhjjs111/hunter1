@@ -21,6 +21,10 @@ from hunter1.platform.db.repository import (
 from hunter1.platform.db.schema import Base
 from hunter1.platform.db.settings import SqliteSettingsRepository
 
+#: 写锁忙等待上限（毫秒）。显式设置，不依赖驱动隐式默认（5 秒）——
+#: 抓取线程与 FastAPI 线程池并发写同一库时，5 秒一到就抛 `database is locked`。
+BUSY_TIMEOUT_MS = 30_000
+
 
 class DatabaseLocationError(RuntimeError):
     """数据库位置不可用（父路径是文件、指向目录、没有写权限、磁盘满……）。
@@ -268,7 +272,14 @@ class Database:
 
 
 def _enable_sqlite_pragmas(engine: Engine) -> None:
-    """开启 WAL（并发读写）与外键约束；SQLite 默认不检查外键。"""
+    """开启 WAL（并发读写）、外键约束与显式的忙等待上限；SQLite 默认不检查外键。
+
+    `busy_timeout` 此前**从未显式设置**，靠 `sqlite3.connect` 的隐式默认（5 秒）。
+    抓取线程与 FastAPI 的线程池会并发写同一个库：5 秒一到就抛 `database is
+    locked`，而这是运行期错误、不在 `initialize()` 的 `except DatabaseError`
+    覆盖内 —— 用户看到的是一段 traceback。显式放宽到 30 秒，让并发写去排队而不是
+    直接失败（进程内的写窗口通常是毫秒级，30 秒只是「异常慢但仍能成功」的余量）。
+    """
 
     @event.listens_for(engine, "connect")
     def _set_pragmas(dbapi_connection: object, _record: object) -> None:
@@ -277,6 +288,7 @@ def _enable_sqlite_pragmas(engine: Engine) -> None:
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         finally:
             cursor.close()
 
