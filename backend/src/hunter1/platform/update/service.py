@@ -17,7 +17,13 @@ from pathlib import Path
 
 from hunter1.platform.update.client import DownloadError
 from hunter1.platform.update.ports import ReleaseSource
-from hunter1.platform.update.rules import ReleaseAsset, is_newer
+from hunter1.platform.update.rules import (
+    MAX_DOWNLOAD_BYTES,
+    MAX_EXPANSION_RATIO,
+    MAX_EXTRACTED_BYTES,
+    ReleaseAsset,
+    is_newer,
+)
 
 
 @dataclass
@@ -76,7 +82,8 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     并且对压缩包做**越界路径检查** —— 宁可拒绝一个可疑包，也不要它写到目录外。
 
     失败词汇只有两种，且都是调用方（CLI）已经认识的：
-    - `ValueError`：没有可更新的版本、包里有越界路径（包可疑，不「修正」）；
+    - `ValueError`：没有可更新的版本、产物声明体积超限、包里有越界路径或解压后
+      体积超限（包可疑，不「修正」）；
     - `DownloadError`：下载失败、**不是合法 zip**、磁盘写入失败。
 
     后两类原先裸穿（`zipfile.BadZipFile` 与 `OSError` 都不是 `ValueError`），
@@ -85,6 +92,13 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     """
     if not status.available or status.asset is None or status.latest is None:
         raise ValueError("没有可用的更新")
+
+    # 清单里声明的体积先挡一道：比下载完再发现超限便宜，也让「这个包不对劲」
+    # 在落盘之前就被说清楚。
+    if status.asset.size is not None and status.asset.size > MAX_DOWNLOAD_BYTES:
+        raise ValueError(
+            f"产物声明体积超限，已拒绝：{status.asset.size} 字节 > 上限 {MAX_DOWNLOAD_BYTES}"
+        )
 
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -104,17 +118,40 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
 
 
 def _extract_within(archive: Path, dest: Path) -> None:
-    """解压，但拒绝任何会写到 `dest` 之外的成员。
+    """解压，但拒绝任何会写到 `dest` 之外的成员，并挡下「解压炸弹」。
 
     Python 的 `extract` 会静默剥掉 `..` 与绝对路径；这里选择**拒绝而不是修正**：
     一个正常的发布包不该包含这类路径，出现了就说明包本身可疑。
+
+    总量闸门同样在 `extractall` **之前**做：`extractall` 自己没有体积上限，
+    而清单未签名 —— 一个 5KB 的包可以解出几个 GB。
     """
     dest_resolved = dest.resolve()
     with zipfile.ZipFile(archive) as bundle:
-        for name in bundle.namelist():
-            if _escapes(name, dest_resolved):
-                raise ValueError(f"压缩包里存在越界路径，已拒绝：{name}")
+        infos = bundle.infolist()
+        for info in infos:
+            if _escapes(info.filename, dest_resolved):
+                raise ValueError(f"压缩包里存在越界路径，已拒绝：{info.filename}")
+        _guard_expansion(archive, infos)
         bundle.extractall(dest)
+
+
+def _guard_expansion(archive: Path, infos: list[zipfile.ZipInfo]) -> None:
+    """拒绝体积超限 / 膨胀比异常的压缩包。
+
+    用成员**声明**的解压尺寸求和：`zipfile` 按声明尺寸读取该成员（声明小了会被
+    截断、不会多写），所以这个和就是解压写盘量的上界。声明得大 → 在这里就被挡。
+    """
+    declared = sum(info.file_size for info in infos)
+    if declared > MAX_EXTRACTED_BYTES:
+        raise ValueError(
+            f"压缩包解压后体积超限，已拒绝：声明 {declared} 字节 > 上限 {MAX_EXTRACTED_BYTES}"
+        )
+    compressed = archive.stat().st_size
+    if compressed > 0 and declared > compressed * MAX_EXPANSION_RATIO:
+        raise ValueError(
+            f"压缩包膨胀比超限，已拒绝：{declared} / {compressed} > {MAX_EXPANSION_RATIO}"
+        )
 
 
 def _escapes(name: str, dest: Path) -> bool:

@@ -17,6 +17,9 @@ from hunter1.platform.update.client import (
 )
 from hunter1.platform.update.ports import ProgressCallback, ReleaseSource
 from hunter1.platform.update.rules import (
+    MAX_DOWNLOAD_BYTES,
+    MAX_EXPANSION_RATIO,
+    MAX_EXTRACTED_BYTES,
     ReleaseAsset,
     ReleaseManifest,
     is_newer,
@@ -29,6 +32,9 @@ from hunter1.platform.update.service import (
 )
 
 __all__ = [
+    "MAX_DOWNLOAD_BYTES",
+    "MAX_EXPANSION_RATIO",
+    "MAX_EXTRACTED_BYTES",
     "DownloadError",
     "ProgressCallback",
     "ReleaseAsset",

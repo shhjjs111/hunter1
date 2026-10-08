@@ -22,7 +22,11 @@ import httpx
 from pydantic import ValidationError
 
 from hunter1.platform.update.ports import ProgressCallback
-from hunter1.platform.update.rules import ReleaseAsset, ReleaseManifest
+from hunter1.platform.update.rules import (
+    MAX_DOWNLOAD_BYTES,
+    ReleaseAsset,
+    ReleaseManifest,
+)
 
 
 def _discard(part: Path) -> None:
@@ -65,11 +69,15 @@ def download_verified(
     *,
     expected_sha256: str,
     on_progress: ProgressCallback | None = None,
+    max_bytes: int | None = None,
 ) -> Path:
     """流式下载到 `dest`，边下边校验 sha256；不一致则什么都不留。
 
     失败一律以 `DownloadError` 抛出（`code` 稳定可判）—— 这层是调用方唯一认识的
     错误词汇，任何逃逸的裸异常都会在 CLI 里变成 traceback 砸到用户脸上。
+
+    `max_bytes` 是**体积闸门**：声明了 `Content-Length` 就先比一比，没有就在
+    边下边收的过程中累计比对。此前 `total` 只用来喂进度条，超大的包会一路下完。
     """
     part = dest.with_name(dest.name + ".part")
     expected = (expected_sha256 or "").strip().lower()
@@ -83,11 +91,16 @@ def download_verified(
                 raise DownloadError(f"http_{response.status_code}", url)
             total_header = response.headers.get("content-length")
             total = int(total_header) if (total_header or "").isdigit() else None
+            if max_bytes is not None and total is not None and total > max_bytes:
+                raise DownloadError("too_large", f"{url}：声明 {total} 字节 > 上限 {max_bytes}")
             with part.open("wb") as handle:
                 for chunk in response.iter_bytes(_CHUNK):
                     handle.write(chunk)
                     digest.update(chunk)
                     received += len(chunk)
+                    if max_bytes is not None and received > max_bytes:
+                        # 没有（或谎报）Content-Length 时的兜底：边下边比。
+                        raise DownloadError("too_large", f"{url}：已接收超过上限 {max_bytes} 字节")
                     if on_progress is not None:
                         on_progress(received, total)
     except httpx.InvalidURL as exc:
@@ -169,6 +182,7 @@ class ReleaseClient:
             dest,
             expected_sha256=asset.sha256,
             on_progress=on_progress,
+            max_bytes=MAX_DOWNLOAD_BYTES,
         )
 
 

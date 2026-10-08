@@ -224,6 +224,57 @@ class TestDownloadVerified:
             )
         assert seen and seen[-1][0] == len(PAYLOAD)
 
+    def test_declared_size_over_cap_is_rejected_before_writing(self, tmp_path: Path) -> None:
+        """`Content-Length` 超限就地拒绝 —— 此前它只用来喂进度条。"""
+        payload = b"x" * 5000
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=payload)  # 带 content-length: 5000
+
+        target = tmp_path / "a.zip"
+        with _http(handler) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client,
+                "https://example.com/a.zip",
+                target,
+                expected_sha256=PAYLOAD_SHA,
+                max_bytes=1000,
+            )
+        assert excinfo.value.code == "too_large"
+        assert not target.exists()
+        assert not list(tmp_path.glob("*.part"))
+
+    def test_stream_over_cap_without_content_length_is_rejected(self, tmp_path: Path) -> None:
+        """没有（或谎报）`Content-Length` 时边下边比，超限即停、不留半包。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=httpx.ByteStream(b"y" * 5000))
+
+        target = tmp_path / "a.zip"
+        with _http(handler) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client,
+                "https://example.com/a.zip",
+                target,
+                expected_sha256=PAYLOAD_SHA,
+                max_bytes=1000,
+            )
+        assert excinfo.value.code == "too_large"
+        assert not target.exists()
+
+    def test_within_cap_downloads_normally(self, tmp_path: Path) -> None:
+        """恰好等于上限不该被拒（边界）。"""
+        target = tmp_path / "a.zip"
+        with _http(_blob()) as client:
+            download_verified(
+                client,
+                "https://example.com/a.zip",
+                target,
+                expected_sha256=PAYLOAD_SHA,
+                max_bytes=len(PAYLOAD),
+            )
+        assert target.read_bytes() == PAYLOAD
+
 
 class TestFetchManifest:
     def test_parses_manifest(self) -> None:

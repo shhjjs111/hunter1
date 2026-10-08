@@ -39,6 +39,22 @@ _WINDOWS_RESERVED_IN_VERSION = re.compile(
 )
 
 
+# ---- 体积闸门（防「解压炸弹」）----
+#
+# 自更新链此前只有路径与校验和两道防线：**没有任何体积闸门**。清单未签名
+# （见 ARCHITECTURE.md），恶意包无需改清单就能塞进来；`ReleaseAsset.size` 定义
+# 了却全链路无人消费（只有 make_manifest 的一处日志打印）。实测：4987 字节的
+# zip 解压出 5,000,000 字节，全程无拦截。
+#
+#: 下载体积上限（压缩包本身）。便携工具的正常产物在几十 MB 量级，200MB 很宽松。
+MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
+#: 解压后**总体积**上限。zip 炸弹靠「几 KB 压成几 GB」，这是最后的兜底。
+MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
+#: 膨胀比上限：解压后总体积不得超过压缩包的这么多倍（挡住「绝对体积不大但
+#: 比例极夸张」的包，例如 5KB → 5MB）。
+MAX_EXPANSION_RATIO = 100
+
+
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,4 +169,12 @@ def is_newer(candidate: str, current: str) -> bool:
     return _canonical(parse_version(candidate)) > _canonical(parse_version(current))
 
 
-__all__ = ["ReleaseAsset", "ReleaseManifest", "is_newer", "parse_version"]
+__all__ = [
+    "MAX_DOWNLOAD_BYTES",
+    "MAX_EXPANSION_RATIO",
+    "MAX_EXTRACTED_BYTES",
+    "ReleaseAsset",
+    "ReleaseManifest",
+    "is_newer",
+    "parse_version",
+]

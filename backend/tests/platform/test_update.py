@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from hunter1.platform.update import (
+    MAX_DOWNLOAD_BYTES,
     DownloadError,
     ReleaseAsset,
     ReleaseManifest,
@@ -25,8 +26,13 @@ from hunter1.platform.update import (
 SHA = "a" * 64
 
 
-def _asset(platform: str = "win32", url: str = "https://example.com/w.zip") -> ReleaseAsset:
-    return ReleaseAsset(platform=platform, url=url, sha256=SHA)
+def _asset(
+    platform: str = "win32",
+    url: str = "https://example.com/w.zip",
+    *,
+    size: int | None = None,
+) -> ReleaseAsset:
+    return ReleaseAsset(platform=platform, url=url, sha256=SHA, size=size)
 
 
 def _manifest(version: str, *, platforms: tuple[str, ...] = ("win32",), notes: str | None = None):
@@ -81,6 +87,16 @@ def _zip_bytes(*names: str) -> bytes:
     with zipfile.ZipFile(buffer, "w") as bundle:
         for name in names:
             bundle.writestr(name, b"binary")
+    return buffer.getvalue()
+
+
+def _bomb_bytes(*, size: int = 5_000_000) -> bytes:
+    """一个「几 KB 压出几 MB」的包 —— 成员声明体积大、压缩后极小（zip 炸弹）。"""
+    import io
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("hunter1/big.bin", b"\0" * size)
     return buffer.getvalue()
 
 
@@ -212,6 +228,28 @@ class TestPrepareUpdate:
         with pytest.raises(DownloadError) as excinfo:
             prepare_update(source=source, status=self._status(source), dest_dir=blocker / "updates")
         assert excinfo.value.code == "write_failed"
+
+    def test_rejects_zip_bomb_by_expansion_ratio(self, tmp_path: Path) -> None:
+        """几 KB 压出几 MB 的包必须拒绝 —— 解压链条没有体积闸门时它能写满磁盘。"""
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=_bomb_bytes(size=5_000_000))
+        with pytest.raises(ValueError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+        assert "膨胀比" in str(excinfo.value)
+        # 一个字都没解压出来
+        assert not (tmp_path / "updates" / "0.2.0").exists()
+
+    def test_rejects_declared_oversized_asset_before_download(self, tmp_path: Path) -> None:
+        """清单声明体积超限时连下载都不该开始 —— `size` 此前全链路无人消费。"""
+        manifest = ReleaseManifest(version="0.2.0", assets=[_asset(size=MAX_DOWNLOAD_BYTES + 1)])
+        source = FakeSource(manifest=manifest)
+        with pytest.raises(ValueError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+        assert "体积超限" in str(excinfo.value)
+        assert source.downloaded_to == []  # 一次下载都没发生
 
 
 def test_status_is_a_plain_dataclass() -> None:
