@@ -38,7 +38,7 @@
 |---|---|---|
 | GET | `/api/assistant/conversations` | 会话列表（最近 50） |
 | GET | `/api/assistant/conversations/{id}` | 会话消息（404 不存在） |
-| POST | `/api/assistant/turn` | 一次性对话（502 模型失败，且不落库） |
+| POST | `/api/assistant/turn` | 一次性对话（422 上游模型失败，且不落库；非契约异常 → 500） |
 | POST | `/api/assistant/stream` | SSE 流式对话（失败走 `error` 事件） |
 
 ## SSE 事件契约

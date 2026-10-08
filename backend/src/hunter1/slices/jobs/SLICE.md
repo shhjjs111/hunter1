@@ -12,7 +12,7 @@ applications 切片，记录投递的端点随之归它（`POST /api/application
 | 符号 | 用途 |
 |---|---|
 | `JobStore` | 数据存取门面（唯一接触数据库的地方） |
-| `build_router` | HTTP 面工厂；组装处注入 store 与 clock |
+| `build_router` | HTTP 面工厂；组装处注入 store（**不注入时钟** —— 本切片只剩只读端点） |
 | `schemas` | API 模型（契约源头 → `contracts/openapi.json`） |
 | `service` | 用例函数：`list_jobs` / `find_job` |
 

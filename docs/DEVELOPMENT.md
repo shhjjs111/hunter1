@@ -14,7 +14,10 @@ source .venv/Scripts/activate      # Windows (Git Bash)
 # source .venv/bin/activate        # macOS / Linux
 
 # 2. 装依赖（含开发工具）
-pip install -e ".[dev]"
+#    `[dev]` 只有测试框架；router 测试 import fastapi、仓储测试 import sqlalchemy、
+#    抓取适配器 import bs4 —— 少了 extras，pytest 会在**收集阶段**就 ImportError。
+#    所以这里与 CI（.github/workflows/ci.yml）用同一集合：
+pip install -e ".[dev,web,db,crawler]"
 
 # 3. 验证
 python -m pytest
@@ -134,7 +137,7 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 | 形态 | 数据目录 |
 |---|---|
-| 仓库里开发 | `.data/hunter1.db` |
+| 仓库里开发 | Python 工程根（本仓 monorepo 里是 `backend/`）的 `.data/hunter1.db` |
 | 打包产物 | 程序旁的 `data/hunter1.db` |
 | `pip install` 后 | 平台用户数据目录（如 `%LOCALAPPDATA%\hunter1`） |
 
@@ -237,8 +240,11 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 ### 数据目录
 
-`paths.py` 是「数据放哪」的唯一决定点：开发时仓库根的 `.data/`，打包后
-程序目录旁的 `data/`（便携：解压即用、删目录即卸载）。两边都用 `sys.frozen` 判别。
+`paths.py` 是「数据放哪」的唯一决定点：开发时**工程根**（本仓 monorepo 里是
+`backend/`，即 pyproject.toml 所在的那一级）的 `.data/`，打包后程序目录旁的 `data/`
+（便携：解压即用、删目录即卸载）。两边都用 `sys.frozen` 判别；上溯找工程根时会止步于
+虚拟环境边界（`pyvenv.cfg` / `site-packages`），免得命中**宿主项目**的 `pyproject.toml`
+把数据写进别人的仓库。
 
 ### 前端与契约
 
@@ -279,7 +285,7 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 | 来源 | 取值 | 用在哪 |
 |---|---|---|
 | `sys.platform` | `win32` / `darwin` / `linux` | 更新链：`cli._update` 传入、`asset_for()` 精确匹配、`build.py` 的 zip 名（`hunter1-win32.zip`） |
-| `paths.py` 的 `_platform_tag` | `windows` / `macos` / `linux` | 仅数据目录与可执行文件后缀 |
+| `paths.py` 的 `_platform_key` | `windows` / `macos` / `linux` | 仅数据目录（`user_data_dir`）。可执行文件后缀不在这里 —— 在 `build.py` 的 `_exe_name`（按 `os.name` 判） |
 
 **manifest 的 `platform` 字段必须写 `win32`**（与 `asset_for` 的输入对齐）。
 写 `windows` 不会报错，只会让「有产物却永远匹配不上」——`asset_for` 是精确匹配、

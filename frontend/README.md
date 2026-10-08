@@ -1,9 +1,9 @@
 # frontend/ — React SPA
 
-> **状态：待初始化（迁移 Wave 3 落地）**。本 README 描述终态规划；
-> 工程初始化后由实际代码取代。
+> **状态：已落地**。本工程是迁移 Wave 3 之后的实际实现，与后端 `features/`/`slices/`
+> 同名同序；下文为现状说明。
 
-## 规划（终态）
+## 工程结构
 
 - **栈**：Vite + React 19 + TypeScript + Tailwind CSS 4 + TanStack Query + React Router
 - **目录**：
@@ -23,4 +23,4 @@
 | `npm run dev` | 开发服务器（:5173，proxy 至 API） |
 | `npm run build` | 生产构建 |
 | `npm run test` | 组件/单元测试（Vitest） |
-| `npm run check` | 类型检查 + 测试（进全量门禁） |
+| `npm run check` | 类型检查 + eslint + 测试（进全量门禁） |

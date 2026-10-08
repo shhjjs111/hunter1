@@ -41,6 +41,20 @@
 | POST | `/api/crawl` | 启动一轮；`{started: bool}`（已在跑则为 false，不报错） |
 | GET | `/api/crawl/status` | 进度快照（`running`/`sites`/`total_fetched`…） |
 
+## 抓取礼貌（装配决定，切片里没有开关）
+
+「对站点礼貌」的三个机制实现在 `platform/fetch`，**平台层的默认值是关的**
+（保测试确定性：不然每个用例都要等间隔、每个主机都要多打一次 robots.txt），
+由组装根 `main.AppContext.default` 打开：
+
+| 机制 | 装配取值 | 为什么 |
+|---|---|---|
+| 每主机请求间隔 | `min_interval=1.0` | UA 轮换 + 自动重试会放大请求密度 |
+| 遵守 `robots.txt` | `respect_robots=True` | 站点明确禁止 → `FetchError("robots_disallowed")`，不重试、不计主机故障 |
+| 单响应体积上限 | `max_bytes`（默认 8MB，**始终开**） | 重定向落到大文件会吃满内存；超限报 `too_large`，刻意**不静默截断**（半截 HTML 会产出看起来正常的残缺列表） |
+
+加站点或改站点时别绕开 `HttpFetcher`（例如直接 `httpx.get`）—— 那会把这三条一起丢掉。
+
 ## 独立验证命令
 
 ```bash
