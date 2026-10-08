@@ -16,11 +16,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import inspect
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from hunter1.application.ports import Crawler, TextFetcher
-from hunter1.slices.crawl.adapters import ListPageSpec, StaticHtmlCrawler
+from hunter1.slices.crawl.adapters import BaseCrawler, ListPageSpec, StaticHtmlCrawler
 
 
 @dataclass(frozen=True)
@@ -29,12 +30,16 @@ class SiteDefinition:
 
     `label` 是**默认来源名**：聚合站里每条的雇主由 `company_selector` 逐条覆盖，
     覆盖不到（或列表本身就没有雇主字段）时回落到它。
+
+    `crawler_class` 默认是声明式适配器（`StaticHtmlCrawler`）；需要登录 / JSON
+    接口 / 多步跳转的站点换成自定义 `BaseCrawler` 子类 —— 那类子类**不需要
+    `spec`**，所以构造函数按签名决定要不要传（见 `build_site`）。
     """
 
     key: str
     label: str
     spec: ListPageSpec
-    crawler_class: type[StaticHtmlCrawler] = StaticHtmlCrawler
+    crawler_class: Callable[..., BaseCrawler] = StaticHtmlCrawler
 
     @property
     def careers_url(self) -> str:
@@ -141,15 +146,41 @@ def get_site(key: str) -> SiteDefinition:
 
 
 def build_site(key: str, *, fetcher: TextFetcher) -> Crawler:
-    """按 key 构造一个抓取器。"""
+    """按 key 构造一个抓取器。
+
+    `spec` 只传给**接受它**的构造函数：声明式适配器（`StaticHtmlCrawler` 一系）
+    需要它，自定义 `BaseCrawler` 子类不需要。原先无条件传 `spec=` —— 而
+    `BaseCrawler.__init__` 没有这个形参，于是「挂自定义子类」这个被文档写明的
+    扩展点一挂就 `TypeError`。
+    """
     site = get_site(key)
+    if _accepts_spec(site.crawler_class):
+        return site.crawler_class(
+            key=site.key,
+            company=site.label,
+            careers_url=site.careers_url,
+            spec=site.spec,
+            fetcher=fetcher,
+        )
     return site.crawler_class(
         key=site.key,
         company=site.label,
         careers_url=site.careers_url,
-        spec=site.spec,
         fetcher=fetcher,
     )
+
+
+def _accepts_spec(crawler_class: Callable[..., BaseCrawler]) -> bool:
+    """该构造函数是否接受 `spec` 关键字参数。
+
+    取不到签名时按「接受」处理（默认的声明式适配器需要它；`functools.partial`
+    之类取不到签名的情况少见到不值得为它改变默认行为）。
+    """
+    try:
+        parameters = inspect.signature(crawler_class).parameters
+    except (TypeError, ValueError):  # pragma: no cover - 罕见：无内省签名
+        return True
+    return "spec" in parameters
 
 
 def build_all(*, fetcher: TextFetcher, keys: Iterable[str] | None = None) -> list[Crawler]:

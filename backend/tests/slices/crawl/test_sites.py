@@ -14,7 +14,16 @@ from pathlib import Path
 
 import pytest
 
-from hunter1.slices.crawl.sites import SITES, available_sites, build_all, build_site, get_site
+from hunter1.domain.crawl import RawJob
+from hunter1.slices.crawl.adapters import BaseCrawler, ListPageSpec
+from hunter1.slices.crawl.sites import (
+    SITES,
+    SiteDefinition,
+    available_sites,
+    build_all,
+    build_site,
+    get_site,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -106,3 +115,36 @@ def test_job_type_reflects_site_nature() -> None:
     """实习站产出的岗位类型是「实习」，不是默认的「校招」。"""
     jobs = build_site("shixiseng", fetcher=_OfflineFetcher(_fixture("shixiseng"))).fetch()
     assert {job.job_type for job in jobs} == {"实习"}
+
+
+class _CustomCrawler(BaseCrawler):
+    """手写适配器：不接 `spec`（模拟「需要登录 / JSON 接口 / 多步跳转」的站点）。"""
+
+    def fetch(self) -> list[RawJob]:
+        return [self._job("手写岗位")]
+
+
+def test_custom_crawler_class_extension_point_is_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """文档写明的扩展点（挂自定义 `BaseCrawler` 子类）必须真的能用。
+
+    修复前 `build_site` 无条件传 `spec=`，而 `BaseCrawler.__init__` 没有这个形参
+    —— 挂上去必然 `TypeError`：声明式规格覆盖不到的站点根本没法接入。
+    """
+    monkeypatch.setitem(
+        SITES,
+        "custom",
+        SiteDefinition(
+            key="custom",
+            label="自定义站",
+            spec=ListPageSpec(
+                url_template="https://custom.example/", item_selector=".j", title_selector="a"
+            ),
+            crawler_class=_CustomCrawler,
+        ),
+    )
+    crawler = build_site("custom", fetcher=_OfflineFetcher("<html></html>"))
+    assert isinstance(crawler, _CustomCrawler)
+    assert crawler.key == "custom"
+    assert [job.title for job in crawler.fetch()] == ["手写岗位"]
