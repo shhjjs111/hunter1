@@ -18,7 +18,11 @@ import re
 
 # 标题里出现这些词，基本可断定是拦截/挑战页（大小写不敏感，子串匹配）。
 # 刻意收窄：像「验证码」这种会出现在正常岗位标题里的词不进列表。
-_BLOCK_TITLE_SIGNALS: tuple[str, ...] = (
+#
+# 公开（去掉下划线）是**刻意**的：用例要断言「词表与覆盖一一对应」——
+# 私有化之后「漏了一个信号」就无从查证（实测：7 个结构标记此前零正向用例，
+# 整表删空测试全绿）。
+BLOCK_TITLE_SIGNALS: tuple[str, ...] = (
     "安全验证",
     "人机验证",
     "异常访问",
@@ -32,7 +36,7 @@ _BLOCK_TITLE_SIGNALS: tuple[str, ...] = (
 )
 
 # 挑战页常见的结构性标记（比标题文本更稳定，且不会出现在正常内容里）。
-_BLOCK_MARKUP_SIGNALS: tuple[str, ...] = (
+BLOCK_MARKUP_SIGNALS: tuple[str, ...] = (
     "challenge-platform",
     "cf-challenge",
     "cf_chl_opt",
@@ -62,12 +66,12 @@ def detect_blocking(html: str) -> str | None:
     match = _TITLE.search(html)
     if match is not None:
         title = match.group(1).strip().casefold()
-        for signal in _BLOCK_TITLE_SIGNALS:
+        for signal in BLOCK_TITLE_SIGNALS:
             if _title_is_challenge(title, signal):
                 return signal
 
     lowered = html.casefold()
-    for signal in _BLOCK_MARKUP_SIGNALS:
+    for signal in BLOCK_MARKUP_SIGNALS:
         if signal in lowered:
             return signal
     return None
@@ -93,4 +97,10 @@ def ensure_not_blocked(html: str, *, url: str) -> None:
         raise CrawlBlockedError(signal, url)
 
 
-__all__ = ["CrawlBlockedError", "detect_blocking", "ensure_not_blocked"]
+__all__ = [
+    "BLOCK_MARKUP_SIGNALS",
+    "BLOCK_TITLE_SIGNALS",
+    "CrawlBlockedError",
+    "detect_blocking",
+    "ensure_not_blocked",
+]

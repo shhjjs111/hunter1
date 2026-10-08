@@ -9,7 +9,13 @@ from __future__ import annotations
 import pytest
 
 from hunter1.slices.crawl.adapters import ListPageSpec, StaticHtmlCrawler, parse_list_page
-from hunter1.slices.crawl.guards import CrawlBlockedError, detect_blocking, ensure_not_blocked
+from hunter1.slices.crawl.guards import (
+    BLOCK_MARKUP_SIGNALS,
+    BLOCK_TITLE_SIGNALS,
+    CrawlBlockedError,
+    detect_blocking,
+    ensure_not_blocked,
+)
 
 PAGE_1 = """
 <html><body>
@@ -411,6 +417,34 @@ class TestDetectBlocking:
 
     def test_detects_access_denied(self) -> None:
         assert detect_blocking(ACCESS_DENIED) == "access denied"
+
+    def test_markup_signal_table_is_not_empty(self) -> None:
+        """词表不能被清空 —— 清空了下面那条参数化用例会「零用例」地静默通过。"""
+        assert len(BLOCK_MARKUP_SIGNALS) >= 5
+        assert len(BLOCK_TITLE_SIGNALS) >= 5
+
+    @pytest.mark.parametrize("signal", BLOCK_MARKUP_SIGNALS)
+    def test_every_markup_signal_is_detected(self, signal: str) -> None:
+        """**每一个**结构标记都要能单独命中 —— 这条通路此前零正向用例。
+
+        实测：把 `BLOCK_MARKUP_SIGNALS` 整个删空，测试全绿 —— 而 7 个验证码厂商
+        信号（geetest / grecaptcha / hcaptcha / cf_chl_opt…）全失效。后果正是
+        guards.py docstring 要避免的那种失败模式：线上换挑战页时**静默漏检**，
+        表现为「抓到 0 条」而不是报错。
+
+        标题刻意用一个正常标题：只可能由结构标记命中。
+        """
+        html = (
+            "<html><head><title>招聘 - 示例站点</title></head>"
+            f'<body><div data-x="{signal}"></div></body></html>'
+        )
+        assert detect_blocking(html) == signal
+
+    @pytest.mark.parametrize("signal", BLOCK_TITLE_SIGNALS)
+    def test_every_title_signal_is_detected(self, signal: str) -> None:
+        """同理：词表里的每个标题信号都要能命中（改词/删词即红）。"""
+        html = f"<html><head><title>{signal} - 示例站点</title></head><body></body></html>"
+        assert detect_blocking(html) == signal
 
     def test_normal_page_is_not_flagged(self) -> None:
         assert detect_blocking(NORMAL_PAGE) is None
