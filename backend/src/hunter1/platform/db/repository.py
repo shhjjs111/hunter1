@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func, select
 
 from hunter1.domain.models import CaptureStatus, Company, Job
+from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.schema import CompanyRow, JobRow
 from hunter1.platform.text import normalize_job_title
 
@@ -38,7 +39,9 @@ def _to_job(row: JobRow) -> Job:
         city=row.city,
         jd_raw=row.jd_raw,
         match_score=row.match_score,
-        capture_status=CaptureStatus(row.capture_status),
+        capture_status=restore_enum(
+            CaptureStatus, row.capture_status, default=CaptureStatus.UNKNOWN, where="岗位抓取状态"
+        ),
         first_seen_at=row.first_seen_at,
         last_seen_at=row.last_seen_at,
     )

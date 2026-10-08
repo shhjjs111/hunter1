@@ -16,6 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from hunter1.domain.assistant import Message, Role, ToolCall
+from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.schema import ConversationMessageRow, ConversationRow
 
 if TYPE_CHECKING:
@@ -181,8 +182,14 @@ class SqliteConversationRepository:
                 .order_by(ConversationMessageRow.sequence.asc())
             )
             rows = list(session.scalars(statement))
-        if limit is not None and len(rows) > limit:
-            rows = rows[-limit:]
+        if limit is not None:
+            # `rows[-limit:]` 在 limit=0 时是 `rows[-0:]` —— 等于**全部**：
+            # `assistant_history_limit` 若被配成 0（意图「不带历史」），会静默变成
+            # 「带全部历史」，正好与意图相反。负数同理给出错误窗口。显式返回空。
+            if limit <= 0:
+                return []
+            if len(rows) > limit:
+                rows = rows[-limit:]
         return [_to_message(row) for row in rows]
 
 
@@ -204,7 +211,7 @@ def _to_message(row: ConversationMessageRow) -> Message:
         if isinstance(item, dict)
     ]
     return Message(
-        role=Role(row.role),
+        role=restore_enum(Role, row.role, default=Role.USER, where="会话消息角色"),
         content=row.content,
         tool_calls=tool_calls,
         tool_call_id=row.tool_call_id,

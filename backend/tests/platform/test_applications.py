@@ -1,6 +1,6 @@
 """投递记录仓储测试 —— 临时 SQLite，验证往返、排序与幂等。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations
@@ -114,3 +114,26 @@ class TestApplicationRepository:
         reopened = Database(path)
         reopened.initialize()
         assert reopened.applications().count() == 1
+
+
+class TestIllegalStageInDatabase:
+    """同理于岗位状态：库里的非法阶段值不能让整个投递列表 500。
+
+    非法值来自手工改库或更早的版本；退回到模型声明的默认阶段（`APPLIED`）
+    并在 stderr 留一行 —— 容忍用户数据就不能静默。
+    """
+
+    def test_illegal_stage_falls_back_with_a_warning(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import sqlalchemy as sa
+
+        db.applications().upsert(_application(stage=ApplicationStage.OFFER))
+        with db.engine.begin() as conn:
+            conn.execute(sa.text("UPDATE applications SET stage = 'bogus' WHERE id = 'a1'"))
+
+        applications = db.applications().list()  # 不应抛
+
+        assert len(applications) == 1
+        assert applications[0].stage is ApplicationStage.APPLIED
+        assert "bogus" in capsys.readouterr().err

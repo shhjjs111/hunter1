@@ -77,6 +77,38 @@ class TestUnusableLocation:
         db.initialize()
         assert db.path.parent.is_dir()
 
+    def test_path_pointing_at_a_directory_is_rejected_readably(self, tmp_path: Path) -> None:
+        """`--db` 指到一个目录时给可读失败，而不是连库时才炸出一段 traceback。
+
+        `create_engine` 对目录是**惰性失败**：直到 `initialize()` 才抛
+        `OperationalError("unable to open database file")` —— 那不是
+        DatabaseLocationError，CLI 兜不住。构造期就翻译成同一种可读失败。
+        """
+        target = tmp_path / "a-directory"
+        target.mkdir()
+        with pytest.raises(DatabaseLocationError) as excinfo:
+            Database(target)
+        assert "目录" in str(excinfo.value)
+        assert excinfo.value.path == target
+
+    def test_connection_failure_at_initialize_is_translated(self, tmp_path: Path) -> None:
+        """连接/建表期失败同样要变成可读失败，而不是直穿成 traceback。
+
+        实测：把一个非 SQLite 内容的文件放成库，抛的是
+        `sqlalchemy.exc.DatabaseError("file is not a database")` ——
+        **不是** OperationalError，只捕后者会漏。
+        """
+        path = tmp_path / "locked.db"
+        database = Database(path)
+        database.initialize()
+        database.dispose()
+
+        path.write_bytes(b"not a database" * 100)
+        broken = Database(path)
+        with pytest.raises(DatabaseLocationError) as excinfo:
+            broken.initialize()
+        assert "database" in str(excinfo.value).lower()
+
 
 class TestCrossThreadWrites:
     def test_concurrent_writes_from_many_threads(self, tmp_path: Path) -> None:

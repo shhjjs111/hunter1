@@ -1,6 +1,6 @@
 """会话持久化测试 —— 真实 SQLite，离线。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations
@@ -148,6 +148,25 @@ class TestMessages:
             repo.append(conv.id, Message(Role.USER, f"m{index}"))
         recent = repo.messages(conv.id, limit=3)
         assert [m.content for m in recent] == ["m7", "m8", "m9"]
+
+    def test_limit_zero_means_no_history(self, db: Database) -> None:
+        """`limit=0` 必须返回空。
+
+        `rows[-0:]` 等于**全部** —— 把 `assistant_history_limit` 配成 0
+        （意图「不带历史」）会静默变成「带全部历史」，正好与意图相反。
+        """
+        repo = db.conversations()
+        conv = repo.create(title="t")
+        for index in range(4):
+            repo.append(conv.id, Message(Role.USER, f"m{index}"))
+        assert repo.messages(conv.id, limit=0) == []
+
+    def test_negative_limit_does_not_slice_a_wrong_window(self, db: Database) -> None:
+        repo = db.conversations()
+        conv = repo.create(title="t")
+        for index in range(4):
+            repo.append(conv.id, Message(Role.USER, f"m{index}"))
+        assert repo.messages(conv.id, limit=-1) == []
 
 
 class FakeClockAdvance(FakeClock):

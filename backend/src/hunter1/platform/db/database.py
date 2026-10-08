@@ -9,6 +9,7 @@ from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
 from hunter1.platform.db.applications import SqliteApplicationRepository
@@ -22,15 +23,21 @@ from hunter1.platform.db.settings import SqliteSettingsRepository
 
 
 class DatabaseLocationError(RuntimeError):
-    """数据库位置不可用（父路径是文件、没有写权限、磁盘满……）。
+    """数据库位置不可用（父路径是文件、指向目录、没有写权限、磁盘满……）。
 
-    刻意用一个自有类型而不是把 `OSError` 直接往上抛：这类失败几乎总是
-    **环境问题**（用户指错了路径、目录被组策略锁了），而不是程序缺陷。
-    界面层据此给一句人话，而不是把 traceback 砸到用户脸上。
+    刻意用一个自有类型而不是把 `OSError` / `sqlalchemy.exc.OperationalError`
+    直接往上抛：这类失败几乎总是**环境问题**（用户指错了路径、目录被组策略锁了），
+    而不是程序缺陷。界面层据此给一句人话，而不是把 traceback 砸到用户脸上。
     """
 
-    def __init__(self, path: Path, cause: OSError) -> None:
-        super().__init__(f"无法在 {path} 建库：{cause.strerror or cause}")
+    def __init__(self, path: Path, cause: OSError | None = None, *, reason: str = "") -> None:
+        if reason:
+            detail = reason
+        elif cause is not None:
+            detail = getattr(cause, "strerror", None) or str(cause)
+        else:
+            detail = "位置不可用"
+        super().__init__(f"无法在 {path} 建库：{detail}")
         self.path = path
         self.cause = cause
 
@@ -40,6 +47,14 @@ class Database:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        if self.path.is_dir():
+            # `--db` 指到一个目录：`create_engine` 不会立刻报错，直到 `initialize()`
+            # 才抛 `OperationalError("unable to open database file")` —— 那不是
+            # DatabaseLocationError，CLI 兜不住，用户看到的是裸 traceback。
+            # 在构造期就翻译成同一种可读失败（判断成本一次 stat）。
+            raise DatabaseLocationError(
+                self.path, reason="这是一个目录，不是一个数据库文件（--db 要指向文件）"
+            )
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -51,6 +66,20 @@ class Database:
 
     def initialize(self) -> None:
         """建表（幂等）+ 补写无法由 create_all 施加的唯一索引。"""
+        try:
+            self._initialize_schema()
+        except DatabaseError as exc:
+            # 连接/建表期的 DBAPI 失败同样是**环境问题**：库文件不可读、被别的进程
+            # 独占锁着、磁盘满、或根本不是 SQLite 文件（实测：后者抛的是
+            # `DatabaseError("file is not a database")`，**不是** OperationalError）。
+            # 翻译成人话，让 CLI 的 `except DatabaseLocationError` 接得住 ——
+            # 否则用户看到的是一段 traceback。原始信息一并带上，免得把实现 bug
+            # 也伪装成环境问题。
+            raise DatabaseLocationError(
+                self.path, reason=str(getattr(exc, "orig", None) or exc)
+            ) from exc
+
+    def _initialize_schema(self) -> None:
         Base.metadata.create_all(self.engine)
         # (conversation_id, sequence) 必须唯一：并发 `append` 各算一次 `max+1` 会撞号，
         # 撞号必须被数据库拒绝（写入侧据此重试），否则两条同号消息静默入库、读回

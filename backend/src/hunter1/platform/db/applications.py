@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete, func, select
 
 from hunter1.domain.models import Application, ApplicationStage
+from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.schema import ApplicationRow
 
 if TYPE_CHECKING:
@@ -19,7 +20,9 @@ def _to_application(row: ApplicationRow) -> Application:
         job_id=row.job_id,
         company=row.company,
         title=row.title,
-        stage=ApplicationStage(row.stage),
+        stage=restore_enum(
+            ApplicationStage, row.stage, default=ApplicationStage.APPLIED, where="投递阶段"
+        ),
         applied_at=row.applied_at,
         updated_at=row.updated_at,
         note=row.note,

@@ -1,6 +1,6 @@
 """仓储层单元测试 —— 临时 SQLite 文件，验证持久化往返、幂等与不变量。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations
@@ -285,3 +285,49 @@ class TestJobScoreIsolation:
 
     def test_set_match_score_missing_job_returns_false(self, db: Database) -> None:
         assert db.jobs().set_match_score("ghost", 50) is False
+
+
+class TestIllegalEnumValuesInDatabase:
+    """库里的非法枚举值不能把整张列表拖成 500。
+
+    行映射直接构造枚举会抛 `ValueError`，而它发生在**读列表**的路径上：一行坏数据
+    让整个岗位库页面 500，用户既看不到是哪一行，也没有修库的入口。非法值只可能
+    来自手工改库或更早的版本。
+
+    约定与 `Database.initialize` 的重复序号修复一致：容忍/改动了用户数据必须留痕
+    （stderr 一行），不能静默。
+    """
+
+    def _corrupt(self, db: Database, *, column: str, value: str) -> None:
+        import sqlalchemy as sa
+
+        with db.engine.begin() as conn:
+            conn.execute(
+                sa.text(f"UPDATE jobs SET {column} = :v WHERE id = :i"),
+                {"v": value, "i": "j1"},
+            )
+
+    def test_illegal_capture_status_falls_back_with_a_warning(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db.jobs().upsert(_job())
+        self._corrupt(db, column="capture_status", value="bogus")
+
+        jobs = db.jobs().list()  # 不应抛
+
+        assert len(jobs) == 1
+        assert jobs[0].capture_status is CaptureStatus.UNKNOWN
+        assert "bogus" in capsys.readouterr().err
+
+    def test_corrupt_row_does_not_hide_its_healthy_neighbours(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """一行坏数据不该让其它行一起消失（整张列表 500 的后果就是这个）。"""
+        db.jobs().upsert(_job(id="j1", title="坏行"))
+        db.jobs().upsert(_job(id="j2", title="好行"))
+        self._corrupt(db, column="capture_status", value="not-a-status")
+
+        titles = {job.title for job in db.jobs().list()}
+
+        assert titles == {"好行", "坏行"}
+        capsys.readouterr()
