@@ -690,18 +690,25 @@ def published_sha256(manifest: dict | None, platform: str) -> str | None:
     return None
 
 
-def check_reupload_is_same_artifact(owner: str, repo: str, tag: str, zip_path: Path) -> str | None:
+def check_reupload_is_same_artifact(
+    owner: str, repo: str, tag: str, zip_path: Path, *, platform: str | None = None
+) -> str | None:
     """确认「重传的是同一份产物」。通过则返回本地 sha256，否则打印原因并返回 None。
 
     `--reupload` 宽免了「tag 指向 HEAD」那一条（产物没重新构建，那条校验说明不了
     什么），代价必须由这里顶上 —— **没有这道阀门，`--reupload` 就等于关掉安全
     检查**。所以这里 fail-closed：拿不到线上清单、或清单里没有对应平台，都算不通过。
+
+    `platform` 只在测试里显式传（默认取本机 `platform_key()`）：比对的是「**本机
+    这份产物**是不是线上那一份」，所以查的必须是本机平台的那个附件 —— 写死成
+    win32 的用例在 CI（ubuntu）上会查 `linux` 而查不到，于是**用例本机绿、CI 红**。
     """
+    target = platform or platform_key()
     published = fetch_published_manifest(owner, repo, tag)
-    published_hash = published_sha256(published, platform_key())
+    published_hash = published_sha256(published, target)
     if published_hash is None:
         print(
-            f"✗ 取不到线上清单（或里面没有 {platform_key()} 产物），"
+            f"✗ 取不到线上清单（或里面没有 {target} 产物），"
             "无法确认「重传的是同一份产物」。\n"
             f"  试过：https://github.com/{owner}/{repo}/releases/download/{tag}/manifest.json\n"
             "  若 Release 或附件还不存在，请正常发布一次（去掉 --reupload）。",

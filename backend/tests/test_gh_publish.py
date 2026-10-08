@@ -336,12 +336,58 @@ class TestReuploadGuard:
     """`--reupload` 宽免了 tag 校验，就必须由 sha256 一致性顶上。
 
     这组测试守的是：**任何一条拿不到「同一份产物」证据的路径都不能放行**。
+
+    用例**显式**声明平台（`LOCAL`），不依赖跑测试的机器：守卫查的是「本机这份产物」
+    对应的那个附件，而把清单固定成 `win32` 的写法在 CI（ubuntu）上会去找 `linux`、
+    查不到 → 本机绿、CI 红（实测这组里就红了 2 条）。
     """
 
-    def _call(self, monkeypatch, *, published, local_hash: str):
+    LOCAL = "win32"
+
+    def _call(self, monkeypatch, *, published, local_hash: str, platform: str | None = None):
         monkeypatch.setattr(gh, "fetch_published_manifest", lambda *a, **k: published)
         monkeypatch.setattr(gh, "file_sha256", lambda _p: local_hash)
-        return gh.check_reupload_is_same_artifact("acme", "hunter1", "v0.1.0", Path("x.zip"))
+        return gh.check_reupload_is_same_artifact(
+            "acme", "hunter1", "v0.1.0", Path("x.zip"), platform=platform or self.LOCAL
+        )
+
+    def test_default_platform_follows_platform_key(self, monkeypatch) -> None:
+        """缺省查的是 `platform_key()` 的结果，而不是某个写死的值。
+
+        用**哨兵平台名**（`x-test-plat`）：把它替换成 platform_key 的返回值，并让清单
+        只声明它。任何写死的实现（win32 / linux / darwin…）都查不到 → 红 ——
+        而"本机平台恰好等于写死值"的用例是测不出这件事的（实测：写死 win32 的实现在
+        本机 Windows 上全绿）。配对的一半：清单只声明别的平台时必须 fail-closed。
+        """
+        sentinel = "x-test-plat"
+        monkeypatch.setattr(gh, "platform_key", lambda: sentinel)
+        monkeypatch.setattr(gh, "file_sha256", lambda _p: "AAA")
+
+        def published_with(platform: str) -> None:
+            monkeypatch.setattr(
+                gh,
+                "fetch_published_manifest",
+                lambda *a, _p=platform, **k: {"assets": [{"platform": _p, "sha256": "AAA"}]},
+            )
+
+        published_with(sentinel)  # = platform_key() 的返回值 → 认它
+        assert (
+            gh.check_reupload_is_same_artifact("acme", "hunter1", "v0.1.0", Path("x.zip")) == "AAA"
+        )
+        published_with("win32")  # 别的平台 → 不认
+        assert (
+            gh.check_reupload_is_same_artifact("acme", "hunter1", "v0.1.0", Path("x.zip")) is None
+        )
+
+        # 显式传入的 platform 必须**覆盖**缺省值 —— 否则 `_call` 里的 `LOCAL` 是个死参数，
+        # 而"传了没生效"这类退化只在别的平台上才暴露（本机恰好等于缺省值时全绿）。
+        published_with("win32")
+        assert (
+            gh.check_reupload_is_same_artifact(
+                "acme", "hunter1", "v0.1.0", Path("x.zip"), platform="win32"
+            )
+            == "AAA"
+        )
 
     def test_passes_when_hash_matches(self, monkeypatch) -> None:
         result = self._call(
