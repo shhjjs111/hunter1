@@ -10,6 +10,23 @@ import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+from uuid import uuid4
+
+# 给「模型没返回 id」的工具调用发号。**不能用下标**：一次对话可能有多轮工具调用，
+# 每轮都是一次新的模型响应、下标每轮从 0 重来 —— 于是同一份 messages 里会出现
+# 重复的 tool_call_id，而 OpenAI 协议要求 tool 消息的 tool_call_id 对应某条
+# tool_call，重复即歧义。用随机串保证**跨进程、跨重启**都不撞号（见
+# `synthetic_call_id` —— 进程内计数器会在重启后与库里已有的 id 重号）。
+
+
+def synthetic_call_id() -> str:
+    """生成一个工具调用 id（模型未返回 id 时的回退）。
+
+    用随机串而不是进程内计数器：计数器只保证**进程内**唯一 —— 重启后从 1 重来，
+    会和库里已持久化的 `call_auto_1` 撞号。而 tool_call_id 必须在一条 messages
+    序列里无歧义（服务器可能按它配对），撞号意味着两轮不同的工具调用同名。
+    """
+    return f"call_auto_{uuid4().hex[:12]}"
 
 
 class Role(StrEnum):
@@ -100,7 +117,7 @@ def to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
 def parse_tool_calls(raw: list[dict[str, Any]]) -> list[ToolCall]:
     """从 OpenAI 响应的 `tool_calls` 解析出领域对象（容忍参数是 JSON 字符串）。"""
     calls: list[ToolCall] = []
-    for index, item in enumerate(raw):
+    for item in raw:
         if not isinstance(item, dict):
             continue
         function = item.get("function")
@@ -119,7 +136,7 @@ def parse_tool_calls(raw: list[dict[str, Any]]) -> list[ToolCall]:
             parsed = arguments
         else:
             parsed = {}
-        call_id = item.get("id") or f"call_{index}"
+        call_id = item.get("id") or synthetic_call_id()
         calls.append(ToolCall(id=str(call_id), name=name.strip(), arguments=parsed))
     return calls
 
@@ -130,5 +147,6 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "parse_tool_calls",
+    "synthetic_call_id",
     "to_openai_messages",
 ]

@@ -10,8 +10,13 @@ from __future__ import annotations
 import re
 import unicodedata
 
-# 括号及其内容（中英文括号都覆盖；不跨括号匹配，便于循环剥离嵌套）
-_PAREN = re.compile(r"[（(][^）)]*[）)]")
+# 括号及其内容（中英文括号都覆盖）。body **不允许再含括号** —— 这样一次 sub
+# 只吃掉最内层那一对，配合下面的循环从内向外逐层剥离嵌套。
+# 反例（修复前 `[^）)]*`）：body 会吞掉内层左括号、撞到内层第一个 `)` 就收尾，
+# 于是内层之后的右括号再也配不上对、残留下来 ——
+# normalize_job_title("AI产品经理（2027校招（提前批））") 得到 "ai产品经理)"，
+# 同一岗位两种写法折叠失败（Job.title_key 不同）。
+_PAREN = re.compile(r"[（(][^（）()]*[）)]")
 _WHITESPACE = re.compile(r"\s+")
 
 

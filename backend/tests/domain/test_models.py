@@ -1,6 +1,6 @@
 """domain.models 单元测试 —— 纯模型，无 IO。
 
-TDD：本文件先于实现编写，当前应为 RED。
+TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应保持全绿）。
 """
 
 from __future__ import annotations
@@ -77,6 +77,18 @@ class TestJob:
         with pytest.raises(ValidationError):
             self._job(first_seen_at=later, last_seen_at=earlier)
 
+    def test_mixed_timezone_awareness_is_a_validation_error(self) -> None:
+        """L11：naive 与 aware 混用要报 ValidationError（→ 422），不是裸 TypeError（→ 500）。
+
+        裸比较 `datetime > datetime` 在 awareness 不一致时抛 TypeError，
+        pydantic 不把它包成 ValidationError —— 调用方按 ValidationError 处理会漏掉。
+        """
+        with pytest.raises(ValidationError):
+            self._job(
+                first_seen_at=datetime(2026, 9, 1),  # naive
+                last_seen_at=datetime(2026, 10, 1, tzinfo=UTC),
+            )
+
 
 class TestApplication:
     """投递记录 —— 岗位库之外的「我投了什么」。"""
@@ -113,6 +125,14 @@ class TestApplication:
 
     def test_note_is_optional(self) -> None:
         assert self._application().note is None
+
+    def test_mixed_timezone_awareness_is_a_validation_error(self) -> None:
+        """L11：同上，applied/updated 混用 aware 与 naive 也要是 ValidationError。"""
+        with pytest.raises(ValidationError):
+            self._application(
+                applied_at=datetime(2026, 9, 1),  # naive
+                updated_at=datetime(2026, 9, 2, tzinfo=UTC),
+            )
 
     def test_unknown_field_is_rejected(self) -> None:
         with pytest.raises(ValidationError):

@@ -42,6 +42,24 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+def _ensure_order(earlier: datetime, later: datetime, message: str) -> None:
+    """断言 `earlier <= later`，并把时区awareness 混用翻译成可读的 ValidationError。
+
+    naive 与 aware 混用时，裸比较抛的是 `TypeError` —— pydantic **不会**把它
+    包成 `ValidationError`，所以校验器里这么写会让错误直穿成 500，而调用方
+    按 `ValidationError`（422）处理就会漏掉。这里统一翻成 `ValueError`
+    （→ ValidationError），失败模式从「服务端 500」变成「请求 422 + 可读原因」。
+    """
+    try:
+        out_of_order = earlier > later
+    except TypeError as exc:
+        raise ValueError(
+            f"时间字段时区不一致（naive 与 aware 混用，应统一为带时区）：{message}"
+        ) from exc
+    if out_of_order:
+        raise ValueError(message)
+
+
 class Company(_Model):
     """一家用人单位及其抓取绑定。"""
 
@@ -76,17 +94,17 @@ class Job(_Model):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def title_key(self) -> str:
-        """标题归一化投影，用于同题折叠（见 domain.text）。"""
+        """标题归一化投影，用于同题折叠（见 platform.text）。"""
         return normalize_job_title(self.title)
 
     @model_validator(mode="after")
     def _enforce_seen_order(self) -> Job:
-        if (
-            self.first_seen_at is not None
-            and self.last_seen_at is not None
-            and self.first_seen_at > self.last_seen_at
-        ):
-            raise ValueError("first_seen_at must not be later than last_seen_at")
+        if self.first_seen_at is not None and self.last_seen_at is not None:
+            _ensure_order(
+                self.first_seen_at,
+                self.last_seen_at,
+                "first_seen_at must not be later than last_seen_at",
+            )
         return self
 
 
@@ -109,8 +127,9 @@ class Application(_Model):
 
     @model_validator(mode="after")
     def _enforce_time_order(self) -> Application:
-        if self.applied_at > self.updated_at:
-            raise ValueError("applied_at must not be later than updated_at")
+        _ensure_order(
+            self.applied_at, self.updated_at, "applied_at must not be later than updated_at"
+        )
         return self
 
 
