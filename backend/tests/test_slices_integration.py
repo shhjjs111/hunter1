@@ -293,6 +293,36 @@ class TestFrontendServing:
         assert response.json()["total"] == 1
         db.dispose()
 
+    def test_unregistered_api_path_is_json_404_not_spa(self, tmp_path: Path) -> None:
+        """**未注册**的 `/api/*` 不能回落到 index.html（200 + HTML）。
+
+        「后注册」只保护**已注册**的路径：拼错端点的 GET 会拿到 HTML，前端
+        `response.json()` 直接炸，而且看不出是路径写错了。`/api/*` 的存在性
+        必须由路由表回答，不能由 SPA 兜底。
+        """
+        dist = tmp_path / "dist_api"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>spa</html>", encoding="utf-8")
+        test_client, db = _make_app(tmp_path, frontend=dist)
+
+        response = test_client.get("/api/does-not-exist")
+        assert response.status_code == 404, "未注册的 API 路径被 SPA 兜底吞掉了"
+        assert response.headers["content-type"].startswith("application/json")
+        assert "spa" not in response.text
+        db.dispose()
+
+    def test_wrong_method_on_api_route_is_405_not_spa(self, tmp_path: Path) -> None:
+        """已注册路径、方法不对 → 405 + Allow（而不是 200 + HTML）。"""
+        dist = tmp_path / "dist_method"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>spa</html>", encoding="utf-8")
+        test_client, db = _make_app(tmp_path, frontend=dist)
+
+        response = test_client.get("/api/settings/test")  # 该端点只有 POST
+        assert response.status_code == 405
+        assert "POST" in response.headers.get("allow", "")
+        db.dispose()
+
     def test_no_legacy_ssr_layer(self, tmp_path: Path) -> None:
         """旧 SSR 层已删 —— 渲染层只有前端一处。"""
         import hunter1
@@ -363,6 +393,23 @@ class TestSpaFallbackSecurity:
         # 修复不能把正常服务一起关掉：dist 内的真实文件仍照常返回
         ok_status, ok_body = _raw_asgi_get(test_client.app, "/favicon.svg")
         assert ok_status == 200 and b"<svg/>" in ok_body
+        db.dispose()
+
+    def test_embedded_null_byte_path_is_not_a_500(self, tmp_path: Path) -> None:
+        """`/a%00b` 这类路径不能让 `Path.resolve()` 的 ValueError 逃出去。
+
+        未处理时 `os.stat` 抛 `ValueError: embedded null character in path`，
+        从应用层逃逸 —— 线上就是一次 500。这类路径不可能对应真实文件，
+        直接当作「没有这个文件」回落 index 即可。
+        """
+        dist = tmp_path / "frontend" / "dist"
+        (dist / "assets").mkdir(parents=True)
+        (dist / "index.html").write_text("<html>SPA-ROOT</html>", encoding="utf-8")
+
+        test_client, db = _make_app(tmp_path, frontend=dist)
+        status, body = _raw_asgi_get(test_client.app, "/a\x00b")
+        assert status == 200, f"含 NUL 的路径不该 5xx（实际 {status}）"
+        assert b"SPA-ROOT" in body
         db.dispose()
 
 

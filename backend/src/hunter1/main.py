@@ -23,8 +23,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.convertors import Convertor, register_url_convertor
 
 from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
 from hunter1.domain.settings import LLMSettings
@@ -116,11 +117,19 @@ class AppContext:
     ) -> AppContext:
         """按本机默认配置装配（真实 SQLite + 真实 HTTP 抓取器）。"""
         database = Database(db_path)
-        database.initialize()
+        try:
+            database.initialize()
+        except BaseException:
+            # 建库失败时别把引擎留在进程里：SQLite 会持有文件句柄、留下 -wal/-shm，
+            # 而「删目录即卸载」的便携定位要求失败路径同样干净。
+            database.dispose()
+            raise
         if fetcher is None:
             from hunter1.platform.fetch.http import HttpFetcher
 
-            fetcher = HttpFetcher(timeout=20, retries=2)
+            # 生产装配在这里定「对站点多礼貌」：每主机 1 req/s + 遵守 robots.txt。
+            # 平台层的默认值是「不额外等待」（测试要确定性、要快），策略留在组装根。
+            fetcher = HttpFetcher(timeout=20, retries=2, min_interval=1.0, respect_robots=True)
         return cls(
             db=database,
             fetcher=fetcher,
@@ -234,11 +243,60 @@ def _build_runner(context: AppContext) -> CrawlRunner:
     )
 
 
+class _SpaPathConvertor(Convertor[str]):
+    """SPA 回落的路径参数：**排除 `api/` 前缀**。
+
+    为什么需要它：`/{path:path}` 的 `.*` 会把**未注册**的 `/api/*` 也一并吞下 ——
+    「后注册」只保护了**已注册**的路径。于是拼错端点的 GET 会拿到
+    `200 text/html`（前端的 `response.json()` 直接炸，且看不出是路径写错），
+    而 `POST /api/settings/test` 之外发 GET 也拿不到应有的 405。
+
+    用带负向先行断言的转换器，让回落**根本匹配不到** `api/…`，Starlette 于是给出
+    标准语义：路径不存在 → 404 JSON（FastAPI 的 HTTPException 处理器），
+    路径存在但方法不对 → 405 + Allow 头。
+    """
+
+    regex = r"(?!api(?:/|$)).*"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return value
+
+
+register_url_convertor("spa_path", _SpaPathConvertor())
+
+
+def _static_file_within(dist_root: Path, path: str) -> Path | None:
+    """把 URL 路径解析成 `dist_root` 内的真实文件；越界或非法路径返回 None。
+
+    `path` 直取自 URL，可含 `..`（原始 socket / `curl --path-as-is` / 浏览器发
+    百分号编码 `%2e%2e%2f` 都能让它原样抵达）。解析后必须仍在 dist 之内，否则
+    这条**手工**拼路径会穿越到 dist 之外读到仓库文件。（`/assets` 走 StaticFiles，
+    Starlette 内部有保护；这条手工路径没有。）
+
+    含 NUL 等非法字符的路径（`/a%00b`）会让 `Path.resolve()` 抛
+    `ValueError: embedded null character in path` —— 未捕获的异常，线上即 500。
+    这类路径不可能对应任何真实文件，直接当作「没有这个文件」。
+    """
+    if "\x00" in path:
+        return None
+    try:
+        candidate = (dist_root / path).resolve()
+    except (OSError, ValueError):
+        return None
+    if candidate.is_relative_to(dist_root) and candidate.is_file():
+        return candidate
+    return None
+
+
 def _mount_frontend(app: FastAPI) -> None:
     """服务前端 SPA；产物不存在时给一条可读提示（开发态的预期情形）。
 
-    SPA 回落规则：`/api/*` 之外的任何路径都交给 `index.html`（前端路由自己解析）。
-    这必须在所有 API 路由**之后**注册，否则会把 API 路径也吞掉。
+    SPA 回落规则：`/api/*` **之外**的任何路径都交给 `index.html`（前端路由自己
+    解析）。这必须在所有 API 路由**之后**注册，否则会把 API 路径也吞掉；
+    而「未注册的 `/api/*`」由 `_SpaPathConvertor` 挡在匹配之外（见其 docstring）。
     """
     dist = frontend_dir()
     if dist is None:
@@ -265,18 +323,13 @@ def _mount_frontend(app: FastAPI) -> None:
     index = dist_root / "index.html"
 
     @app.get("/", include_in_schema=False)
-    @app.get("/{path:path}", include_in_schema=False)
-    def spa(path: str = "") -> FileResponse:
-        # 真实文件优先（favicon 等），其余交给 SPA。
-        #
-        # 边界校验：`path` 直取自 URL，可含 `..`（原始 socket / `curl --path-as-is` /
-        # 浏览器发百分号编码 `%2e%2e%2f` 都能让它原样抵达）。解析后必须仍在 dist
-        # 之内，否则这条**手工**拼路径会穿越到 dist 之外读到仓库文件。
-        # （`/assets` 走 StaticFiles，Starlette 内部有保护；这条手工路径没有。）
+    @app.get("/{path:spa_path}", include_in_schema=False)
+    def spa(path: str = "") -> Response:
+        # 真实文件优先（favicon、robots.txt、预渲染页…），其余交给 SPA。
         if path:
-            candidate = (dist_root / path).resolve()
-            if candidate.is_relative_to(dist_root) and candidate.is_file():
-                return FileResponse(candidate)
+            found = _static_file_within(dist_root, path)
+            if found is not None:
+                return FileResponse(found)
         return FileResponse(index)
 
 
