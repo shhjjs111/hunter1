@@ -29,6 +29,21 @@ class TestMessage:
         with pytest.raises(ValueError):
             Message(role=Role.USER, content="   ")
 
+    def test_assistant_message_needs_content_or_tool_calls(self) -> None:
+        """助手消息不能既没正文又没工具调用 —— 那是一条会被上游拒掉的空回合。
+
+        实测：把 `domain/assistant.py` 里这条守卫改成 `if False:`，domain 与
+        assistant 两个套件的用例**全都照样绿** —— `role is not Role.ASSISTANT`
+        那条（上面那条用例守的）与它是两个条件，只有前者有覆盖。
+        """
+        with pytest.raises(ValueError):
+            Message(role=Role.ASSISTANT, content="")
+        # 有工具调用时允许空正文（模型先要工具、下一轮再说话）—— 配对反例
+        with_tool = Message(
+            role=Role.ASSISTANT, content="", tool_calls=[ToolCall(id="c1", name="t", arguments={})]
+        )
+        assert with_tool.content == ""
+
     def test_tool_message_carries_call_id(self) -> None:
         msg = Message(role=Role.TOOL, content="结果", tool_call_id="call_1")
         assert msg.tool_call_id == "call_1"
