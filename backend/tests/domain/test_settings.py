@@ -22,6 +22,29 @@ def _settings(**overrides: object) -> LLMSettings:
     return LLMSettings(**base)  # type: ignore[arg-type]
 
 
+class TestBaseUrlPort:
+    """坏端口要在**输入时**就被拒。
+
+    `https://api.example.com:notaport/v1` 的 netloc 非空，能通过 scheme/netloc
+    检查并**存进库**，却会在发请求时抛 `httpx.InvalidURL` —— 到那一步配置页只剩
+    500 和一条 traceback。
+
+    实测：把 `_valid_base_url` 里那句 `_ = parts.port` 改成 `_ = 0`，105 条相关
+    用例全绿 —— 因为 LLM 客户端自带一份端口校验，而用例只盖住了**那一份**；
+    配置页读的是模型这一份。
+    """
+
+    def test_bad_port_is_rejected(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            _settings(base_url="https://api.example.com:notaport/v1")
+        assert "端口" in str(excinfo.value)
+
+    def test_valid_port_is_accepted(self) -> None:
+        """配对反例：为了「拒绝坏端口」不能把合法端口一起拒掉。"""
+        url = "https://api.example.com:8080/v1"
+        assert _settings(base_url=url).base_url == url
+
+
 class TestPlaintextWarning:
     """明文 http:// 指向公网时要提示（本地/内网不提示）。
 
