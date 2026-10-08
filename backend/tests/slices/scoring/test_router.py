@@ -97,6 +97,30 @@ class TestScoreEndpoint:
         for client in _client(db, FakeLLM()):
             assert client.post("/api/scoring/zzzz").status_code == 404
 
+    def test_job_vanishing_between_load_and_save_is_404(self, db: Database) -> None:
+        """L8：load 成功、写分前岗位被删 —— save_score 返回 None 时路由必须报 404。
+
+        修复前路由忽略返回值，会返回 200 声称已写分（而库里什么都没写）。
+        """
+
+        class VanishingStore(ScoreStore):
+            def save_score(self, job_id: str, score: int):  # type: ignore[override]
+                return None  # 岗位在 load 与 save 之间被删
+
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                store=VanishingStore(db),
+                llm_factory=lambda: FakeLLM({"score": 88}),
+                profile_provider=lambda: PROFILE,
+            ),
+            prefix="/api",
+        )
+        with TestClient(app) as client:
+            response = client.post(f"/api/scoring/{JOB_ID}")
+        assert response.status_code == 404
+        assert "岗位不存在" in response.json()["detail"]
+
     def test_llm_failure_is_422_with_reason(self, db: Database) -> None:
         """模型侧失败 → 422（不是 500，也不是 404）：请求没毛病，是依赖给不出结果。"""
         for client in _client(db, FakeLLM(boom=True)):

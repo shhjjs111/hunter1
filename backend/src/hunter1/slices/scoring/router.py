@@ -131,7 +131,11 @@ def build_router(
             # 客户端是每请求新建的 —— 用完即释放，别把连接池攒在进程里
             llm.close()
 
-        store.save_score(job_id, card.score)
+        if store.save_score(job_id, card.score) is None:
+            # 窄竞态：上面 load 到了、写分前岗位被删。store.save_score 的契约就是
+            # 「岗位不存在时返回 None，调用方据此报 404」—— 不接就会返回 200
+            # 声称已写分。
+            raise HTTPException(status_code=404, detail=f"岗位不存在：{job_id}")
         return ScoreView(
             job_id=job_id,
             score=card.score,

@@ -10,6 +10,17 @@ SSE 的两条硬约定（沿用旧界面的实现教训）：
    一条 `error` 事件交出去，而不是让连接悄悄断掉；
 2. **整轮跑完才落库**：失败的尝试不留空会话、不留半截对话 —— 否则下次会把
    失败的那句话当成上下文再问一遍。
+
+错误语义（与 scoring 切片对齐）：
+
+| 状态 | 含义 |
+|---|---|
+| 409 | 模型未配置 / 配置不可用 —— 请求没毛病，服务端状态未就绪 |
+| 422 | 请求体不合法（空消息）或**上游模型失败**（`LLMError`） |
+| 500 | 非契约异常：`LLMProvider` 抛 `LLMError` 之外的异常说明是实现 bug，应当响亮地失败 |
+
+（原先 /turn 用 502 表示上游失败、且用 `except Exception` 一把兜住 —— 同一个上游
+故障在两处给两种码，实现 bug 还会被伪装成「上游故障」。）
 """
 
 from __future__ import annotations
@@ -22,7 +33,7 @@ from fastapi.responses import StreamingResponse
 
 from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
 from hunter1.domain.assistant import Message, Role
-from hunter1.domain.llm import TextDelta
+from hunter1.domain.llm import LLMError, TextDelta
 from hunter1.slices.assistant.schemas import (
     ConversationMessageView,
     ConversationSummary,
@@ -142,12 +153,19 @@ def build_router(
                 llm=llm, registry=tools, messages=[*history, user_message]
             )
         except ModelNotConfiguredError:
-            # 「模型未配置」不是**上游故障**（根本没发出请求），502 的语义不符；
-            # 交给应用级处理器映射为 409 + 指引（与 scoring 切片同一语义）。
+            # 「模型未配置」不是**上游故障**（根本没发出请求）；交给应用级处理器
+            # 映射为 409 + 指引（与 scoring 切片同一语义）。
             raise
-        except Exception as exc:
-            # 不落库：失败的尝试不留会话（免得下次把失败那句当上下文）
-            raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+        except LLMError as exc:
+            # 上游模型失败（端口契约 `LLMProvider` 约定失败抛 `LLMError`）：
+            # 与 scoring 切片**同一状态码** 422 + 可读原因 —— 同一个上游故障在
+            # 两处给两种码，前端与文档就都得各记一套（原先这里是 502）。
+            #
+            # 刻意**不**捕宽泛的 `Exception`：抛别的说明是实现 bug（TypeError…），
+            # 那种情况应当响亮地 500，而不是被伪装成「上游故障」—— 伪装会让人
+            # 拿着错误的线索去查网络与厂商。
+            # 不落库：失败的尝试不留会话（免得下次把失败那句当上下文）。
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
             # 客户端每请求新建 —— 用完释放，别把连接池攒在进程里
             llm.close()
