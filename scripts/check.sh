@@ -11,8 +11,8 @@
 #   examples/    示例脚本：ruff format / ruff check / pyright + 离线冒烟
 #   frontend/    目录存在时检查：npm run check（类型 + lint + 测试）+ vite build
 #   contracts/   目录存在时检查（快照缺失即失败）：契约漂移门禁
-# 另含：shell 脚本静态分析（shellcheck；未装则明确跳过）与语法（bash -n）、
-#       PyInstaller 规格语法（compile）。
+# 另含：shell 脚本静态分析（shellcheck；未装则本节未执行、末尾以退出码 3 报出）与
+#       语法（bash -n）、PyInstaller 规格语法（compile）。
 #
 # ⚠ scripts/ 的 ruff 检查必须显式传 `--config backend/pyproject.toml`。
 #   根目录没有 ruff 配置，不传就会用 ruff 的**默认规则集**（行长 88、规则集也不同），
@@ -27,6 +27,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 未执行的检查计数。缺失的工具（如 shellcheck）会让对应一节「跳过」——
+# 那一节**没有查**，与「查过且通过」不是一回事。末尾据此决定能不能喊「全部通过」。
+SKIPPED=0
 
 if [[ -z "${PY:-}" ]]; then
   if [[ -x "$ROOT/.tools/python/python.exe" ]]; then
@@ -167,9 +171,10 @@ if [[ -n "$SHELLCHECK" ]]; then
   # 在路径转换关闭时会被当成非法参数（与 scripts/ 那两节同因）。
   (cd "$SHELLCHECK_TMP" && "$SHELLCHECK" -s bash ./*.sh)
 else
-  echo "  ⚠ 未安装 shellcheck，已跳过此项（不是通过 —— 是没查）。"
+  echo "  ⚠ 未安装 shellcheck，本节**未执行**（不是通过 —— 是没查）。"
   echo "    安装：$PY -m pip install --index-url https://pypi.org/simple shellcheck-py"
   echo "    （必须指定官方索引：清华镜像未收录该包的 win_amd64 wheel）"
+  SKIPPED=$((SKIPPED + 1))
 fi
 
 echo "== 脚本：shell 语法检查 (bash -n) =="
@@ -208,6 +213,14 @@ fi
 if [[ -d "$ROOT/contracts" ]]; then
   echo "== 契约：漂移门禁 (contracts.sh --check) =="
   bash "$ROOT/scripts/contracts.sh" --check
+fi
+
+# 有未执行的检查就**不能喊「全部通过」** —— 那正是最难受的一种假绿：
+# 本机看到「全部通过」，其实有一节根本没跑（CI 装了工具、跑了，两边结论不同源）。
+# 退出码 3 与「检查失败」（1）区分开：这是「没查」，不是「查出错」。
+if [[ "$SKIPPED" -gt 0 ]]; then
+  echo "== 有 $SKIPPED 项检查**未执行**（见上方 ⚠）—— 这不等于通过 =="
+  exit 3
 fi
 
 echo "== 全部通过 =="

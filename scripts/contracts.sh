@@ -38,9 +38,27 @@ native_path() {
 SNAPSHOT="$ROOT/contracts/openapi.json"
 GENERATED="$ROOT/contracts/.openapi.generated.json"
 
+# 参数只认 `--check` 或「不带参数」。写错一个字符（`--chek`）原先会落进下面的
+# else 分支 —— 那分支的动作是 `mv` 覆盖**已入库的快照**：想验漂移的人反而把漂移
+# 抹平了（而且他以为自己在做只读检查）。这类「手滑即改数据」的入口必须报错。
+case "${1:-}" in
+  "") MODE="write" ;;
+  --check) MODE="check" ;;
+  *)
+    echo "✗ 未知参数：$1"
+    echo "  用法：bash scripts/contracts.sh          # 重新生成快照（会改文件）"
+    echo "        bash scripts/contracts.sh --check  # 只验漂移，不改任何文件"
+    exit 2
+    ;;
+esac
+if [[ $# -gt 1 ]]; then
+  echo "✗ 参数过多：$*（只接受一个可选的 --check）"
+  exit 2
+fi
+
 "$PY" "$(native_path "$ROOT/scripts/export_openapi.py")" --out "$(native_path "$GENERATED")"
 
-if [[ "${1:-}" == "--check" ]]; then
+if [[ "$MODE" == "check" ]]; then
   if [[ ! -f "$SNAPSHOT" ]]; then
     echo "✗ 契约快照缺失：$SNAPSHOT（先跑 bash scripts/contracts.sh 生成）"
     rm -f "$GENERATED"
@@ -77,7 +95,7 @@ if [[ -f "$ROOT/frontend/package.json" ]]; then
     (cd "$CODEGEN" && npm install --silent)
   fi
   (cd "$CODEGEN" && npx openapi-typescript "$(native_path "$SNAPSHOT")" -o "$(native_path "$TMP_TS")")
-  if [[ "${1:-}" == "--check" ]]; then
+  if [[ "$MODE" == "check" ]]; then
     if ! diff -q "$GEN_TS" "$TMP_TS" >/dev/null 2>&1; then
       echo "✗ 前端类型漂移：schema.d.ts 与快照生成结果不一致（重跑 bash scripts/contracts.sh）。"
       rm -f "$TMP_TS"
