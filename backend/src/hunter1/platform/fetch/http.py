@@ -44,6 +44,15 @@ _META_CHARSET = re.compile(
     re.IGNORECASE,
 )
 
+#: 「声明了也不能先信」的单字节编码。HTTP 默认值就是 ISO-8859-1，而大量中文站
+#: 实际发 UTF-8（体里没有覆盖性的 charset 声明）。这些编码能解码任意字节序列、
+#: 几乎不抛异常 —— 先采信它们等于把「乱码」当成「解码成功」，后面精心设计的
+#: utf-8 / <meta> / gb18030 回退链一步都走不到。因此它们被排到 utf-8 与
+#: `_META_CHARSET` 之后再试。
+_UNRELIABLE_DECLARED = frozenset(
+    {"iso-8859-1", "iso8859-1", "latin-1", "latin1", "latin_1", "cp1252", "windows-1252"}
+)
+
 
 class FetchError(RuntimeError):
     """一次抓取最终失败。`code` 是稳定的机器可读标识。"""
@@ -67,19 +76,38 @@ def _decode_text(response: httpx.Response) -> str:
 
 
 def _decode_bytes(content: bytes, *, declared: str | None) -> str:
-    if declared:
+    """解出响应体文本，带编码回退。
+
+    优先级：**可信的声明** → 严格 utf-8 → 体里的 `<meta charset>` →
+    **不可信的声明**（latin-1 家族）→ gb18030 / big5 → utf-8 宽松。
+
+    为什么「声明」要分可信与不可信：HTTP 默认值就是 ISO-8859-1，而大量中文站
+    实际发 UTF-8。latin-1 能解码任意字节序列、永不抛异常 —— 先采信它就等于把
+    「乱码」当成「解码成功」（实测：declared=iso-8859-1 而体是 UTF-8 时得到
+    `ä¸­æ\x96\x87`，而 declared=None 得到正确的 `中文测试`）。把这类编码压到
+    utf-8 与 meta 之后，既修好「声明撒谎」的常见形态，也不冤枉真正用 latin-1
+    的页面（它们会在第 4 步被正确解出）。
+    """
+    declared_norm = (declared or "").strip().lower()
+    if declared_norm and declared_norm not in _UNRELIABLE_DECLARED:
         try:
-            return content.decode(declared)
+            return content.decode(declared_norm)
         except (LookupError, UnicodeDecodeError):
             pass
+
+    # 严格 utf-8 优先于「不可信的声明」—— 见上面的说明。
     try:
         return content.decode("utf-8")
     except UnicodeDecodeError:
         pass
+
     candidates: list[str] = []
     match = _META_CHARSET.search(content[:4096])
     if match:
         candidates.append(match.group(1).decode("ascii", "ignore"))
+    if declared_norm:
+        # 不可信的声明排在 utf-8 与 meta 之后：utf-8 都解不出时它才可能有价值。
+        candidates.append(declared_norm)
     # gb18030 是 gbk/gb2312 的超集，big5 覆盖繁体站。仅在 utf-8 严格解码失败后用。
     candidates += ["gb18030", "big5"]
     for encoding in candidates:

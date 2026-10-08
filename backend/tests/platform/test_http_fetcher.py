@@ -226,6 +226,39 @@ class TestEncodingFallback:
         text = _fetcher(clock, handler).get_text("https://a.com/x")
         assert "Привет" in text
 
+    def test_lying_latin1_header_with_utf8_body_decodes_correctly(self, clock: FakeClock) -> None:
+        """站点谎报 `ISO-8859-1`、实际发 UTF-8 —— 不能静默变乱码。
+
+        HTTP 的默认字符集就是 ISO-8859-1，而「默认头 + UTF-8 体」是中文站极常见的
+        形态。latin-1 解任何字节都不抛异常 —— 先采信它就把 mojibake 当成功，
+        后面整条回退链一步都走不到（实测：得到 `ä¸­æ\\x96\\x87…` 而不是 `中文测试`）。
+        """
+        payload = "中文测试".encode()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=payload,
+                headers={"Content-Type": "text/html; charset=iso-8859-1"},
+            )
+
+        text = _fetcher(clock, handler).get_text("https://a.com/x")
+        assert text == "中文测试"
+        assert "\ufffd" not in text
+
+    def test_genuine_latin1_body_still_decodes(self, clock: FakeClock) -> None:
+        """真正用 latin-1 的页面不能被「utf-8 优先」误伤（它排在 utf-8 之后）。"""
+        payload = "café au lait".encode("latin-1")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=payload,
+                headers={"Content-Type": "text/html; charset=iso-8859-1"},
+            )
+
+        assert _fetcher(clock, handler).get_text("https://a.com/x") == "café au lait"
+
 
 class TestMalformedUrl:
     def test_malformed_url_fails_fast_with_stable_code(self, clock: FakeClock) -> None:
