@@ -5,8 +5,17 @@
 
 **构建之后一定要校验**：exe 存在不代表能跑。最常见的事故是前端产物没打进去 ——
 产物能启动、`--help` 也正常，但根路径只会落进「前端产物未构建」的提示
-（或 SPA 外壳加载不出来）。所以门禁分两层：静态看布局，
-再**真起一次服务请求各页面**。任一层不合格就非零退出，别让一个坏包流出去。
+（或 SPA 外壳加载不出来）。所以门禁分四层，逐层变贵、也能各自抓住不同的问题：
+
+1. 静态看布局，并**写入 `VERSION`**（产物自带版本，发布链靠它核对「这份二进制是不是
+   这个源码版本构建的」）；
+2. 跑 `--help`（能不能起来）；
+3. 跑 `--version` 比对源码版本（起来的是不是**这一版**—— 旧产物不认这个参数，会红）；
+4. **真起一次服务请求各页面**，再看前端入口脚本能不能取回。
+
+`--zip` 还会把压缩包打开验一遍（单一根目录、无越界条目、条目集与目录逐一对应、CRC、
+版本一致）—— 目录合格不代表包合格，而用户拿到的恰恰是包。任一层不合格就非零退出，
+别让一个坏包流出去。
 
 不做的事：不签名、不上传。分发渠道是另一回事（见 DEVELOPMENT-PLAN §6.4）。
 """
@@ -32,6 +41,17 @@ ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
 DIST = ROOT / "dist"
 APP_NAME = "hunter1"
+
+# 版本号的**唯一来源**是包本身（`backend/src/hunter1/__init__.py`，见 pyproject 的
+# 注释与 tests/test_version.py）。脚本在仓库根、包在 backend/src —— 显式加路径，
+# 不依赖安装状态（与 make_manifest.py 同一手法）。
+sys.path.insert(0, str(BACKEND / "src"))
+from hunter1 import __version__ as source_version  # noqa: E402
+
+#: 写进产物（并被压进 zip）的版本文件。发布链靠它核对「这份产物是不是这个源码版本
+#: 构建的」—— 没有它，用一份旧 `dist/` 配当前源码生成清单不会报任何错，而用户的
+#: 更新判断会长期失准（看起来有新版，实际装回旧版）。
+VERSION_FILE_NAME = "VERSION"
 # 前端产物打进去的目标目录随 PyInstaller 大版本变过：6.x 放进 `_internal/`，
 # 5.x 及更早是平铺。两种都认，免得在 5.x 上把「产物在」误报成「不在」。
 # （Wave 6 之前这里找的是 web/templates；SSR 层删除后换成前端构建产物。）
@@ -393,15 +413,16 @@ def smoke_serve(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECONDS) -> s
 def smoke_run(exe: Path) -> str | None:
     """完整冒烟：先快后深。任一层不合格就返回问题描述。
 
-    分两层是因为它们能抓到的问题不同，且代价差一个数量级：
-    `--help` 大约零点几秒，起服务要几秒。先跑快的，能快速失败。
+    分三层是因为它们能抓到的问题不同，且代价差一个数量级：
+    `--help` 大约零点几秒，`--version` 同样快（判「版本对不对」），起服务要几秒。
+    先跑快的，能快速失败。
     """
-    return smoke_help(exe) or smoke_serve(exe)
+    return smoke_help(exe) or smoke_version(exe) or smoke_serve(exe)
 
 
 def verify(dist_dir: Path) -> list[str]:
     """完整门禁：先看布局，布局没问题再真跑一次。"""
-    problems = layout_problems(dist_dir)
+    problems = layout_problems(dist_dir) + version_problems(dist_dir)
     if problems:
         # 布局都不对就没必要跑 —— 免得把「缺文件」误报成「跑不起来」
         return problems
@@ -424,6 +445,139 @@ def _make_zip(dist_dir: Path) -> Path:
     return archive
 
 
+def write_version_file(dist_dir: Path) -> Path:
+    """把源码版本写进产物目录（于是也进了 zip）。
+
+    这是「产物↔源码版本」可核对的前提：没有它，一份**上次**构建的 `dist/` 配上当前
+    源码照样能生成清单，而版本号写在清单里 —— 用户看到「有新版本」，装回去的却是旧
+    二进制，`is_newer` 从此长期失准且不报任何错。
+
+    行尾固定 LF（同 export_openapi.py）：产物不该由平台决定行尾。
+    """
+    target = dist_dir / VERSION_FILE_NAME
+    target.write_text(f"{source_version}\n", encoding="utf-8", newline="\n")
+    return target
+
+
+def version_problems(dist_dir: Path) -> list[str]:
+    """产物目录里的版本文件必须存在且与源码一致。"""
+    target = dist_dir / VERSION_FILE_NAME
+    if not target.is_file():
+        return [f"产物缺 {VERSION_FILE_NAME}（无法核对产物↔源码版本；旧产物请重新构建）"]
+    found = target.read_text(encoding="utf-8", errors="replace").strip()
+    if found != source_version:
+        return [f"产物版本 {found!r} 与源码 {source_version!r} 不一致 —— 这是一份旧构建"]
+    return []
+
+
+def version_output_problem(returncode: int, stdout: str, expected: str) -> str | None:
+    """判「产物自报的版本」是否合格（纯函数，便于直接单测这条判据）。
+
+    为什么要看产物**自己**报的版本：`VERSION` 文件是我写进去的，而用户跑的是二进制。
+    二进制里的版本是编译期烧进去的字面量 —— 只有让它自己说，才能证明「跑起来的这份
+    就是这个版本」。旧产物不认识 `--version`（argparse 报 unrecognized arguments、
+    exit 2），这条判据正是为此设的。
+    """
+    text = (stdout or "").strip()
+    if returncode != 0:
+        return f"产物执行 `--version` 失败（exit {returncode}）：{text[-200:] or '(无输出)'}"
+    if expected not in text:
+        return f"产物自报的版本里没有 {expected!r}（实际：{text[:200] or '(空)'}）"
+    return None
+
+
+def smoke_version(exe: Path) -> str | None:
+    """跑一次 `exe --version` 并核对版本。合格返回 None。"""
+    try:
+        result = subprocess.run(
+            [str(exe), "--version"],
+            capture_output=True,
+            timeout=SMOKE_HELP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"产物 `--version` 超时（>{SMOKE_HELP_TIMEOUT_SECONDS}s）：{exe.name}"
+    except OSError as exc:
+        return f"产物无法执行：{exe.name}（{exc}）"
+    return version_output_problem(
+        result.returncode, result.stdout.decode("utf-8", "replace"), source_version
+    )
+
+
+def _unsafe_zip_entry(name: str) -> str | None:
+    """zip 条目名是否越界（解压即覆盖任意位置）。合格返回 None。"""
+    normalized = name.replace("\\", "/")
+    if name.endswith("/"):
+        return None  # 目录条目本身无害，交给下面的前缀/条目集判据
+    if normalized.startswith("/") or ".." in normalized.split("/"):
+        return "绝对路径或以 .. 开头"
+    if ":" in normalized.split("/")[0]:
+        return "带盘符"
+    return None
+
+
+def zip_problems(archive: Path, dist_dir: Path) -> list[str]:
+    """打开压缩包验形态 —— 让 zip 这条交付路径第一次真的被门禁看一遍。
+
+    为什么不能只看目录：目录对了不代表压缩包对了。打包时把 `dist/` 也裹进去（解压出
+    `dist/hunter1/...`）、漏掉文件、写进绝对路径或 `..`（解压覆盖任意位置），目录形态
+    全都看不出来 —— 而这些恰好是「解压即用」最常见的翻车点。
+
+    判据：
+    1. CRC 自检（`testzip`）—— 传输/写入损坏；
+    2. 所有条目都在 `hunter1/` 之下，且不含绝对路径 / `..` / 盘符（防路径穿越）；
+    3. **条目集与产物目录逐一对应**（漏文件或有来路不明的多文件都报）；
+    4. 压缩包里的 `VERSION` 与源码一致、exe 与前端产物齐备（防「包里的东西不是刚验过
+       的那份」，也防 zip 用了过期目录）。
+    """
+    if not archive.is_file():
+        return [f"压缩包不存在：{archive}"]
+
+    problems: list[str] = []
+    with zipfile.ZipFile(archive) as bundle:
+        broken = bundle.testzip()
+        if broken is not None:
+            problems.append(f"压缩包内容损坏（CRC 校验失败）：{broken}")
+
+        names = [info.filename for info in bundle.infolist()]
+        prefix = f"{APP_NAME}/"
+        for name in names:
+            unsafe = _unsafe_zip_entry(name)
+            if unsafe is not None:
+                problems.append(f"压缩包条目不安全（{unsafe}）：{name}")
+                continue
+            if not name.startswith(prefix):
+                problems.append(f"压缩包条目不在 {prefix} 之下：{name}（解压出来是散开的）")
+
+        inside = {name for name in names if not name.endswith("/")}
+        expected = {
+            str(item.relative_to(dist_dir.parent)).replace("\\", "/")
+            for item in dist_dir.rglob("*")
+            if item.is_file()
+        }
+        missing = sorted(expected - inside)
+        extra = sorted(inside - expected)
+        if missing:
+            problems.append(f"压缩包缺 {len(missing)} 个文件（例：{missing[:3]}）")
+        if extra:
+            problems.append(f"压缩包多出 {len(extra)} 个文件（例：{extra[:3]}）")
+
+        version_entry = f"{prefix}{VERSION_FILE_NAME}"
+        if version_entry not in inside:
+            problems.append(f"压缩包里没有 {version_entry}（无法核对产物↔源码版本）")
+        else:
+            found = bundle.read(version_entry).decode("utf-8", "replace").strip()
+            if found != source_version:
+                problems.append(f"压缩包版本 {found!r} 与源码 {source_version!r} 不一致")
+
+        if f"{prefix}{_exe_name()}" not in inside:
+            problems.append(f"压缩包里没有可执行文件：{prefix}{_exe_name()}")
+        frontend = [name for name in inside if name.startswith(prefix) and "/web_dist/" in name]
+        if not any(name.endswith("/web_dist/index.html") for name in frontend):
+            problems.append("压缩包里没有前端产物（web_dist/index.html）——界面会打不开")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="build.py", description="构建分发产物")
     parser.add_argument("--zip", action="store_true", help="构建后再打一个 zip")
@@ -436,6 +590,10 @@ def main(argv: list[str] | None = None) -> int:
     dist_dir = DIST / APP_NAME
     if not dist_dir.is_dir():
         raise SystemExit(f"没有产出 {dist_dir}")
+
+    # 先落版本文件再校验：布局检查里的 version_problems 与冒烟里的 `--version`
+    # 都要看它，而它是「产物↔源码版本」这条承诺的载体。
+    write_version_file(dist_dir)
 
     print("\n== 校验 ==")
     problems = verify(dist_dir)
@@ -455,6 +613,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.zip:
         archive = _make_zip(dist_dir)
         print(f"  zip：{archive}（{archive.stat().st_size / 1024 / 1024:.1f}MB）")
+        # 压缩包**自己**也要过一遍：目录合格不代表包合格（少了文件、裹成两级目录、
+        # 写进绝对路径，目录里都看不出来）。这是 zip 第一次被门禁真的打开。
+        zip_problems_found = zip_problems(archive, dist_dir)
+        if zip_problems_found:
+            print("\n压缩包不合格：")
+            for problem in zip_problems_found:
+                print(f"  - {problem}")
+            return 1
+        print(f"  zip 校验：通过（{len(zipfile.ZipFile(archive).namelist())} 个条目）")
 
     print("\n通过。分发前建议手动验一遍（见 docs/DEVELOPMENT.md 的打包小节）。")
     return 0

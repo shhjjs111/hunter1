@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import threading
+import zipfile
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -136,25 +137,43 @@ class TestSmokeHelp:
 
 
 class TestSmokeRunLayering:
-    def test_help_failure_short_circuits_the_serve_probe(
+    def test_help_failure_short_circuits_the_later_probes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """第一层就不合格时不该再去起服务 —— 省下几秒钟。"""
+        """第一层就不合格时不该再去跑版本与服务 —— 省下几秒钟。"""
         monkeypatch.setattr(build, "smoke_help", lambda _exe: "起不来")
         probed = {"n": 0}
 
-        def boom(_exe: Path, **_kw: object) -> str | None:
+        def boom(*_args: object, **_kw: object) -> str | None:
             probed["n"] += 1
             return None
 
+        monkeypatch.setattr(build, "smoke_version", boom)
         monkeypatch.setattr(build, "smoke_serve", boom)
         assert build.smoke_run(tmp_path / EXE_NAME) == "起不来"
         assert probed["n"] == 0
 
-    def test_deep_layer_runs_when_help_passes(
+    def test_version_failure_short_circuits_the_serve_probe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """版本对不上就不必起服务了 —— 起得来也是错的那份。"""
+        monkeypatch.setattr(build, "smoke_help", lambda _exe: None)
+        monkeypatch.setattr(build, "smoke_version", lambda _exe: "产物自报的版本不对")
+        probed = {"n": 0}
+
+        def boom(*_args: object, **_kw: object) -> str | None:
+            probed["n"] += 1
+            return None
+
+        monkeypatch.setattr(build, "smoke_serve", boom)
+        assert build.smoke_run(tmp_path / EXE_NAME) == "产物自报的版本不对"
+        assert probed["n"] == 0
+
+    def test_deep_layer_runs_when_the_cheap_ones_pass(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(build, "smoke_help", lambda _exe: None)
+        monkeypatch.setattr(build, "smoke_version", lambda _exe: None)
         monkeypatch.setattr(build, "smoke_serve", lambda _exe, **_kw: "/ 返回 500")
         assert build.smoke_run(tmp_path / EXE_NAME) == "/ 返回 500"
 
@@ -179,14 +198,18 @@ class TestVerify:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(build, "smoke_run", lambda _exe: "产物运行失败（exit 1）")
-        problems = build.verify(_make_dist(tmp_path))
+        dist = _make_dist(tmp_path)
+        build.write_version_file(dist)
+        problems = build.verify(dist)
         assert problems == ["产物运行失败（exit 1）"]
 
     def test_clean_product_has_no_problems(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(build, "smoke_run", lambda _exe: None)
-        assert build.verify(_make_dist(tmp_path)) == []
+        dist = _make_dist(tmp_path)
+        build.write_version_file(dist)
+        assert build.verify(dist) == []
 
 
 class TestCheckPages:
@@ -534,3 +557,168 @@ class TestLocalProbesIgnoreProxy:
 
         for base in self._serve(self._ok_handler()):
             assert build.wait_for_http(base, IdleProcess(), timeout=3.0) is True
+
+
+def _zip_dist(dist: Path, target: Path) -> Path:
+    """按 `_make_zip` 的规则把产物目录压起来（条目名前缀是 `dist 的父目录名`）。"""
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for item in sorted(dist.rglob("*")):
+            if item.is_file():
+                bundle.write(item, item.relative_to(dist.parent))
+    return target
+
+
+class TestVersionFile:
+    """产物必须自带版本 —— 「产物↔源码版本」这条承诺的载体。"""
+
+    def test_writes_the_source_version_with_lf(self, tmp_path: Path) -> None:
+        dist = _make_dist(tmp_path)
+        target = build.write_version_file(dist)
+
+        raw = target.read_bytes()
+        assert raw == f"{build.source_version}\n".encode()
+        assert raw.count(bytes([13, 10])) == 0, "产物里的行尾不该由平台决定（同 P1-4 的取舍）"
+
+    def test_accepts_a_matching_file(self, tmp_path: Path) -> None:
+        dist = _make_dist(tmp_path)
+        build.write_version_file(dist)
+        assert build.version_problems(dist) == []
+
+    def test_reports_missing_file(self, tmp_path: Path) -> None:
+        problems = build.version_problems(_make_dist(tmp_path))
+        assert problems and "VERSION" in problems[0]
+
+    def test_reports_a_stale_build(self, tmp_path: Path) -> None:
+        """旧构建（版本对不上）必须报出来 —— 这正是这道闸存在的理由。"""
+        dist = _make_dist(tmp_path)
+        (dist / build.VERSION_FILE_NAME).write_text("0.0.1\n", encoding="utf-8")
+        problems = build.version_problems(dist)
+        assert problems and "0.0.1" in problems[0] and build.source_version in problems[0]
+
+    def test_verify_checks_the_version_before_running_the_binary(self, tmp_path: Path) -> None:
+        """缺 VERSION 时 `verify()` 直接报出来，不该去跑一个没版本可核的产物。"""
+        dist = _make_dist(tmp_path)  # 故意不写 VERSION
+        problems = build.verify(dist)
+        assert problems and any("VERSION" in p for p in problems)
+
+
+class TestVersionOutputJudgment:
+    """`exe --version` 的判据（纯函数，不依赖真产物）。"""
+
+    def test_accepts_matching_output(self) -> None:
+        assert (
+            build.version_output_problem(
+                0, f"hunter1 {build.source_version}\n", build.source_version
+            )
+            is None
+        )
+
+    def test_reports_nonzero_exit(self) -> None:
+        """旧产物不认 `--version`：argparse 报 unrecognized arguments 并 exit 2。"""
+        problem = build.version_output_problem(
+            2, "error: unrecognized arguments: --version", "0.1.0"
+        )
+        assert problem is not None and "exit 2" in problem
+
+    def test_reports_wrong_version(self) -> None:
+        problem = build.version_output_problem(0, "hunter1 0.0.1", "0.1.0")
+        assert problem is not None and "0.1.0" in problem
+
+    def test_reports_empty_output(self) -> None:
+        assert build.version_output_problem(0, "", "0.1.0") is not None
+
+
+class TestZipProblems:
+    """压缩包形态 —— zip 第一次被门禁真的打开。
+
+    目录合格不代表包合格：漏文件、裹成两级目录、写进绝对路径或 `..`、包里是过期内容，
+    在目录形态里全都看不出来，而用户拿到的恰恰是压缩包。
+    """
+
+    def _good(self, tmp_path: Path) -> tuple[Path, Path]:
+        dist = _make_dist(tmp_path)
+        build.write_version_file(dist)
+        return dist, _zip_dist(dist, tmp_path / "hunter1-win32.zip")
+
+    def test_accepts_a_faithful_archive(self, tmp_path: Path) -> None:
+        dist, archive = self._good(tmp_path)
+        assert build.zip_problems(archive, dist) == []
+
+    def test_reports_missing_archive(self, tmp_path: Path) -> None:
+        dist, _ = self._good(tmp_path)
+        problems = build.zip_problems(tmp_path / "nope.zip", dist)
+        assert problems and "不存在" in problems[0]
+
+    def test_reports_a_stale_version_inside_the_archive(self, tmp_path: Path) -> None:
+        dist = _make_dist(tmp_path)
+        build.write_version_file(dist)
+        (dist / build.VERSION_FILE_NAME).write_text("0.0.1\n", encoding="utf-8")
+        archive = _zip_dist(dist, tmp_path / "hunter1-win32.zip")
+
+        problems = build.zip_problems(archive, dist)
+        assert any("0.0.1" in p for p in problems)
+
+    def test_reports_missing_version_inside_the_archive(self, tmp_path: Path) -> None:
+        dist = _make_dist(tmp_path)  # 没写 VERSION
+        archive = _zip_dist(dist, tmp_path / "hunter1-win32.zip")
+        problems = build.zip_problems(archive, dist)
+        assert any("VERSION" in p for p in problems)
+
+    def test_reports_entries_outside_the_single_root(self, tmp_path: Path) -> None:
+        dist, archive = self._good(tmp_path)
+        with zipfile.ZipFile(archive, "a") as bundle:
+            bundle.writestr("dist/README.txt", "oops")  # 典型的「把 dist/ 也裹进去」
+        problems = build.zip_problems(archive, dist)
+        assert any("不在 hunter1/ 之下" in p for p in problems)
+
+    @pytest.mark.parametrize("name", ["hunter1/../evil.dll", "/hunter1/evil.dll", "C:/evil.dll"])
+    def test_reports_unsafe_entries(self, tmp_path: Path, name: str) -> None:
+        """解压即覆盖任意位置 —— 这是「解压即用」分发包最该挡住的一类。"""
+        dist, archive = self._good(tmp_path)
+        with zipfile.ZipFile(archive, "a") as bundle:
+            bundle.writestr(name, "evil")
+        problems = build.zip_problems(archive, dist)
+        assert any("不安全" in p for p in problems)
+
+    def test_reports_files_missing_from_the_archive(self, tmp_path: Path) -> None:
+        dist, archive = self._good(tmp_path)
+        rebuilt = tmp_path / "trimmed.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(rebuilt, "w") as target:
+            for info in source.infolist():
+                if info.filename.endswith("app.js"):
+                    continue  # 少打一个文件（目录里看不出来，包里缺了）
+                target.writestr(info.filename, source.read(info.filename))
+        problems = build.zip_problems(rebuilt, dist)
+        assert any("缺 1 个文件" in p for p in problems)
+
+    def test_reports_files_not_present_in_the_directory(self, tmp_path: Path) -> None:
+        dist, archive = self._good(tmp_path)
+        with zipfile.ZipFile(archive, "a") as bundle:
+            bundle.writestr("hunter1/ghost.txt", "?")
+        problems = build.zip_problems(archive, dist)
+        assert any("多出" in p for p in problems)
+
+    def test_reports_missing_frontend_and_executable(self, tmp_path: Path) -> None:
+        """包里只剩 VERSION 时，前端与 exe 的缺失都要报出来（两条判据各自独立）。"""
+        dist = tmp_path / "dist" / "hunter1"
+        dist.mkdir(parents=True)
+        build.write_version_file(dist)
+        archive = _zip_dist(dist, tmp_path / "hunter1-win32.zip")
+
+        problems = build.zip_problems(archive, dist)
+        assert any("可执行文件" in p for p in problems)
+        assert any("前端产物" in p for p in problems)
+
+    def test_reports_a_corrupted_entry(self, tmp_path: Path) -> None:
+        """CRC 自检：包在传输/写入中坏掉时必须报，而不是让用户解压出一堆坏文件。"""
+        archive = tmp_path / "hunter1-win32.zip"
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as bundle:
+            bundle.writestr("hunter1/hunter1.exe", "0123456789")
+        raw = archive.read_bytes().replace(b"0123456789", b"0123456788")
+        archive.write_bytes(raw)
+
+        dist = tmp_path / "dist" / "hunter1"
+        dist.mkdir(parents=True)
+        (dist / EXE_NAME).write_bytes(b"0123456789")
+        problems = build.zip_problems(archive, dist)
+        assert any("CRC" in p for p in problems)
