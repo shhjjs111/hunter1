@@ -747,30 +747,102 @@ class TestEnsureReleaseUsesStatus:
             gh.ensure_release("a", "b", "t", "v1", "notes")
 
 
-class TestVerifyTokenStatus:
-    """L14：只有明确的鉴权失败（401/403）才算「令牌被拒」。
+class TestReleaseDraftFlow:
+    """发布链的原子性：Release 先建**草稿**，附件传完才 PATCH 公开。
 
-    GitHub 自身故障（5xx）与限流（429）**不是**令牌问题 —— 原先 `except ApiError`
-    一把抓全归成 None，用户会被告知「GitHub 拒绝了令牌」而去反复折腾令牌，
-    而真正的问题在 GitHub 那一侧。这也与该模块刻意区分 `NetworkError` 的初衷一致。
+    原先 `ensure_release` 直接 `draft: False`：Release 一建就公开，而上传顺序是
+    「zip → manifest」—— zip 成功、manifest 失败时 `releases/latest/download/
+    manifest.json` 直接 404，所有用户的更新链同时断掉，而脚本只 return 1、不做清理。
     """
 
-    @pytest.mark.parametrize("status", [401, 403])
-    def test_auth_failures_return_none(self, monkeypatch, status: int) -> None:
+    def test_created_as_draft(self, monkeypatch) -> None:
+        seen: list[dict] = []
+
+        def fake_api(method, path, token, **kw):
+            seen.append(kw.get("payload") or {})
+            return {"id": 5}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 5
+        assert seen[0]["draft"] is True, "新建的 Release 必须是草稿，附件传完才公开"
+
+    def test_existing_published_release_is_pulled_back_to_draft(self, monkeypatch) -> None:
+        """重发 / --reupload：已发布的同名 Release 先收回草稿再动附件。
+
+        收回后 `releases/latest` 回落到上一版 —— 比「先删旧附件」那个 404 窗口安全。
+        """
+        patches: list[dict] = []
+
+        def fake_api(method, path, token, **kw):
+            if method == "POST":
+                raise gh.ApiError("POST", path, 422, "already_exists")
+            if method == "GET":
+                return {"id": 5, "draft": False}
+            patches.append(kw.get("payload") or {})
+            return {}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 5
+        assert patches == [{"draft": True}]
+
+    def test_already_draft_is_not_patched_again(self, monkeypatch) -> None:
+        patches: list[dict] = []
+
+        def fake_api(method, path, token, **kw):
+            if method == "POST":
+                raise gh.ApiError("POST", path, 422, "already_exists")
+            if method == "GET":
+                return {"id": 5, "draft": True}
+            patches.append(kw.get("payload") or {})
+            return {}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 5
+        assert patches == []
+
+    def test_publish_release_flips_draft_off(self, monkeypatch) -> None:
+        seen: list[tuple[str, dict]] = []
+
+        def fake_api(method, path, token, **kw):
+            seen.append((method, kw.get("payload") or {}))
+            return {}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        gh.publish_release("a", "b", "t", 5, "v1")
+        assert seen == [("PATCH", {"draft": False})]
+
+
+class TestVerifyTokenStatus:
+    """只有**明确的鉴权失败**（401）才算「令牌被拒」。
+
+    GitHub 自身故障（5xx）、限流（429）与 403 都**不是**令牌问题 —— 原先
+    `except ApiError` 一把抓全归成 None，用户会被告知「GitHub 拒绝了令牌」而去
+    反复折腾令牌，而真正的问题在 GitHub 那一侧。
+
+    403 尤其危险：GitHub 的主/次**速率限制**都用 403。把正常令牌报成「被拒」，
+    与这个模块刻意区分 `NetworkError` 的初衷正好相反（把人指到完全错误的方向）。
+    """
+
+    def test_401_is_an_auth_rejection(self, monkeypatch) -> None:
         def boom(method, path, token, **kw):
-            raise gh.ApiError(method, path, status, "denied")
+            raise gh.ApiError(method, path, 401, "Bad credentials")
 
         monkeypatch.setattr(gh, "api_request", boom)
         assert gh.verify_token("t") is None
 
-    @pytest.mark.parametrize("status", [500, 502, 429])
-    def test_github_failures_propagate(self, monkeypatch, status: int) -> None:
+    @pytest.mark.parametrize("status", [403, 429, 500, 502])
+    def test_github_side_failures_propagate(self, monkeypatch, status: int) -> None:
+        detail = "API rate limit exceeded for ..." if status == 403 else "server side"
+
         def boom(method, path, token, **kw):
-            raise gh.ApiError(method, path, status, "server side")
+            raise gh.ApiError(method, path, status, detail)
 
         monkeypatch.setattr(gh, "api_request", boom)
-        with pytest.raises(gh.ApiError):
+        with pytest.raises(gh.PublishError) as excinfo:
             gh.verify_token("t")
+        if status == 403:
+            # 403 的文案必须**明说**这一点：否则用户又去重建一个完全正常的令牌。
+            assert "不等于令牌无效" in str(excinfo.value)
 
 
 class TestTokenFileEnvOverride:
@@ -814,9 +886,13 @@ class TestReuploadCheckOrdering:
     @pytest.fixture
     def harness(self, monkeypatch, tmp_path: Path) -> list[tuple[str, tuple[object, ...]]]:
         root = tmp_path / "repo"
-        (root / "dist" / "hunter1").mkdir(parents=True)
-        (root / "dist" / "hunter1-win32.zip").write_bytes(b"zip")
-        (root / "dist" / "hunter1" / "hunter1.exe").write_bytes(b"exe")
+        (root / "dist").mkdir(parents=True)
+        # 产物名从 scripts/artifact.py 取（本平台派生）—— 写死 win32 会让这条用例
+        # 在非 Windows 上假红，而「发布链只认 win32」正是这轮要修的问题。
+        (root / "dist" / gh.artifact_name()).write_bytes(b"zip")
+        exe = root / "dist" / gh.exe_relative_path()
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"exe")
         monkeypatch.setattr(gh, "ROOT", root)
 
         calls: list[tuple[str, tuple[object, ...]]] = []
@@ -829,9 +905,9 @@ class TestReuploadCheckOrdering:
         monkeypatch.setattr(gh.subprocess, "run", fake_run)
         monkeypatch.setattr(gh, "read_token", lambda: "fake-token")
 
-        def fake_api(method: str, path: str, token: str, **kw: object) -> dict[str, str]:
+        def fake_api(method: str, path: str, token: str, **kw: object) -> dict[str, object]:
             calls.append(("api", (method, path)))
-            return {"login": "acme"}
+            return {"login": "acme", "id": 7}
 
         monkeypatch.setattr(gh, "api_request", fake_api)
 
@@ -840,7 +916,13 @@ class TestReuploadCheckOrdering:
             return "a" * 64
 
         monkeypatch.setattr(gh, "check_reupload_is_same_artifact", fake_check)
-        for name in ("ensure_repo", "ensure_release", "regenerate_manifest", "upload_asset"):
+        for name in (
+            "ensure_repo",
+            "ensure_release",
+            "regenerate_manifest",
+            "upload_asset",
+            "publish_release",
+        ):
             monkeypatch.setattr(gh, name, lambda *a, **k: None)
         return calls
 
@@ -859,3 +941,53 @@ class TestReuploadCheckOrdering:
         # --dry-run 是只读承诺：不解析令牌，也不发产物校验请求
         assert gh.main(["--reupload", "--dry-run"]) == 0
         assert harness == []
+
+
+class TestPublishIsTheLastStep:
+    """端到端的顺序断言：Release 一定在两个附件都传完之后才公开。
+
+    这是「不可逆的对外损坏」那条的回归护栏 —— 只断言 `ensure_release` 的 payload
+    不够，真正要钉的是**顺序**（先建草稿 → 传 zip → 传 manifest → 发布）。
+    """
+
+    @pytest.fixture
+    def steps(self, monkeypatch, tmp_path: Path) -> list[str]:
+        root = tmp_path / "repo"
+        (root / "dist").mkdir(parents=True)
+        (root / "dist" / gh.artifact_name()).write_bytes(b"zip")
+        exe = root / "dist" / gh.exe_relative_path()
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"exe")
+        monkeypatch.setattr(gh, "ROOT", root)
+
+        def fake_run(cmd, **kwargs):
+            out = "" if "status" in cmd else "cafebabe1234\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        monkeypatch.setattr(gh, "read_token", lambda: "fake-token")
+        monkeypatch.setattr(gh, "api_request", lambda *a, **k: {"login": "acme", "id": 7})
+        monkeypatch.setattr(gh, "ensure_repo", lambda *a, **k: None)
+        monkeypatch.setattr(gh, "push", lambda *a, **k: None)
+        monkeypatch.setattr(
+            gh, "regenerate_manifest", lambda *a, **k: root / "dist" / "manifest.json"
+        )
+
+        order: list[str] = []
+        monkeypatch.setattr(gh, "ensure_release", lambda *a, **k: order.append("create-draft") or 7)
+        monkeypatch.setattr(
+            gh,
+            "upload_asset",
+            lambda _o, _r, _t, _rid, path, **k: order.append(f"upload:{path.name}"),
+        )
+        monkeypatch.setattr(gh, "publish_release", lambda *a, **k: order.append("publish"))
+        return order
+
+    def test_publish_comes_after_both_uploads(self, steps: list[str]) -> None:
+        assert gh.main(["--owner", "acme"]) == 0
+        assert steps == [
+            "create-draft",
+            f"upload:{gh.artifact_name()}",
+            "upload:manifest.json",
+            "publish",
+        ], steps

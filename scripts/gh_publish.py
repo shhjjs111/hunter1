@@ -48,6 +48,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # 显式加路径而不依赖安装状态：本机解释器是 Python embeddable，不走 PYTHONPATH，
 # 所以下面的 import 必须晚于这一行（不是「忘了放顶部」）。
 sys.path.insert(0, str(ROOT / "backend" / "src"))
+# 产物命名同样按文件位置找：测试以「按路径加载 gh_publish.py」的方式导入本模块，
+# 那时 scripts/ 不在 sys.path 上（只有 `python scripts/gh_publish.py` 才在）。
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from artifact import artifact_name, exe_relative_path, platform_key  # noqa: E402
 
 from hunter1 import __version__  # noqa: E402
 from hunter1.platform.update import file_sha256  # noqa: E402
@@ -212,7 +217,7 @@ def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
 
 
 def verify_token(token: str) -> str | None:
-    """令牌有效时返回账号名；GitHub **明确拒绝**（401/403）时返回 None。
+    """令牌有效时返回账号名；GitHub **明确拒绝**（401）时返回 None。
 
     **网络故障不在这里吞掉**：`NetworkError` 会照原样冒出去。把它也归成 None，
     用户就会被告知「GitHub 拒绝了令牌」，然后去反复折腾令牌 —— 而真正的问题
@@ -220,13 +225,24 @@ def verify_token(token: str) -> str | None:
 
     同理，**GitHub 自身的故障也不能吞**：5xx（服务端坏了）与 429（限流）都不是
     「令牌被拒」的证据 —— 原先 `except ApiError` 一把抓，会把它们误报成令牌问题。
-    只有明确的鉴权失败才返回 None，其余原样抛出。
+
+    **403 尤其不能判成「令牌无效」**：GitHub 的主/次**速率限制**都用 403
+    （响应体里写着 `API rate limit exceeded`）。判成令牌问题的话，一个完全
+    正常的令牌会在交互输入里被连报三次「被拒」，把用户指去重建令牌 ——
+    与上面那条注释写下的教训是同一个错误：把人指到完全错误的方向。
+    所以只有 401 才是明确的鉴权失败；403 单独成一条可读的失败。
     """
     try:
         return api_request("GET", "/user", token).get("login") or None
     except ApiError as exc:
-        if exc.status in (401, 403):
+        if exc.status == 401:
             return None
+        if exc.status == 403:
+            raise PublishError(
+                "GitHub 返回 403 —— **这不等于令牌无效**（常见原因是速率限制）。\n"
+                f"  原始响应：{(exc.detail or '').strip()[:200]}\n"
+                "  处理：等几分钟再试；若反复出现，检查令牌是否被组织策略限制。"
+            ) from exc
         raise
 
 
@@ -544,31 +560,65 @@ def push(owner: str, repo: str, token: str) -> None:
 
 
 def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> int:
-    """建 Release（已存在则复用），返回 release id。"""
+    """建（或复用）一个**草稿** Release，返回 release id。
+
+    刻意建草稿：正式发布由 `publish_release` 在**两个附件都传完之后**显式执行。
+    原先这里直接 `draft: False` —— Release 一建就公开，而附件的上传顺序是
+    「zip → manifest」，zip 成功、manifest 失败时 `releases/latest/download/
+    manifest.json` 直接 404，所有用户的更新链同时断掉，脚本只 return 1 不做清理。
+    草稿期间 `releases/latest` 仍指向上一版（GitHub 跳过草稿），更新链一刻不断。
+    """
     try:
         release = api_request(
             "POST",
             f"/repos/{owner}/{repo}/releases",
             token,
-            payload={"tag_name": tag, "name": tag, "body": notes, "draft": False},
+            payload={"tag_name": tag, "name": tag, "body": notes, "draft": True},
         )
-        print(f"  ✓ 已创建 Release {tag}")
+        print(f"  ✓ 已创建 Release {tag}（草稿）")
         return int(release["id"])
     except ApiError as exc:
         if exc.status != 422:  # 422 = tag 已存在 Release
             raise
     found = api_request("GET", f"/repos/{owner}/{repo}/releases/tags/{tag}", token)
-    print(f"  ✓ Release {tag} 已存在，复用")
-    return int(found["id"])
+    release_id = int(found["id"])
+    if found.get("draft"):
+        print(f"  ✓ Release {tag} 已存在，复用（草稿）")
+    else:
+        # 已发布的同名 Release（重发 / --reupload）：先收回成草稿再动附件。
+        # 收回后 `releases/latest` 自动回落到上一版 —— 比「先 DELETE 旧附件、
+        # 再 POST 新附件」那个窗口安全得多（后者让下载入口在一段时间内 404）。
+        api_request(
+            "PATCH", f"/repos/{owner}/{repo}/releases/{release_id}", token, payload={"draft": True}
+        )
+        print(f"  ✓ Release {tag} 已存在（已发布）→ 暂时收回为草稿，附件传完再发布")
+    return release_id
+
+
+def publish_release(owner: str, repo: str, token: str, release_id: int, tag: str) -> None:
+    """把草稿 Release 正式发布 —— **附件全部就位之后**才调用。
+
+    这是发布链的原子性边界：在此之前任何失败，用户看到的仍是上一版（`latest`
+    跳过草稿），而不是「清单 404 但 zip 是新的」这种半成品状态。
+    """
+    api_request(
+        "PATCH", f"/repos/{owner}/{repo}/releases/{release_id}", token, payload={"draft": False}
+    )
+    print(f"  ✓ Release {tag} 已正式发布")
 
 
 def upload_asset(owner: str, repo: str, token: str, release_id: int, path: Path) -> None:
-    """上传（或覆盖）一个附件。同名附件先删，避免 `--clobber` 语义分散在两处。"""
+    """上传（或覆盖）一个附件。同名附件先删，避免 `--clobber` 语义分散在两处。
+
+    「先删后传」非原子 —— 之所以可接受，是因为调用方保证此刻 Release 处于
+    **草稿**状态（见 `ensure_release` / `publish_release`）：删掉的是草稿上的
+    附件，下载入口（`releases/latest/...`）此刻指向的是上一版，不受影响。
+    """
     existing = api_request("GET", f"/repos/{owner}/{repo}/releases/{release_id}/assets", token)
     for asset in existing if isinstance(existing, list) else []:
         if asset.get("name") == path.name:
             api_request("DELETE", f"/repos/{owner}/{repo}/releases/assets/{asset['id']}", token)
-            print(f"     （已删除同名旧附件 {path.name}）")
+            print(f"     （已删除草稿上的同名旧附件 {path.name}）")
     size_mb = path.stat().st_size / 1024 / 1024
     print(f"  ↑ 上传 {path.name}（{size_mb:.1f}MB）…")
     api_request(
@@ -583,7 +633,7 @@ def upload_asset(owner: str, repo: str, token: str, release_id: int, path: Path)
 
 def regenerate_manifest(owner: str, repo: str, tag: str) -> Path:
     """用真实下载地址重新生成清单（见模块 docstring 第 4 条）。"""
-    zip_path = ROOT / "dist" / "hunter1-win32.zip"
+    zip_path = ROOT / "dist" / artifact_name()
     sys.path.insert(0, str(ROOT / "scripts"))
     import importlib.util
 
@@ -595,7 +645,7 @@ def regenerate_manifest(owner: str, repo: str, tag: str) -> Path:
     url_base = f"https://github.com/{owner}/{repo}/releases/download/{tag}"
     manifest = module.build_manifest(
         version=__version__,
-        assets=[("win32", zip_path)],
+        assets=[(platform_key(), zip_path)],
         url_for=lambda _p, name: f"{url_base}/{name}",
         notes=f"hunter1 {tag}",
     )
@@ -648,10 +698,11 @@ def check_reupload_is_same_artifact(owner: str, repo: str, tag: str, zip_path: P
     检查**。所以这里 fail-closed：拿不到线上清单、或清单里没有对应平台，都算不通过。
     """
     published = fetch_published_manifest(owner, repo, tag)
-    published_hash = published_sha256(published, "win32")
+    published_hash = published_sha256(published, platform_key())
     if published_hash is None:
         print(
-            "✗ 取不到线上清单（或里面没有 win32 产物），无法确认「重传的是同一份产物」。\n"
+            f"✗ 取不到线上清单（或里面没有 {platform_key()} 产物），"
+            "无法确认「重传的是同一份产物」。\n"
             f"  试过：https://github.com/{owner}/{repo}/releases/download/{tag}/manifest.json\n"
             "  若 Release 或附件还不存在，请正常发布一次（去掉 --reupload）。",
             file=sys.stderr,
@@ -704,11 +755,15 @@ def main(argv: list[str] | None = None) -> int:
     tag = f"v{__version__}"
     print(f"== 发布 {tag} 到 {owner or '<令牌对应账号>'}/{repo} ==")
 
-    zip_path = ROOT / "dist" / "hunter1-win32.zip"
-    exe_path = ROOT / "dist" / "hunter1" / "hunter1.exe"
+    zip_path = ROOT / "dist" / artifact_name()
+    exe_path = ROOT / "dist" / exe_relative_path()
     for f in (zip_path, exe_path):
         if not f.is_file():
-            print(f"✗ 缺少产物：{f}（先跑 scripts/build.py --zip）", file=sys.stderr)
+            print(
+                f"✗ 缺少产物：{f}（先跑 scripts/build.py --zip；"
+                "本平台由 sys.platform 决定，见 scripts/artifact.py）",
+                file=sys.stderr,
+            )
             return 1
 
     # 工作区干净：产物与某个 commit 的对应关系才说得清。
@@ -761,12 +816,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  1. 确保仓库 {target} 存在" + ("（不存在则创建）" if args.create_repo else ""))
         if args.reupload:
             print("  2. 【重传模式】跳过 git push；只刷 Release 的附件")
-            print(f"  3. 复用已有 Release {tag}")
-            print("  4. 重新生成清单（用新账号的真实地址）并覆盖上传 manifest.json + zip")
+            print(f"  3. 复用已有 Release {tag}（暂时收回为草稿）")
+            print(
+                "  4. 重新生成清单（用新账号的真实地址）并覆盖上传 "
+                f"{artifact_name()} + manifest.json"
+            )
         else:
             print(f"  2. git push origin HEAD:refs/heads/main 与 refs/tags/{tag}")
-            print(f"  3. 建 Release {tag}")
-            print("  4. 重新生成清单（真实地址）并上传 hunter1-win32.zip + manifest.json")
+            print(f"  3. 建 Release {tag}（**草稿** —— 附件传完才发布）")
+            print(f"  4. 上传 {artifact_name()} + manifest.json，然后发布 Release")
         print("\n[dry-run] 结束 —— 未做任何改动。")
         return 0
 
@@ -808,6 +866,10 @@ def main(argv: list[str] | None = None) -> int:
         manifest_path = regenerate_manifest(owner, repo, tag)
         upload_asset(owner, repo, token, release_id, zip_path)
         upload_asset(owner, repo, token, release_id, manifest_path)
+        # 两个附件都在草稿上了才公开 —— 这一步之前任何失败，用户的更新入口
+        # 仍指向上一版（`releases/latest` 跳过草稿），不会出现「zip 是新的、
+        # manifest 404」这种把所有人的更新链一起打断的半成品。
+        publish_release(owner, repo, token, release_id, tag)
     except PublishError as exc:
         print(f"\n✗ {exc}", file=sys.stderr)
         return 1
