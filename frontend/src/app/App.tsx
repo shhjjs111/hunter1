@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider, type RouteObject } from "react-router";
 
 import { AppLayout } from "./AppLayout";
+import { NotFoundPage } from "./NotFoundPage";
 import { ApplicationsPage } from "../features/applications/ApplicationsPage";
 import { AssistantPage } from "../features/assistant/AssistantPage";
 import { CrawlPage } from "../features/crawl/CrawlPage";
@@ -38,6 +39,10 @@ export const appRoutes: RouteObject[] = [
       { path: "applications", element: <ApplicationsPage /> },
       { path: "assistant", element: <AssistantPage /> },
       { path: "settings", element: <SettingsPage /> },
+      // 兜底：未知路径渲染「页面不存在」，而不是布局里一片空白。
+      // 放在 children 里（而不是顶层）是为了**保留导航** —— 用户能看到自己
+      // 去了哪、能一键回到岗位库。注意它必须**最后**一条：react-router 按顺序匹配。
+      { path: "*", element: <NotFoundPage /> },
     ],
   },
 ];

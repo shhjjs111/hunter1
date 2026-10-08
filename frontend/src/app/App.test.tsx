@@ -143,6 +143,24 @@ describe("App 整体渲染", () => {
     expect(screen.getByPlaceholderText("有什么想问的？")).toBeTruthy();
   });
 
+  it("岗位库页只有一个 main 地标（页面内容不该再嵌一层 main）", async () => {
+    // 审查 P2-16：JobsPage 曾在 AppLayout 的 <main> 里再渲染一个 <main> —— 两个
+    // 主地标，屏幕阅读器的「跳到主要内容」会给出两个同名项。其余四页都是 <div>。
+    stubBackend();
+    renderAt("/");
+    await screen.findByText("渲染验收岗");
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+  });
+
+  it("未注册的路径渲染兜底页而不是空白", async () => {
+    stubBackend();
+    renderAt("/no-such-page");
+    expect(await screen.findByText("页面不存在")).toBeTruthy();
+    // 导航仍在（用户能自己走回去），且有一条回岗位库的链接
+    expect(screen.getByRole("navigation")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "回到岗位库" })).toBeTruthy();
+  });
+
   it("后端不可用时页面显示错误而不是白屏", async () => {
     vi.stubGlobal(
       "fetch",

@@ -15,7 +15,10 @@ export function JobsPage() {
   const score = useScoreJob();
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-8">
+    // 这里是**页面内容**，不是文档主地标：AppLayout 已经渲染了 <main>，
+    // 再嵌一层就是两个 main 地标（无效嵌套，屏幕阅读器的跳转菜单里出现两个
+    // 「主要内容」）。其余四个页面都是 <div>，只有这里曾写成 <main>。
+    <div className="mx-auto max-w-5xl px-4 py-8">
       <header className="mb-6 flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold">岗位库</h1>
         <span className="text-sm text-slate-500">
@@ -59,6 +62,6 @@ export function JobsPage() {
       {/* 评分失败原因原样透出：最常见的是「画像未配置」，后端已给可行动指引 */}
       {score.isError && <p className="mt-2 text-sm text-red-600">{(score.error as Error).message}</p>}
       {score.isSuccess && <p className="mt-2 text-sm text-emerald-600">已评分并写回。</p>}
-    </main>
+    </div>
   );
 }
