@@ -241,6 +241,9 @@ class TestDownloadVerified:
                 max_bytes=1000,
             )
         assert excinfo.value.code == "too_large"
+        # 断言**是哪一层**拒的：声明体（下载前）与累计体（边下边比）都会给 too_large，
+        # 只断言 code 时把声明体那道闸拆掉用例照样绿（实测存活）。
+        assert "声明" in str(excinfo.value)
         assert not target.exists()
         assert not list(tmp_path.glob("*.part"))
 

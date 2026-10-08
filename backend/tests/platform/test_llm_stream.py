@@ -62,6 +62,37 @@ def _done(events: list[Any]) -> StreamComplete:
     return finals[-1]
 
 
+class TestMalformedVendorPayloads:
+    """厂商 JSON 的形状不对时**跳过这一帧** —— 一次脏帧不该毁掉整条流。
+
+    这四个形状守卫（`payload` / `choices` / `choice` / `delta` 是不是对象或数组）
+    此前零覆盖：变异扫描把它们逐个改成 `if False:` 后**全部流用例照样绿**。
+    真走到的时候是 `AttributeError` / `TypeError` 裸穿出去（不是 `LLMError`），
+    用户在界面上看到的是整轮对话失败 —— 而正确行为是丢掉那一帧、继续收后面的。
+    """
+
+    @staticmethod
+    def _run(*payloads: str) -> list[Any]:
+        return list(parse_sse_lines(_wire(*payloads), default_model="m"))
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "[1, 2, 3]",  # 顶层不是对象
+            '{"choices": 42}',  # choices 不可迭代（`for choice in 42` → TypeError）
+            '{"choices": null}',  # 同上
+            '{"choices": "还有一句"}',  # 可迭代但元素不是对象
+            '{"choices": ["不是对象"]}',  # choice 不是对象
+            '{"choices": [{"delta": "文本"}]}',  # delta 不是对象
+            '{"choices": [{"delta": 42}]}',  # 同上，非字符串
+        ],
+    )
+    def test_odd_shapes_are_skipped_not_fatal(self, payload: str) -> None:
+        events = self._run(payload, _delta("正常内容"))
+        assert _texts(events) == ["正常内容"], "脏帧之后的正常内容必须还能收到"
+        assert _done(events) is not None
+
+
 class TestParseSseLines:
     """纯解析：把 SSE 行变成事件序列。"""
 
