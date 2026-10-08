@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import socket
+import subprocess
 import sys
 import threading
 from collections.abc import Iterator
@@ -211,8 +212,15 @@ class TestCheckPages:
     def _ok_handler(self) -> type[BaseHTTPRequestHandler]:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
+                shell = '<html><div id="root"></div><script src="/assets/app.js"></script></html>'
                 body = {
-                    "/": '<html><div id="root"></div><script src="/assets/app.js"></script></html>',
+                    "/": shell,
+                    # SPA 深层路由回落到同一外壳 —— 与真实产物一致
+                    # （main.py 的 /{path:path} 对 /api 之外的路径给 index.html）
+                    "/settings": shell,
+                    "/assistant": shell,
+                    "/crawl": shell,
+                    "/applications": shell,
                     "/assets/app.js": "console.log(1)",
                     "/api/jobs": '{"items": []}',
                     "/api/crawl/status": '{"running": false}',
@@ -300,6 +308,15 @@ class TestCheckPages:
         assert {"/api/jobs", "/api/crawl/status", "/api/settings"} <= paths
         # 入口脚本由 check_frontend_assets 按 index.html 的引用去取
         assert "/assets/app.js" in paths
+
+    def test_covers_spa_deep_routes(self) -> None:
+        """冒烟必须打前端深层路由 —— SPA 回落是打包最常见的翻车点。
+
+        只请求 `/` 时，「深层路由能否回落 index.html」完全没被覆盖：
+        静态资源中间件漏配 fallback 的产物，`/` 与 API 全绿，一点 /settings 就 404。
+        """
+        paths = {path for path, _ in build.SMOKE_PAGES}
+        assert {"/settings", "/assistant", "/crawl", "/applications"} <= paths
 
 
 class TestFrontendAssetsProbe:
@@ -391,6 +408,47 @@ class TestFreePort:
         assert len(ports) > 1
 
 
+class TestSpecWarnsWithoutCrashing:
+    """缺前端产物时 `hunter1.spec` 要**响亮告警**，而不是崩在输出编码上。
+
+    实测（简中 Windows、GBK 的 stdout、输出被重定向、未设 `PYTHONUTF8`）：
+    spec 里那句 `print("⚠ …")` 抛 `UnicodeEncodeError: 'gbk' codec ...` ——
+    本该解释「本次不含界面」的告警，自己成了打包失败的第一现场。
+
+    这里在**真 GBK 编码**下跑 spec 的前半段（PyInstaller API 之前的部分自洽可执行），
+    要求：告警文本出现、没有 UnicodeEncodeError。
+    """
+
+    def test_warning_is_printed_under_gbk_stdout(self, tmp_path: Path) -> None:
+        spec = ROOT / "backend" / "hunter1.spec"
+        prefix = spec.read_text(encoding="utf-8").split("a = Analysis(", 1)[0]
+        script = tmp_path / "run_spec_prefix.py"
+        script.write_text(
+            "exec(compile(SRC, 'hunter1.spec', 'exec'), {'__name__': '__console__'})\n",
+            encoding="utf-8",
+        )
+        # 把源码作为数据塞进脚本，避免转义地狱
+        script.write_text(
+            f"SRC = {prefix!r}\n" + script.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        env = dict(
+            os.environ,
+            PYTHONIOENCODING="gbk",
+            HUNTER1_FRONTEND_DIST=str(tmp_path / "absent-frontend"),
+        )
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            env=env,
+            timeout=120,
+            check=False,
+        )
+        assert b"UnicodeEncodeError" not in proc.stderr, proc.stderr.decode("utf-8", "replace")
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+        assert "前端产物目录不存在".encode() in proc.stdout
+        assert "不含界面".encode() in proc.stdout
+
+
 class TestFindFrontendDist:
     def test_prefers_the_v6_layout(self, tmp_path: Path) -> None:
         dist = _make_dist(tmp_path, frontend="v6")
@@ -433,8 +491,15 @@ class TestLocalProbesIgnoreProxy:
     def _ok_handler(self) -> type[BaseHTTPRequestHandler]:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
+                shell = '<html><div id="root"></div><script src="/assets/app.js"></script></html>'
                 body = {
-                    "/": '<html><div id="root"></div><script src="/assets/app.js"></script></html>',
+                    "/": shell,
+                    # SPA 深层路由回落到同一外壳 —— 与真实产物一致
+                    # （main.py 的 /{path:path} 对 /api 之外的路径给 index.html）
+                    "/settings": shell,
+                    "/assistant": shell,
+                    "/crawl": shell,
+                    "/applications": shell,
                     "/assets/app.js": "console.log(1)",
                     "/api/jobs": '{"items": []}',
                     "/api/crawl/status": '{"running": false}',

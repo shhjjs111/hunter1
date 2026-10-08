@@ -18,6 +18,7 @@
 """
 
 import os
+import sys
 from pathlib import Path
 
 # scripts/build.py 会以 cwd=backend 调用；允许环境变量覆盖以便独立调试
@@ -26,10 +27,47 @@ _FRONTEND_DIST = Path(
     os.environ.get("HUNTER1_FRONTEND_DIST") or (_BACKEND.parent / "frontend" / "dist")
 )
 
+
+def _enable_utf8_output() -> None:
+    """让 Windows 的控制台/管道也能打印 ⚠ 与中文。
+
+    实测（简中 Windows、GBK 的 stdout、输出被重定向或进管道、未设 `PYTHONUTF8`）：
+    `print("⚠ …")` 直接抛 `UnicodeEncodeError: 'gbk' codec can't encode character`，
+    打包在**第一行告警**处就崩 —— 而这条告警的作用恰恰是「响亮地说明本次不含界面」。
+    做法与 `hunter1.cli._enable_utf8_console` / `scripts/gh_publish.py` 一致。
+    任何一步失败都静默跳过：显示不好是小事，不能因此让打包起不来。
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        except Exception:  # noqa: BLE001 - 拿不到控制台就算了（可能是纯管道）
+            pass
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+_enable_utf8_output()
+
 datas = []
 if _FRONTEND_DIST.is_dir():
     # 目标 "hunter1/web_dist" 与 main.frontend_dir() 的打包态分支一致
     datas.append((str(_FRONTEND_DIST), "hunter1/web_dist"))
+else:
+    # 响亮告警而不是静默省略。往常这条路经 `scripts/build.py` 跑（它会先
+    # `npm run build` 并校验布局），所以真缺产物时会先在那里失败；但**直接跑
+    # spec**（独立调试）会静默产出一个「没有界面」的包 —— 那种包能启动、`--help`
+    # 也正常，只是根路径给不出页面，排查成本很高。
+    print(f"[hunter1.spec] ⚠ 前端产物目录不存在：{_FRONTEND_DIST}")
+    print("[hunter1.spec] ⚠ 本次打包**不含界面**（根路径将只剩裸 API）。")
+    print("[hunter1.spec]   正常打包请用 scripts/build.py（它会先构建前端并校验布局）。")
 
 a = Analysis(
     ['src/hunter1/__main__.py'],

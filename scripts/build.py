@@ -60,6 +60,13 @@ SMOKE_PAGE_TIMEOUT_SECONDS = 20.0
 # 前端的组件测试与整体渲染验收覆盖（见 frontend/src/app/App.test.tsx）。
 SMOKE_PAGES: tuple[tuple[str, str], ...] = (
     ("/", 'id="root"'),  # SPA 挂载点：产物里必须有
+    # 前端**深层路由**：必须回落到 index.html。这是打包最常见的翻车点 ——
+    # 静态资源中间件没配 fallback 时，直接请求 /settings 之类会 404，
+    # 而入口 / 与 API 全绿（docs/DEVELOPMENT.md 的打包小节列出了这 5 条）。
+    ("/settings", 'id="root"'),
+    ("/assistant", 'id="root"'),
+    ("/crawl", 'id="root"'),
+    ("/applications", 'id="root"'),
     ("/api/jobs", '"items"'),  # API 有响应且是预期的 JSON 形状
     ("/api/crawl/status", '"running"'),
     ("/api/settings", ""),  # 配置端点可达（未配置时返回 null）
