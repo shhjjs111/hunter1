@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantPage } from "./AssistantPage";
@@ -362,5 +362,148 @@ describe("AssistantPage", () => {
 
     expect(screen.getByText("历史坏了也要能问")).toBeDefined();
     expect(screen.getByText(REPLY)).toBeDefined();
+  });
+
+  it("历史在本轮流式期间到达，不会把在飞的回答抹掉", async () => {
+    // 审查 P1-5：打开已有会话后**立刻**发问时，历史请求还在飞 —— 那一刻 history 是
+    // []，旧实现把它当成 baseline=0；历史随后到达（这里 10 条）就判成「本轮已落库」，
+    // 于是用户刚发的问题和**正在流式输出**的回答一起从屏幕上消失，
+    // 而输入框只以 streaming 为禁用条件、historyLoading 不拦发问，窗口可达。
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+
+    let push!: (chunk: string) => void;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+      },
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          return new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        if (url.includes("/api/assistant/conversations/c1")) {
+          await historyGate; // 卡住历史请求，模拟「历史比发问晚到」
+          return jsonResponse([
+            { role: "user", content: EARLIER },
+            ...Array.from({ length: 9 }, (_, index) => ({
+              role: "assistant",
+              content: `旧回答 ${index}`,
+            })),
+          ]);
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "旧会话" }));
+    await screen.findByText(/加载会话历史/); // 历史仍在飞
+
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), {
+      target: { value: "在飞的提问" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    // 流开始输出（还没 done）
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "回复中…" })).toBeDefined();
+    });
+    act(() => {
+      push(`data: ${JSON.stringify({ type: "text", text: REPLY })}\n\n`);
+    });
+    await screen.findByText(REPLY);
+
+    // 历史这时才到达：条数从 0 变成 10 —— 旧判据（length > baseline）就此成立
+    act(() => {
+      releaseHistory();
+    });
+    await screen.findByText(EARLIER);
+
+    // 关键断言：在飞的回答与刚发的问题都还在（旧实现在这里双双消失）
+    expect(screen.getByText("在飞的提问")).toBeDefined();
+    expect(screen.getByText(REPLY)).toBeDefined();
+    expect(screen.getByRole("button", { name: "回复中…" })).toBeDefined();
+  });
+
+  it("历史到达时已含同文本的旧提问，在飞的回答也不会被抹掉", async () => {
+    // 这条专门钉 `turnSettled` 那道闸：会话里之前问过同一句话时，历史到达的瞬间
+    // 「同文本用户消息数」就已经比发问时多了一条 —— 只按内容判断会在流还没结束时
+    // 就认定「本轮已落库」，把在飞的回答抹掉。必须等本轮真正结束（done）再判。
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+
+    let push!: (chunk: string) => void;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+      },
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          return new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        if (url.includes("/api/assistant/conversations/c1")) {
+          await historyGate;
+          // 关键：历史里已经有一条**同文本**的旧提问
+          return jsonResponse([
+            { role: "user", content: "同一句提问" },
+            { role: "assistant", content: "上一次的回答" },
+          ]);
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "旧会话" }));
+    await screen.findByText(/加载会话历史/);
+
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), {
+      target: { value: "同一句提问" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "回复中…" })).toBeDefined();
+    });
+    act(() => {
+      push(`data: ${JSON.stringify({ type: "text", text: "这一轮的回答" })}\n\n`);
+    });
+    await screen.findByText("这一轮的回答");
+
+    act(() => {
+      releaseHistory();
+    });
+    await screen.findByText("上一次的回答");
+
+    // 本轮还没结束：在飞内容必须留着（两道提问都可见 —— 一条来自历史、一条是本轮）
+    expect(screen.getAllByText("同一句提问")).toHaveLength(2);
+    expect(screen.getByText("这一轮的回答")).toBeDefined();
   });
 });

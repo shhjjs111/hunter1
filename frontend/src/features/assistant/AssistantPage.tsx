@@ -6,6 +6,17 @@ import { streamSse } from "../../shared/streaming/sse";
 import { useConversationMessages, useConversations, useRefreshConversations } from "./api";
 import { MessageBubble, type ChatItem } from "./components/MessageBubble";
 
+/**
+ * 历史里内容等于 `text` 的用户消息条数。
+ *
+ * 用来判断「本轮是否已落库」：发问时记下这个数，之后比它多一条就说明本轮进了历史。
+ * 用**内容**而不是长度：历史里同文本的用户消息数比总长度更能定位「这一轮」，
+ * 而且同一句话重复发两轮也认得出来（长度法在这种会话里区分不了）。
+ */
+function countUserMessages(items: ChatItem[], text: string): number {
+  return items.filter((item) => item.role === "user" && item.content.trim() === text).length;
+}
+
 export function AssistantPage() {
   const conversations = useConversations();
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -19,8 +30,11 @@ export function AssistantPage() {
   // 本轮回答的「截断/降级」提示（正常回答时为 null）
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // 发问那一刻的历史长度：历史随后长出这一截，就说明本轮已经落库，live 可以退场。
-  const [turnBaseline, setTurnBaseline] = useState<number | null>(null);
+  // 本轮发问的**身份**：原文 + 发问那一刻历史里已有几条内容相同的用户消息。
+  // 用它判断「这一轮是否已落库」，而不是比历史长度（理由见 turnPersisted 的注释）。
+  const [turn, setTurn] = useState<{ text: string; seen: number } | null>(null);
+  // 本轮流是否已结束（收到 done，或用户中止）。落库判断必须在它之后。
+  const [turnSettled, setTurnSettled] = useState(false);
   // live 的镜像，给异步回调读（`send` 闭包里的 live 是提交那一刻的旧值）。
   const liveRef = useRef<ChatItem[]>([]);
 
@@ -41,12 +55,23 @@ export function AssistantPage() {
     role: item.role,
     content: item.content,
   }));
-  // 本轮 live 何时退场：历史已经长出「发问那一刻」的那一截 → 本轮已写进历史。
+  // 本轮 live 何时退场：**流已结束**，且刷新后的历史里确实多了一条本轮的提问。
   //
-  // 历史请求失败/慢时这个条件一直为 false，live 因此留在屏幕上 —— 而不是像
-  // 「done 里立刻清 live」那样让刚显示的回答凭空消失（后端其实已经落库）。
-  // 判据是纯计算，不引入额外渲染帧，所以也不会闪出两份。
-  const turnPersisted = turnBaseline !== null && history.length > turnBaseline;
+  // 为什么不能只比历史长度（原实现是 `history.length > turnBaseline`）：
+  // `turnBaseline` 取的是发问那一刻的 `history.length`，而「打开已有会话后立刻发问」
+  // 时历史请求还在飞 —— 那一刻 history 是 []，baseline=0；历史随后到达（10 条）
+  // 就有 10 > 0，被误判成「本轮已落库」，于是**用户刚发的问题和正在流式输出的
+  // 回答一起从屏幕上消失**（输入框只以 streaming 为禁用条件，historyLoading 不拦）。
+  //
+  // 新判据有三道闸：① 流已结束（`turnSettled`）—— 历史中途到达不再能抹掉在飞内容；
+  // ② 刷新的那次请求已落地（`messages.isFetching` 为假）—— 避免拿旧数据下判断；
+  // ③ 历史里同文本的用户消息**比发问时多了一条** —— 用内容而不是长度，且同一句话
+  // 重复发两轮也认得出来。
+  const turnPersisted =
+    turn !== null &&
+    turnSettled &&
+    !messages.isFetching &&
+    countUserMessages(history, turn.text) > turn.seen;
   const items = currentId === null ? live : [...history, ...(turnPersisted ? [] : live)];
   // M8：历史查询的加载/错误态必须显式呈现 —— 否则点开已有会话的瞬间会显示
   // 「新会话」引导语（看起来消息丢了），历史请求失败时永久停在空态、无任何提示。
@@ -62,8 +87,10 @@ export function AssistantPage() {
     setError(null);
     setNotice(null);
     setLive([{ role: "user", content: text }]);
-    // 记下「发问那一刻」的历史长度：历史以后长过它 = 本轮落库了
-    setTurnBaseline(history.length);
+    // 记下「发问那一刻」历史里已有的同文本条数：以后比它多一条 = 本轮落库了。
+    // 历史还没加载时这里是 0 —— 没关系，`turnSettled` 会挡住「历史随后到达」的误判。
+    setTurn({ text, seen: countUserMessages(history, text) });
+    setTurnSettled(false);
     setStreaming(true);
 
     const controller = new AbortController();
@@ -97,6 +124,8 @@ export function AssistantPage() {
             ]);
           } else if (event.type === "done") {
             finished = true;
+            // 流结束了 —— 只有从这里往后，「历史里多了一条本轮的提问」才可信。
+            setTurnSettled(true);
             const id = String(event.conversation_id ?? "");
             if (id) {
               setCurrentId(id);
@@ -163,6 +192,12 @@ export function AssistantPage() {
     });
   }
 
+  /** 切会话 / 新对话：本轮身份作废（不 reset 会把上一轮的判据套到新会话上）。 */
+  function resetTurn(): void {
+    setTurn(null);
+    setTurnSettled(false);
+  }
+
   return (
     // 窄屏堆叠（会话列表在上、对话区在下），宽屏恢复左侧栏。
     // 224px 的固定侧栏在 390px 窗口里会吃掉近六成宽度。
@@ -175,7 +210,7 @@ export function AssistantPage() {
             onClick={() => {
               setCurrentId(null);
               setLive([]);
-              setTurnBaseline(null);
+              resetTurn();
               setError(null);
               setNotice(null);
             }}
@@ -197,7 +232,7 @@ export function AssistantPage() {
                 onClick={() => {
                   setCurrentId(item.id);
                   setLive([]);
-                  setTurnBaseline(null);
+                  resetTurn();
                   setError(null);
                   setNotice(null);
                 }}
