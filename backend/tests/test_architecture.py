@@ -13,7 +13,9 @@
   只依赖 domain 与端口（Protocol）。
 - `slices`（业务切片）不得 import `hunter1.main`；对旧层
   （`hunter1.application`）的依赖必须登记在 `SLICE_LEGACY_ALLOW`（Wave 4 清空）；
-  切片之间只经公开面（`__init__`），不得深链其他切片的内部模块。
+  切片之间只经公开面（`__init__`），不得深链其他切片的内部模块；
+  **切片间的依赖方向必须落在 `SLICE_DEPENDENCY_ALLOW` 白名单里**
+  （AGENTS.md：`crawl/scoring/applications/assistant → jobs`，别的方向都不许）。
 
 **已删除的层不在上表里**：`web/`（Wave 6）与 `crawlers/`（收尾迁移）都已从
 代码中移除，由**存在性断言**钉死（`test_legacy_ssr_layer_is_gone` /
@@ -52,6 +54,21 @@ SLICE_LEGACY_ALLOW: dict[str, tuple[str, ...]] = {}
 # 终态应把它们归位到各自的边界模块（如 Crawler 协议随抓取能力走），
 # 届时本豁免一并删除。
 SHARED_PORT_MODULE = "hunter1.application.ports"
+
+# 切片间的**依赖方向白名单**：`{依赖方: (被依赖方, ...)}`，与 AGENTS.md 的
+# 「依赖方向白名单（架构测试钉死，越权即红灯）：slices 之间只允许
+#   crawl/scoring/applications/assistant → jobs」逐字对应。
+#
+# 为什么要有这一条：原先的三条守卫（不 import 组装根 / 不 import 未登记旧层 /
+# 不深链别的切片）都不管**方向** —— `jobs → scoring`、`settings → crawl` 这类被
+# 白名单禁止的依赖只要走公开面（`from hunter1.slices.scoring import ...`）就全绿，
+# 而文档承诺的是「越权即红灯」。守卫缺口比现存违规更危险：它会静默地长回来。
+SLICE_DEPENDENCY_ALLOW: dict[str, tuple[str, ...]] = {
+    "applications": ("jobs",),
+    "assistant": ("jobs",),
+    "crawl": ("jobs",),
+    "scoring": ("jobs",),
+}
 
 
 def _module_name(path: Path, root: Path = SRC) -> str:
@@ -162,8 +179,8 @@ def _py_files(layer: str) -> list[Path]:
     return sorted((SRC / layer).rglob("*.py"))
 
 
-def _slice_dirs() -> list[Path]:
-    slices = SRC / "slices"
+def _slice_dirs(root: Path = SRC) -> list[Path]:
+    slices = root / "slices"
     return sorted(p for p in slices.iterdir() if p.is_dir() and p.name != "__pycache__")
 
 
@@ -265,6 +282,18 @@ def test_legacy_crawlers_layer_is_gone() -> None:
     assert not (SRC / "crawlers").exists(), "旧 crawlers/ 层残留"
 
 
+def test_legacy_allowlist_is_empty() -> None:
+    """过渡期白名单必须是空的（Wave 4 已收尾）。
+
+    为什么在白名单守卫之外再加一条：`test_slices_respect_boundaries` 会**静默放行**
+    登记过的条目 —— 登记制降低了迁移摩擦，代价是「谁往里加了东西」无声无息。
+    这条把「加条目」变成一次红灯：真需要时得连这条断言一起改，至少被看见一次。
+    """
+    assert SLICE_LEGACY_ALLOW == {}, (
+        "过渡期白名单非空 —— 新增条目请写明理由与清理期限，并同步这条断言"
+    )
+
+
 def test_assembly_root_exists() -> None:
     """组装根存在 —— 它是唯一认识所有切片的地方。"""
     assert (SRC / "main.py").is_file()
@@ -315,6 +344,57 @@ def test_slices_do_not_reach_into_each_other() -> None:
             if module is not None:
                 offenders.append(f"{_rel(path)} imports {module}")
     assert not offenders, "切片深链违规：\n" + "\n".join(offenders)
+
+
+def _slice_dependency_offenders(*, root: Path = SRC) -> list[str]:
+    """切片之间出现白名单外的方向时，返回 `文件 import 模块` 列表。
+
+    抽成函数（而不是只写在断言里）是为了让它自己也能被测试 —— 判据若只活在断言里，
+    「永远返回空」的实现可以一路绿下去（见 `TestSliceDependencyRule`）。
+    """
+    offenders: list[str] = []
+    for slice_dir in _slice_dirs(root):
+        name = slice_dir.name
+        allowed = set(SLICE_DEPENDENCY_ALLOW.get(name, ()))
+        for path in sorted(slice_dir.rglob("*.py")):
+            for module in sorted(_imported_modules(path, root=root)):
+                parts = module.split(".")
+                if len(parts) < 3 or parts[:2] != ["hunter1", "slices"]:
+                    continue
+                target = parts[2]
+                if target == name or target in allowed:
+                    continue
+                where = path.relative_to(root).as_posix()
+                offenders.append(f"{where} imports {module}（{name} → {target} 不在白名单）")
+    return offenders
+
+
+def test_slices_respect_dependency_direction() -> None:
+    """切片间的依赖方向必须落在白名单里（AGENTS.md 的「越权即红灯」）。
+
+    这条守卫原先**不存在**：三条旧守卫只管「不 import 组装根 / 不 import 未登记
+    旧层 / 不深链别的切片」，方向本身没人管 —— `jobs → scoring` 或
+    `settings → crawl` 只要走公开面就全绿，而文档承诺的是「架构测试钉死」。
+
+    缺口比现存违规危险：现存依赖是合规的（唯一的跨切片 import 是
+    `applications → jobs`），但没人拦着它长歪。
+    """
+    offenders = _slice_dependency_offenders()
+    assert not offenders, "切片依赖方向违规：\n" + "\n".join(offenders)
+
+
+def test_slice_legacy_allow_is_empty() -> None:
+    """过渡期登记表必须保持为空 —— 加条目是「静默放行」，得连测试一起改。
+
+    `SLICE_LEGACY_ALLOW` 是迁移期的存量清单（Wave 4 已清空）。留着字典本身是为了
+    让「又冒出旧层依赖」时有一个**显式、可审计**的落点；但如果后人往里塞一条就
+    静默放行，这个落点反而成了后门。这里把它钉成空表：真要加，必须同时改这条断言
+    （也就必然进入 code review 的视线）。
+    """
+    assert SLICE_LEGACY_ALLOW == {}, (
+        "过渡期白名单不该有内容（迁移已结束）。"
+        "若确有存量依赖要放行，请连同 AGENTS.md 与这条断言一起评审修改。"
+    )
 
 
 def test_import_collection_is_not_silently_empty() -> None:
@@ -368,6 +448,65 @@ def _write_tree(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source, encoding="utf-8")
     return root, target
+
+
+class TestSliceDependencyRule:
+    """方向判据本身要有**能变红**的用例（同 `TestDeepLinkRule` 的理由）。
+
+    只断言「真实仓库里 offenders 为空」是不够的：收集逻辑整体失效（永远返回空集）
+    时，那条断言照样绿 —— 而它的失效方式恰好就是「没人发现方向长歪了」。
+    """
+
+    def _offenders(
+        self, tmp_path: Path, relative: str, source: str, modules: tuple[str, ...] = ()
+    ) -> list[str]:
+        root, _target = _write_tree(tmp_path, relative, source, modules=modules)
+        return _slice_dependency_offenders(root=root)
+
+    def test_whitelisted_direction_is_allowed(self, tmp_path: Path) -> None:
+        """assistant → jobs 在白名单里（AGENTS.md 明确允许）。"""
+        assert (
+            self._offenders(
+                tmp_path,
+                "slices/assistant/router.py",
+                "from hunter1.slices.jobs import JobSummary\n",
+            )
+            == []
+        )
+
+    def test_reverse_direction_is_flagged(self, tmp_path: Path) -> None:
+        """jobs → scoring 是反向依赖：走公开面也不行。"""
+        offenders = self._offenders(
+            tmp_path, "slices/jobs/router.py", "from hunter1.slices.scoring import Score\n"
+        )
+        assert len(offenders) == 1
+        assert "jobs → scoring 不在白名单" in offenders[0]
+
+    def test_unlisted_pair_is_flagged(self, tmp_path: Path) -> None:
+        """settings → crawl 不在任何白名单边里。"""
+        offenders = self._offenders(
+            tmp_path, "slices/settings/router.py", "from hunter1.slices.crawl import CrawlRunner\n"
+        )
+        assert len(offenders) == 1
+        assert "settings → crawl 不在白名单" in offenders[0]
+
+    def test_same_slice_import_is_not_flagged(self, tmp_path: Path) -> None:
+        """切片内部的相对 import 不该被误判成跨切片。"""
+        assert (
+            self._offenders(tmp_path, "slices/crawl/service.py", "from . import adapters\n") == []
+        )
+
+    def test_allowed_direction_deep_link_is_left_to_the_deep_link_guard(
+        self, tmp_path: Path
+    ) -> None:
+        """方向对、但深链 —— 方向守卫不管它（由深链守卫管），两把锁职责不重叠。"""
+        offenders = self._offenders(
+            tmp_path,
+            "slices/applications/router.py",
+            "from hunter1.slices.jobs.store import JobStore\n",
+            modules=("hunter1.slices.jobs.store",),
+        )
+        assert offenders == []
 
 
 class TestRelativeImportResolution:
