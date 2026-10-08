@@ -55,7 +55,7 @@ class TestSearchJobsTool:
         assert result.ok
         assert "AI产品经理" in result.content
         assert "行政专员" not in result.content
-        assert "88" in result.content  # 带上了匹配分
+        assert "匹配分 88" in result.content  # 连标签一起钉：只断言 "88" 时，分数渲染成 880 也绿
 
     def test_no_match_message_is_clear(self, jobs_db: Database) -> None:
         registry = build_tools(jobs=jobs_db.jobs())
@@ -102,7 +102,7 @@ class TestJobDetailTool:
         assert result.ok
         assert "AI产品经理" in result.content
         assert "负责大模型产品规划" in result.content
-        assert "88" in result.content
+        assert "匹配分：88" in result.content  # 详情页格式与列表不同（全角冒号），两边都钉
 
     def test_id_prefix(self, jobs_db: Database) -> None:
         """模型常只看到前 8 位 id。"""
