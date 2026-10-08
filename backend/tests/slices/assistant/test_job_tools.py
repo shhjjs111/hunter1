@@ -185,10 +185,26 @@ class TestJobDetailPrefixLookup:
 
 class TestJobStatsTool:
     def test_reports_total(self, jobs_db: Database) -> None:
-        registry = build_tools(jobs=jobs_db.jobs())
+        """总数要**精确**报出 —— 裸的 `"2"` 太弱（total 算成 20/12/32 都绿）。
+
+        这里再种 10 条（共 12），断言整句「岗位库共 12 条」。
+        """
+        repo = jobs_db.jobs()
+        for index in range(10):
+            repo.upsert(
+                Job(
+                    id=f"stats{index:060d}",
+                    company_id="c1",
+                    title=f"统计岗{index}",
+                    detail_url=f"https://a.com/stats/{index}",
+                    source="t",
+                    last_seen_at=datetime(2026, 10, 1, tzinfo=UTC),
+                )
+            )
+        registry = build_tools(jobs=repo)
         result = registry.invoke("job_stats", {}, call_id="c1")
         assert result.ok
-        assert "2" in result.content
+        assert "岗位库共 12 条" in result.content, result.content
 
 
 class TestApplicationQueryTool:
