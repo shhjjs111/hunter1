@@ -40,7 +40,20 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
 DIST = ROOT / "dist"
-APP_NAME = "hunter1"
+
+# 产物命名取自 scripts/artifact.py（发布链的唯一来源，`release.sh` 与
+# `gh_publish.py` 共用它）—— 本文件不再自持一份字面量。按文件位置加载而不靠
+# sys.path：测试是以「按路径加载 build.py」的方式导入本模块的，那时 scripts/
+# 不在 sys.path 上（直接 `python scripts/build.py` 才在）。
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from artifact import (  # noqa: E402
+    APP_NAME,
+    DIST_DIR_NAME,
+    artifact_name,
+    exe_name,
+)
 
 # 版本号的**唯一来源**是包本身（`backend/src/hunter1/__init__.py`，见 pyproject 的
 # 注释与 tests/test_version.py）。脚本在仓库根、包在 backend/src —— 显式加路径，
@@ -99,7 +112,8 @@ _SCRIPT_SRC = re.compile(r'<script[^>]+src="([^"]+)"')
 
 
 def _exe_name() -> str:
-    return f"{APP_NAME}.exe" if os.name == "nt" else APP_NAME
+    """产物可执行文件名（命名规则见 `scripts/artifact.py`）。"""
+    return exe_name()
 
 
 def _ensure_frontend_built() -> None:
@@ -436,7 +450,7 @@ def verify(dist_dir: Path) -> list[str]:
 
 def _make_zip(dist_dir: Path) -> Path:
     """打 zip：解压出一个 `hunter1/` 目录，即所谓的「解压即用」。"""
-    archive = DIST / f"{APP_NAME}-{sys.platform}.zip"
+    archive = DIST / artifact_name()
     print(f"== 打包 {archive.name} ==")
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for item in sorted(dist_dir.rglob("*")):
@@ -587,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
     _require_pyinstaller()
     _run_pyinstaller()
 
-    dist_dir = DIST / APP_NAME
+    dist_dir = DIST / DIST_DIR_NAME
     if not dist_dir.is_dir():
         raise SystemExit(f"没有产出 {dist_dir}")
 

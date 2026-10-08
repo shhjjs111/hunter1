@@ -55,12 +55,19 @@ fi
 echo "  ✓ 工作区干净"
 
 # 2) 产物必须存在。
-ZIP="dist/hunter1-win32.zip"
-EXE="dist/hunter1/hunter1.exe"
+#
+# 名字从 `scripts/artifact.py` 取，**不写字面量**：产物按 `sys.platform` 命名
+# （`hunter1-win32.zip` / `hunter1-linux.zip`），而 CI 跑在 ubuntu-latest ——
+# 写死 win32 会让整条发布链在非 Windows 上必然失败（`pyproject.toml` 却自称
+# 跨平台），且这个缺口永远不会被本机门禁发现。
+ARTIFACT_NAME="$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import artifact_name; print(artifact_name())")"
+EXE_REL="$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import exe_relative_path; print(exe_relative_path())")"
+ZIP="dist/$ARTIFACT_NAME"
+EXE="dist/$EXE_REL"
 for f in "$ZIP" "$EXE"; do
   [[ -f "$f" ]] || { echo "✗ 缺少产物：$f（先跑 scripts/build.py --zip）" >&2; exit 1; }
 done
-echo "  ✓ 产物存在"
+echo "  ✓ 产物存在（$ARTIFACT_NAME）"
 
 # 3) tag 必须存在且指向 HEAD。
 if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
@@ -123,9 +130,9 @@ echo "     git push -u origin main --tags"
 echo ""
 echo "2) 建 Release 并上传产物（网页：https://github.com/$OWNER_REPO/releases/new，"
 echo "   tag 选 $TAG，把下面两个文件拖进去）："
-echo "     dist/hunter1-win32.zip"
+echo "     $ZIP"
 echo "     dist/manifest.json"
-echo "   （装了 gh 的话：gh release create $TAG dist/hunter1-win32.zip dist/manifest.json \\"
+echo "   （装了 gh 的话：gh release create $TAG $ZIP dist/manifest.json \\"
 echo "       --title \"hunter1 $TAG\" --notes-file <说明>）"
 echo ""
 echo "3) 开 tag 保护（Settings → Tags → protect v*）—— 这是更新链信任模型的前提。"
