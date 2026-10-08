@@ -118,4 +118,10 @@ typeCheckingMode = "standard"
 # 脚本都在运行时 `sys.path.insert(.../backend/src)` 才能 import hunter1，pyright
 # 读不懂那句动态插入，不给它搜索路径就会把 `from hunter1 import ...` 全报成
 # `reportMissingImports`（实测 9 条假错）。对 backend 自身的检查无影响。
-extraPaths = ["src", "../.tools/python/Lib/site-packages"]
+#
+# `"../scripts"` 同理，为的是脚本之间互相 import（`build.py` / `gh_publish.py`
+# 都要用 `artifact.py` 的产物命名）。不加这一项就得在每个 import 上挂
+# `# pyright: ignore`，那会把真正的缺失依赖也一起静音掉。脚本名都足够独特
+# （artifact / build / serve / make_manifest / export_openapi / refresh_fixtures），
+# 不会遮蔽任何第三方包。
+extraPaths = ["src", "../scripts", "../.tools/python/Lib/site-packages"]
