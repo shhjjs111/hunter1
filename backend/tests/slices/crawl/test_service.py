@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -245,10 +246,28 @@ class TestCrawlCompany:
         assert result.company == "示例科技"
 
 
-def test_job_model_matches_identity_helper() -> None:
-    """身份计算的两种路径（URL / 公司+标题）都不该抛错。"""
-    assert job_identity(detail_url="", company="C", title="T")
-    assert isinstance(Job, type)
+def test_job_identity_paths_follow_the_documented_basis() -> None:
+    """身份契约：两种 basis 的**格式**是对外可见的，改它会让已入库的 id 失配。
+
+    抓取切片把 basis 格式（`ct:<公司>:__company__`）当「身份契约的一部分」写进了
+    `_company_id` 的文档 —— 那就该有断言钉住它。
+
+    原先这条只断言 `isinstance(Job, type)`：**断言一个类是类**。把 Job 换成
+    dataclass / 协议 / 函数都绿，`job_identity` 的 basis 格式改掉也绿。
+    """
+    url_id = job_identity(detail_url="https://a.com/1")
+    assert url_id == hashlib.sha256(b"url:https://a.com/1").hexdigest()
+
+    # 公司 + 标题这条路径：标题先经 `normalize_job_title`（NFKC + 去括号 + 小写）
+    company_id = job_identity(detail_url="", company="示例科技", title="A岗（急招）")
+    assert company_id == hashlib.sha256("ct:示例科技:a岗".encode()).hexdigest()
+
+    # 两条路径必须给出**不同**的身份 —— 否则数据不全时会与某个 URL 身份撞号
+    assert url_id != company_id
+
+    # 两者都没有 → 明确拒绝，而不是为「没有身份的东西」生成一个 id
+    with pytest.raises(ValueError):
+        job_identity(detail_url="", company="只有公司没有标题")
 
 
 class TestCrawlAll:
