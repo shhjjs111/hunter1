@@ -323,6 +323,65 @@ describe("AssistantPage", () => {
     expect(await screen.findByText(/没有保存/)).toBeDefined();
   });
 
+  it("本轮失败时把原文还回输入框（后端不落库，否则得重打一遍）", async () => {
+    // `send()` 第一件事就是 `setInput("")`。失败的轮次后端**不落库**（router 的
+    // 「整轮跑完才落库」），所以不还回去的话，用户想问的那句话两头都没了。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          const body = `data: ${JSON.stringify({ type: "error", message: "上游 500" })}\n\n`;
+          return new Response(body, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        return jsonResponse([{ id: "c1", title: "旧会话" }]);
+      }),
+    );
+
+    renderPage();
+    const box = screen.getByPlaceholderText(/有什么想问的/) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "这句别丢" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    // 先确认失败路径真的走到了（否则下面的断言可能只是「还没提交」）
+    expect(await screen.findByText(/上游 500/)).toBeDefined();
+    await waitFor(() => {
+      expect(box.value).toBe("这句别丢");
+    });
+  });
+
+  it("本轮正常结束时**不**把旧问题塞回输入框", async () => {
+    // 与上一条配对：正常落库的轮次把原文塞回去，用户下次会误发同一句。
+    // 只钉「失败要还回去」的写法在「永远还回去」的实现下照样绿。
+    stubApi();
+    renderPage();
+    const box = screen.getByPlaceholderText(/有什么想问的/) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "你好" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "发送" })).toBeDefined();
+    });
+    expect(box.value).toBe("");
+  });
+
+  it("消息区是 aria-live 的日志区，流式期间标 aria-busy", async () => {
+    stubApi();
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "你好" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "发送" })).toBeDefined();
+    });
+
+    const log = await screen.findByRole("log");
+    expect(log.getAttribute("aria-live")).toBe("polite");
+    expect(log.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("本轮结束后历史刷新失败，回答不会凭空消失", async () => {
     // 历史一直 500，流式正常。修复前 done 里先 `setLive([])` 再 refresh：
     // 历史拉不回来 → items 变空 → 刚显示的回答（后端其实已落库）消失。

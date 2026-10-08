@@ -180,6 +180,16 @@ export function AssistantPage() {
         setNotice("已中止：这段回答没有保存，刷新或切换会话后不会保留。");
       }
     }
+
+    // 发言没被保存（失败 / 中止 / 流异常结束）→ 把原文还回输入框。
+    //
+    // `send()` 第一件事就是 `setInput("")`，而三个失败路径（SSE 的 error 事件、
+    // 抛异常、中止）都不恢复：用户想问的那句话从输入框里消失了，而后端**也没存**
+    // （失败的轮次不落库）—— 于是只能凭记忆重打一遍。`finished` 为真表示整轮
+    // 正常收尾（含截断/降级，那两种也走 done 并已落库），那时不该把旧问题塞回去。
+    if (!finished) {
+      setInput((current) => (current === "" ? text : current));
+    }
   }
 
   function appendAssistantText(chunk: string) {
@@ -204,7 +214,7 @@ export function AssistantPage() {
     <div className="flex flex-col gap-4 md:flex-row md:gap-6">
       <aside className="md:w-56 md:shrink-0">
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-slate-700">会话</h2>
+          <h2 className="text-sm font-medium text-ink-soft">会话</h2>
           <Button
             disabled={streaming}
             onClick={() => {
@@ -227,7 +237,7 @@ export function AssistantPage() {
                 type="button"
                 disabled={streaming}
                 className={`w-full truncate rounded px-2 py-1 text-left text-sm ${
-                  currentId === item.id ? "bg-slate-900 text-white" : "hover:bg-slate-100"
+                  currentId === item.id ? "bg-ink text-white" : "hover:bg-surface-sunken"
                 } ${streaming ? "cursor-not-allowed opacity-50" : ""}`}
                 onClick={() => {
                   setCurrentId(item.id);
@@ -247,7 +257,11 @@ export function AssistantPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <PageHeader title="求职助手" subtitle="只读：它查岗位与投递、给建议；写操作由你确认" />
 
-        <Card className="flex-1 overflow-y-auto p-4" >
+        {/* 消息区必须有一个**确定的高度上限**，否则 `overflow-y-auto` 永不触发：
+            祖先链里没有任何确定高度（`min-h-screen` 给不了 flex item 有界高度），
+            对话一长输入框就被顶到屏幕外，用户得滚动页面才能继续提问。`max-h-[60vh]`
+            是**确定值**（视口高度），不依赖祖先布局。 */}
+        <Card className="max-h-[60vh] overflow-y-auto p-4">
           {/* M8 的历史加载/错误提示只**顶替空态**，绝不能盖住消息列表：
               `items` 里含本轮的 live 消息（历史请求失败时更是只有 live）。
               把整块换成提示，会让用户刚发出的问题与正在流式输出的回答凭空消失
@@ -257,9 +271,12 @@ export function AssistantPage() {
               <ErrorNotice message={`加载会话历史失败：${(messages.error as Error).message}`} />
             </div>
           )}
-          {historyLoading && <p className="mb-3 text-sm text-slate-500">加载会话历史…</p>}
+          {historyLoading && <p className="mb-3 text-sm text-muted">加载会话历史…</p>}
           {items.length > 0 && (
-            <div className="space-y-3">
+            // `role="log"` + `aria-live="polite"`：新消息与流式增量的到达要能被
+            // 屏幕阅读器播报（`log` 是聊天记录的语义角色，只播报新增内容）。
+            // `aria-busy` 在流式期间为真，避免把逐字增量当成一串独立消息播报。
+            <div className="space-y-3" role="log" aria-live="polite" aria-busy={streaming}>
               {items.map((item, index) => (
                 // key 用「role + 序号」：列表只追加、不重排，序号在流式期间是稳定的
                 // —— 同一个气泡的分片一直落在同一位置，DOM 不会被重建。
@@ -283,7 +300,7 @@ export function AssistantPage() {
         )}
 
         {notice !== null && error === null && (
-          <p className="mt-3 text-sm text-amber-600">{notice}</p>
+          <p className="mt-3 text-sm text-warning">{notice}</p>
         )}
 
         <form
@@ -294,7 +311,7 @@ export function AssistantPage() {
           }}
         >
           <input
-            className="flex-1 rounded border border-slate-300 px-3 py-2"
+            className="flex-1 rounded border border-field px-3 py-2"
             placeholder="有什么想问的？"
             aria-label="输入要问助手的问题"
             value={input}
