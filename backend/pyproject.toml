@@ -70,9 +70,8 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 # 这一点（实测 `--show-settings`）：
 #   cwd=backend  → linter.src = ["<repo>/backend/src", "<repo>/backend/tests"] → hunter1 判 first-party
 #   cwd=仓库根   → linter.src = []                                           → hunter1 判 third-party
-# 后果是**同一个 import 块的合法性随调用者所在目录翻转**，而 `check.sh` 里
-# scripts/ 与 examples/ 两条 ruff 步骤没切目录（backend 那几条切了）——
-# 于是「门禁红不红取决于你在哪个目录敲命令」，且 CI 恒从仓库根跑、恒绿。
+# 后果是**同一个 import 块的合法性随调用者所在目录翻转** —— 同一个 import 块，
+# 在 backend/ 下判 first-party、在仓库根下判 third-party。
 # 实测差距：scripts/refresh_fixtures.py 的 `from bs4 import ...` 与
 # `from hunter1...` 连排，backend 下报 I001、仓库根下 All checks passed。
 #

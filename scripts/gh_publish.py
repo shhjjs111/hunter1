@@ -55,7 +55,12 @@ from hunter1.platform.update.rules import ReleaseManifest  # noqa: E402
 
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
-DEFAULT_TOKEN_FILE = Path.home() / ".hunter1_gh_token"
+# 令牌文件位置：可用 HUNTER1_GH_TOKEN_FILE 覆盖。**必须与 scripts/gh_setup.sh
+# 的取值一致** —— 那边认这个变量、这边原先硬编码 ~/.hunter1_gh_token，于是设了
+# 该变量的用户会被 gh_setup 告知「已保存」，而这里却去读另一个文件、读不到。
+DEFAULT_TOKEN_FILE = Path(
+    os.environ.get("HUNTER1_GH_TOKEN_FILE") or Path.home() / ".hunter1_gh_token"
+)
 
 
 def _enable_utf8_output() -> None:
@@ -207,16 +212,22 @@ def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
 
 
 def verify_token(token: str) -> str | None:
-    """令牌有效时返回账号名；GitHub 明确拒绝（401/403…）时返回 None。
+    """令牌有效时返回账号名；GitHub **明确拒绝**（401/403）时返回 None。
 
     **网络故障不在这里吞掉**：`NetworkError` 会照原样冒出去。把它也归成 None，
     用户就会被告知「GitHub 拒绝了令牌」，然后去反复折腾令牌 —— 而真正的问题
     可能是代理没生效（本机实测的故障模式）。
+
+    同理，**GitHub 自身的故障也不能吞**：5xx（服务端坏了）与 429（限流）都不是
+    「令牌被拒」的证据 —— 原先 `except ApiError` 一把抓，会把它们误报成令牌问题。
+    只有明确的鉴权失败才返回 None，其余原样抛出。
     """
     try:
         return api_request("GET", "/user", token).get("login") or None
-    except ApiError:
-        return None
+    except ApiError as exc:
+        if exc.status in (401, 403):
+            return None
+        raise
 
 
 def save_token(token: str) -> Path:
@@ -722,15 +733,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"✗ tag {tag} 不存在。先打：git tag -a {tag} -m '…'", file=sys.stderr)
         return 1
 
-    if args.reupload:
-        # 重传模式：产物**没有重新构建**，所以「tag 是否指向 HEAD」无关紧要
-        # （账号改名后要修的只是清单里的绝对地址）。宽免它的代价由
-        # check_reupload_is_same_artifact 顶上：必须证明重传的是同一份产物。
-        local_hash = check_reupload_is_same_artifact(owner, repo, tag, zip_path)
-        if local_hash is None:
-            return 1
-        print(f"  ✓ 本地产物与线上 sha256 一致（{local_hash[:12]}…）→ 确认只是刷新地址")
-    else:
+    if not args.reupload:
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=ROOT,
@@ -745,6 +748,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"✗ tag {tag} 未指向 HEAD（{tag_sha} vs {head_sha}）", file=sys.stderr)
             return 1
         print("  ✓ 工作区干净，tag 指向 HEAD")
+    # --reupload（重传模式）跳过上面这条校验：产物没重新构建，它说明不了什么。
+    # 代价由 check_reupload_is_same_artifact 顶上 —— 但那一步要发网络请求，
+    # 所以放在 dry-run 之后、owner 解析之后（见下方），两个理由都在那里注明。
 
     if args.dry_run:
         # 省略 owner 时（dry-run 不读令牌）显示占位 —— 否则 "/hunter1" 看起来
@@ -772,6 +778,21 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             owner = login  # 省略 owner 时用令牌账号 —— 双击场景的默认路径
         print(f"  ✓ 令牌有效，账号：{login}")
+
+        if args.reupload:
+            # 重传模式：产物没重新构建，「tag 是否指向 HEAD」无关紧要（账号改名后
+            # 要修的只是清单里的绝对地址）。代价由这道阀门顶上：必须证明重传的是
+            # 同一份产物。
+            #
+            # ⚠ 必须在**这里**（owner 解析之后）调用，不能提到它前面：
+            # 它要拼 https://github.com/{owner}/{repo}/... 的真实下载地址，
+            # owner 为空时会拼出 `https://github.com//hunter1/...`、必然取不到，
+            # 于是 fail-closed 报「请正常发布一次」——把人指向完全错误的方向。
+            # 而「省略 owner」正是双击入口的默认路径（见 resolve_target 的说明）。
+            local_hash = check_reupload_is_same_artifact(owner, repo, tag, zip_path)
+            if local_hash is None:
+                return 1
+            print(f"  ✓ 本地产物与线上 sha256 一致（{local_hash[:12]}…）→ 确认只是刷新地址")
 
         ensure_repo(owner, repo, token, create=args.create_repo)
         if args.reupload:

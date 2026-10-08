@@ -20,10 +20,25 @@ if [[ -z "${PY:-}" ]]; then
   fi
 fi
 
+# 传给**原生工具**（python / node）的路径必须是宿主形式。
+# Git Bash 的 `/d/...` 在 MSYS 路径转换**关闭**时（`MSYS_NO_PATHCONV=1`、
+# `MSYS2_ARG_CONV_EXCL=*`）不会被转成 `D:\...`，Windows 会把 `/d/...` 当成
+# 「当前盘符根 + \d」→ `D:\d\hunter1\...`：python 报 can't open file、npx 报
+# ResolveError，整条契约门禁在该环境下必挂（而 CI 上全绿 —— 最坏的一种不一致）。
+# 有 cygpath 才转，没有（Linux/CI）则原样返回。
+native_path() {
+  local path="$1"
+  if [[ "$path" == /* ]] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$path" 2>/dev/null || printf '%s' "$path"
+  else
+    printf '%s' "$path"
+  fi
+}
+
 SNAPSHOT="$ROOT/contracts/openapi.json"
 GENERATED="$ROOT/contracts/.openapi.generated.json"
 
-"$PY" "$ROOT/scripts/export_openapi.py" --out "$GENERATED"
+"$PY" "$(native_path "$ROOT/scripts/export_openapi.py")" --out "$(native_path "$GENERATED")"
 
 if [[ "${1:-}" == "--check" ]]; then
   if [[ ! -f "$SNAPSHOT" ]]; then
@@ -48,7 +63,8 @@ fi
 
 # 前端类型生成（前端就位后自动纳入）。
 # 生成器跑在**独立的依赖树**（tools/contract-codegen）里：openapi-typescript
-# 声明 peer typescript@^5.x，而主工程用 TS 7 —— 生成器只产出 .d.ts 文本，
+# 声明 peer typescript@^5.x，而主工程用 TS 6（为 typescript-eslint 从 TS 7 降下来的，
+# 见 docs/ARCHITECTURE.md）—— 两边都不在 5.x 范围内；生成器只产出 .d.ts 文本，
 # 两边编译器版本互不影响（见该目录 package.json 的说明）。
 if [[ -f "$ROOT/frontend/package.json" ]]; then
   CODEGEN="$ROOT/frontend/tools/contract-codegen"
@@ -60,7 +76,7 @@ if [[ -f "$ROOT/frontend/package.json" ]]; then
     echo "初始化契约生成器环境（首次）…"
     (cd "$CODEGEN" && npm install --silent)
   fi
-  (cd "$CODEGEN" && npx openapi-typescript "$SNAPSHOT" -o "$TMP_TS")
+  (cd "$CODEGEN" && npx openapi-typescript "$(native_path "$SNAPSHOT")" -o "$(native_path "$TMP_TS")")
   if [[ "${1:-}" == "--check" ]]; then
     if ! diff -q "$GEN_TS" "$TMP_TS" >/dev/null 2>&1; then
       echo "✗ 前端类型漂移：schema.d.ts 与快照生成结果不一致（重跑 bash scripts/contracts.sh）。"
