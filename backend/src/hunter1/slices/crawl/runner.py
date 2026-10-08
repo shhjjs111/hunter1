@@ -142,8 +142,18 @@ class CrawlRunner:
                 ]
             crawl_all(crawlers, jobs=self._jobs, now=self._clock(), on_result=self._record)
         except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
             with self._lock:
-                self._state.error = f"{type(exc).__name__}: {exc}"
+                self._state.error = message
+                # 还停在 running 的站点一律标成 failed —— 开场就把所有站点置为
+                # running，中途异常若不收敛，界面会**永远**显示「抓取中」，
+                # 失败列表里也看不到它（用户只能重启进程脱困）。这里与
+                # `crawl_company` 的逐站收敛是两道独立的保险：那一道管单个站点，
+                # 这一道管整轮被打断。
+                for site in self._state.sites:
+                    if site.status == "running":
+                        site.status = "failed"
+                        site.error = message
         finally:
             with self._lock:
                 self._state.running = False

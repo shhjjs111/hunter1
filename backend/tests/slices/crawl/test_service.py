@@ -52,6 +52,27 @@ def _raw(title: str, url: str, *, company: str = "示例科技", **kw: object) -
     return RawJob(company=company, title=title, detail_url=url, **kw)  # type: ignore[arg-type]
 
 
+class FlakyJobs:
+    """包装真实仓储，让接下来 `failures` 次 `upsert_facts` 抛错（模拟 DB 写失败）。
+
+    真实触发形态：锁超时 / 磁盘满 / 库被另一个进程占着。除 `upsert_facts` 外
+    全部转发给真件，所以计数与查询仍是真实行为。
+    """
+
+    def __init__(self, inner: object, *, failures: int = 1) -> None:
+        self._inner = inner
+        self._failures = failures
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+    def upsert_facts(self, job: Job) -> None:
+        if self._failures > 0:
+            self._failures -= 1
+            raise RuntimeError("database is locked")
+        self._inner.upsert_facts(job)  # type: ignore[attr-defined]
+
+
 class TestCrawlCompany:
     def test_persists_fetched_jobs(self, db: Database) -> None:
         crawler = FakeCrawler(
@@ -187,6 +208,17 @@ class TestCrawlCompany:
         assert "network exploded" in result.error
         assert db.jobs().count() == 0
 
+    def test_persistence_failure_is_reported_not_raised(self, db: Database) -> None:
+        """**落库**阶段失败同样收进 error —— 原先只兜 fetch()，异常会穿出去。"""
+        crawler = FakeCrawler("示例科技", [_raw("A岗", "https://a.com/1")])
+        result = crawl_company(crawler, jobs=FlakyJobs(db.jobs()))  # type: ignore[arg-type]
+        assert result.fetched == 1  # 确实抓到了
+        assert result.created == 0  # 但没落库
+        assert result.error is not None
+        assert "locked" in result.error
+        assert result.ok is False
+        assert db.jobs().count() == 0
+
     def test_empty_result_is_fine(self, db: Database) -> None:
         result = crawl_company(FakeCrawler("示例科技", []), jobs=db.jobs())
         assert result.fetched == 0
@@ -244,6 +276,24 @@ class TestCrawlAll:
         assert db.jobs().count() == 1
         assert [r.company for r in batch.failures] == ["甲"]
         assert len(batch.results) == 2
+        assert batch.ok is False
+
+    def test_persistence_failure_does_not_stop_others(self, db: Database) -> None:
+        """DB 写失败也只算「这个站点失败」—— 后续站点必须照跑。
+
+        原先只兜 `crawler.fetch()`，一次落库异常会穿出 `crawl_all`：
+        后面的站点一条都不跑，而结果里连失败记录都没有。
+        """
+        crawlers = [
+            FakeCrawler("甲", [_raw("A岗", "https://a.com/1")]),
+            FakeCrawler("乙", [_raw("C岗", "https://b.com/1")]),
+        ]
+        batch = crawl_all(crawlers, jobs=FlakyJobs(db.jobs()))  # type: ignore[arg-type]
+
+        assert [r.error is not None for r in batch.results] == [True, False]
+        assert batch.results[0].fetched == 1  # 甲抓到了、但没写进去
+        assert [r.company for r in batch.failures] == ["甲"]
+        assert db.jobs().count() == 1  # 乙的那条照常落库
         assert batch.ok is False
 
     def test_all_ok_flag(self, db: Database) -> None:

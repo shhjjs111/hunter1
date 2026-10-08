@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import UTC, datetime
 
@@ -109,6 +110,38 @@ class TestRun:
         assert snapshot.sites == []
         assert snapshot.started_at is None
 
+    def test_interrupted_round_does_not_leave_sites_running(self, db: Database) -> None:
+        """整轮被打断时，已置为 running 的站点不能永远停在「抓取中」。
+
+        开场就把所有站点置为 `running`；中途异常若不收敛，进度页对那个站点
+        **永远**显示「抓取中」、失败列表里也看不到它 —— 用户只能重启进程
+        （这正是旧系统「静默失败」的老毛病换了个地方）。
+
+        触发点用「批次时钟抛错」：站点已置位之后、逐站结果之前的这段窗口，
+        在 `crawl_company` 已收编落库异常（见 test_service）之后，是剩下的
+        逃逸路径。断言的是**收敛行为**，不在于是哪种异常。
+        """
+        calls = {"n": 0}
+
+        def flaky_clock() -> datetime:
+            calls["n"] += 1
+            if calls["n"] == 2:  # 第一次是 started_at，第二次是整批的时间戳
+                raise RuntimeError("时钟炸了")
+            return NOW
+
+        runner = CrawlRunner(
+            crawler_factory=lambda: [FakeCrawler("甲"), FakeCrawler("乙")],
+            jobs=db.jobs(),
+            clock=flaky_clock,
+        )
+        runner.run()
+
+        snapshot = runner.snapshot()
+        assert snapshot.running is False
+        assert snapshot.error is not None and "时钟炸了" in snapshot.error
+        assert [site.status for site in snapshot.sites] == ["failed", "failed"]
+        assert [site.label for site in snapshot.failed] == ["甲", "乙"]
+
     def test_jobs_land_with_pending_capture_status(self, db: Database) -> None:
         runner = _runner(db, [FakeCrawler("甲")])
         runner.run()
@@ -127,10 +160,29 @@ class TestRun:
 
 class TestStart:
     def test_start_refuses_when_already_running(self, db: Database) -> None:
-        runner = _runner(db, [FakeCrawler("甲")])
-        # 手动占住 running，模拟「上一轮还没跑完」
-        assert runner.start() is True
-        assert runner.start() is False  # 第二轮被拒，不并发压同一个站点
+        """已在跑时第二次 `start()` 必须被拒 —— 不并发压同一个站点。
+
+        用**闸门抓取器**把第一轮钉在「正在跑」这一刻：`FakeCrawler` 是瞬时返回的，
+        第二次 `start()` 完全可能在后台线程跑完之后才执行 —— 那时返回 True 是
+        正确行为（上一轮确实结束了），断言就成了竞态误报。
+        （同 `test_router` 的 SlowCrawler 手法；这里用 Event 更确定，不靠 sleep 时长。）
+        """
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class GatedCrawler(FakeCrawler):
+            def fetch(self) -> list[RawJob]:
+                entered.set()
+                gate.wait(timeout=10)
+                return super().fetch()
+
+        runner = _runner(db, [GatedCrawler("甲")])
+        try:
+            assert runner.start() is True
+            assert entered.wait(timeout=10)  # 确认第一轮真的进了抓取
+            assert runner.start() is False  # 此刻第二轮必须被拒
+        finally:
+            gate.set()  # 放行后台线程，别把 daemon 挂在闸门上
 
     def test_start_finishes_in_background(self, db: Database) -> None:
         runner = _runner(db, [FakeCrawler("甲"), FakeCrawler("乙")])

@@ -5,6 +5,8 @@
 
 设计选择：**抓取失败不抛出，而是放进 `CrawlResult.error`**。日更要跑几十上百
 个公司，单个失败不该中断整轮；但也不能静默 —— 错误必须出现在结果里。
+同理，**落库阶段的失败也收进 `error`**：只兜 `fetch()` 的话，一次 DB 写失败
+（锁超时 / 磁盘满 / 库被占用）会穿出 `crawl_all`，后续站点一条都不跑。
 """
 
 from __future__ import annotations
@@ -84,15 +86,21 @@ def crawl_company(
         return result
 
     result.fetched = len(raw_jobs)
-    for raw in raw_jobs:
-        job_id = job_identity(detail_url=raw.detail_url, company=raw.company, title=raw.title)
-        existing = jobs.get(job_id)
-        if existing is None:
-            jobs.upsert_facts(_new_job(job_id, raw, timestamp))
-            result.created += 1
-        else:
-            jobs.upsert_facts(_merge(existing, raw, timestamp))
-            result.updated += 1
+    try:
+        for raw in raw_jobs:
+            job_id = job_identity(detail_url=raw.detail_url, company=raw.company, title=raw.title)
+            existing = jobs.get(job_id)
+            if existing is None:
+                jobs.upsert_facts(_new_job(job_id, raw, timestamp))
+                result.created += 1
+            else:
+                jobs.upsert_facts(_merge(existing, raw, timestamp))
+                result.updated += 1
+    except Exception as exc:
+        # 落库失败同样收进结果，**不穿出去**：承诺是「单站失败不中断整轮」，
+        # 一次 DB 写失败（锁超时 / 磁盘满 / 库被占用）不该让后续站点一条都不跑。
+        # created/updated 保留已完成的计数 —— 那几条确实写进去了，不是零。
+        result.error = f"{type(exc).__name__}: {exc}"
 
     return result
 
