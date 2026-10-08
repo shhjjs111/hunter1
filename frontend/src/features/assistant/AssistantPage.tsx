@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Button, Card, EmptyState, ErrorNotice, PageHeader } from "../../shared/ui";
+import { Button, Card, EmptyState, ErrorNotice, PageHeader, fieldClass } from "../../shared/ui";
 import { apiUrl } from "../../shared/api/client";
 import { streamSse } from "../../shared/streaming/sse";
 import { useConversationMessages, useConversations, useRefreshConversations } from "./api";
@@ -311,7 +311,7 @@ export function AssistantPage() {
           }}
         >
           <input
-            className="flex-1 rounded border border-field px-3 py-2"
+            className={`flex-1 ${fieldClass}`}
             placeholder="有什么想问的？"
             aria-label="输入要问助手的问题"
             value={input}

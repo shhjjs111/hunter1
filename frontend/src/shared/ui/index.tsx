@@ -15,6 +15,19 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
   );
 }
 
+/**
+ * 输入控件的外观（`input` / `textarea` 共用）。
+ *
+ * 抽出来是因为这段 class 曾在 **7 处逐字复制**（岗位搜索框、画像三行、配置页三行）——
+ * 「输入框描边 + 内边距」这个语义就有 7 份定义，换一次样式得全仓找。这里只放
+ * **外观**；宽度、等宽字体、行数这些各处不同的部分由调用方追加。
+ *
+ * `bg-surface` 不能少：Tailwind v4 的 preflight 把表单控件设成
+ * `background-color: transparent`，在页面底色的 `canvas`（浅灰）上会露出灰底 ——
+ * 抽公共类时漏掉它，搜索框就从白底变成灰底（这次实打实踩到了）。
+ */
+export const fieldClass = "rounded border border-field bg-surface px-3 py-2";
+
 type ButtonProps = {
   children: ReactNode;
   onClick?: () => void;

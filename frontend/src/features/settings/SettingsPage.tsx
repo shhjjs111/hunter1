@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { ProfileEditor } from "../scoring/components/ProfileEditor";
-import { Button, Card, ErrorNotice, PageHeader, SuccessNotice } from "../../shared/ui";
+import { Button, Card, ErrorNotice, PageHeader, SuccessNotice, fieldClass } from "../../shared/ui";
 import { useSaveSettings, useSettings, useTestConnection } from "./api";
 
 export function SettingsPage() {
@@ -77,7 +77,7 @@ export function SettingsPage() {
         >
           <Field label="Base URL" hint="任意 OpenAI 兼容端点，如 https://api.deepseek.com/v1">
             <input
-              className="w-full rounded border border-field px-3 py-2"
+              className={`w-full ${fieldClass}`}
               value={baseUrl}
               onChange={(event) => setBaseUrlEdit(event.target.value)}
               placeholder="https://api.example.com/v1"
@@ -87,7 +87,7 @@ export function SettingsPage() {
 
           <Field label="模型">
             <input
-              className="w-full rounded border border-field px-3 py-2"
+              className={`w-full ${fieldClass}`}
               value={model}
               onChange={(event) => setModelEdit(event.target.value)}
               placeholder="deepseek-chat"
@@ -102,7 +102,7 @@ export function SettingsPage() {
             <input
               id="api_key"
               type="password"
-              className="w-full rounded border border-field px-3 py-2"
+              className={`w-full ${fieldClass}`}
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               placeholder="sk-…"

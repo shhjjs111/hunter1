@@ -1,4 +1,4 @@
-import { Button, Card, ErrorNotice, SuccessNotice } from "../../../shared/ui";
+import { Button, Card, ErrorNotice, SuccessNotice, fieldClass } from "../../../shared/ui";
 import { useProfile, useSaveProfile } from "../api";
 
 // 与后端 models.py 的上限保持一致（后端是**闸门**，这里只是提前告知，免得白填一遍）。
@@ -71,7 +71,7 @@ export function ProfileEditor() {
             rows={3}
             defaultValue={(current?.keywords ?? []).join("\n")}
             placeholder={"一行一条，如：\nAI产品经理\n大模型应用"}
-            className="w-full rounded border border-field px-3 py-2 font-mono text-sm"
+            className={`w-full font-mono text-sm ${fieldClass}`}
           />
           <span className="mt-1 block text-xs text-muted">
             一行一条，最多 {MAX_KEYWORDS} 条、每条不超过 {MAX_ITEM_CHARS} 字符 ——
@@ -86,7 +86,7 @@ export function ProfileEditor() {
             rows={2}
             defaultValue={(current?.directions ?? []).join("\n")}
             placeholder={"一行一条，如：\nAgent 产品\nLLM 应用"}
-            className="w-full rounded border border-field px-3 py-2 font-mono text-sm"
+            className={`w-full font-mono text-sm ${fieldClass}`}
           />
           <span className="mt-1 block text-xs text-muted">
             一行一条，最多 {MAX_DIRECTIONS} 条、每条不超过 {MAX_ITEM_CHARS} 字符
@@ -101,7 +101,7 @@ export function ProfileEditor() {
             maxLength={MAX_SUMMARY_CHARS}
             defaultValue={current?.summary ?? ""}
             placeholder="一段话讲清你的背景与偏好，评分时会作为判断依据。"
-            className="w-full rounded border border-field px-3 py-2 text-sm"
+            className={`w-full text-sm ${fieldClass}`}
           />
           <span className="mt-1 block text-xs text-muted">最多 {MAX_SUMMARY_CHARS} 字符</span>
         </label>

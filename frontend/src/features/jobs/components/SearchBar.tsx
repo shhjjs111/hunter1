@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { fieldClass } from "../../../shared/ui";
+
 /**
  * 搜索框（受控草稿 + 提交回调）—— 输入过程不触发请求，回车/点搜索才提交。
  *
@@ -26,7 +28,7 @@ export function SearchBar({
       <input
         // 窄屏自适应：固定 w-80（320px）在 390px 宽的窗口里会连同按钮一起溢出。
         // 用 flex-1 + max-w 让它随容器收缩，按钮 shrink-0 保证不被挤没。
-        className="min-w-0 flex-1 rounded border border-field bg-surface px-3 py-2 sm:max-w-80"
+        className={`min-w-0 flex-1 sm:max-w-80 ${fieldClass}`}
         placeholder="按岗位名搜索，如：产品经理"
         aria-label="按岗位名搜索"
         value={value}
