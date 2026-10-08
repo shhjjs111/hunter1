@@ -68,4 +68,86 @@ describe("CrawlPage", () => {
     const button = await screen.findByRole("button", { name: /正在抓取/ });
     expect(button.hasAttribute("disabled")).toBe(true);
   });
+
+  it("首屏不给空白卡片（那与「一个站点都没有」长得一样）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})), // 状态请求永不返回
+    );
+    renderPage();
+    expect(await screen.findByText("正在读取抓取进度…")).toBeDefined();
+  });
+
+  it("「上一轮还在跑」的提示只在确实还在跑时出现", async () => {
+    // 后端拒绝（started:false）= 它那边有一轮在跑；此时刷新出来的状态会说
+    // running:true，提示才该出现。
+    let posted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if ((input as Request).method === "POST") {
+          posted = true;
+          return jsonResponse({ started: false });
+        }
+        return jsonResponse(posted ? RUNNING : IDLE);
+      }),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /开始抓取/ }));
+    expect(await screen.findByText(/上一轮还在跑/)).toBeDefined();
+  });
+
+  it("上一轮已经跑完时提示不滞留", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if ((input as Request)?.method === "POST") {
+          return jsonResponse({ started: false });
+        }
+        return jsonResponse(IDLE);
+      }),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /开始抓取/ }));
+
+    // 等拒绝结果真的落地（按钮重新可点）
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /开始抓取/ }).hasAttribute("disabled")).toBe(false),
+    );
+    expect(screen.queryByText(/上一轮还在跑/)).toBeNull();
+  });
+
+  it("一轮跑完（running: true → false）时失效岗位库", async () => {
+    // 不失效 ["jobs"] 的话，岗位库的 staleTime 是 30 秒 —— 用户抓完立刻回去看，
+    // 还是本轮之前的列表，看起来像「抓了但没进来」。
+    let statusCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        statusCalls += 1;
+        return jsonResponse(statusCalls <= 1 ? RUNNING : IDLE);
+      }),
+    );
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+    });
+    // 只观察不改行为：`vi.spyOn` 默认调用原实现（透传），顺带把参数记下来
+    const spy = vi.spyOn(client, "invalidateQueries");
+    render(
+      <QueryClientProvider client={client}>
+        <CrawlPage />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByRole("button", { name: /正在抓取/ });
+    // 状态轮询（1 秒一次）拿到 idle 后应失效 ["jobs"]
+    await waitFor(
+      () => {
+        const keys = spy.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
+        expect(keys).toContain('["jobs"]');
+      },
+      { timeout: 5000 },
+    );
+  });
 });

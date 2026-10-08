@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, RouterProvider, type RouteObject } from "react-router";
 
@@ -42,13 +43,18 @@ export const appRoutes: RouteObject[] = [
 ];
 
 export function AppShell({ router }: { router: ReturnType<typeof createBrowserRouter> }) {
+  // queryClient 惰性初始化，**只建一次**：在 render 里直接 makeQueryClient()
+  // 会每次渲染都换新实例（StrictMode 下更明显），所有查询缓存随之被丢弃重取。
+  const [client] = useState(makeQueryClient);
   return (
-    <QueryClientProvider client={makeQueryClient()}>
+    <QueryClientProvider client={client}>
       <RouterProvider router={router} />
     </QueryClientProvider>
   );
 }
 
 export function App() {
-  return <AppShell router={createBrowserRouter(appRoutes)} />;
+  // 同理：router 在 render 里创建过 —— 每次渲染重建会重置导航状态。
+  const [router] = useState(() => createBrowserRouter(appRoutes));
+  return <AppShell router={router} />;
 }

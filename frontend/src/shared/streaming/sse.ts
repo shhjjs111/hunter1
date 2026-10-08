@@ -24,9 +24,9 @@ export async function streamSse(
   });
 
   if (!response.ok || !response.body) {
-    // 开流前的失败（422/500）走普通 JSON 错误体；把它读出来给用户
+    // 开流前的失败（409/422/500）走普通 JSON 错误体；把它读出来给用户
     const text = await response.text().catch(() => "");
-    throw new Error(`请求失败（HTTP ${response.status}）${text ? `：${text.slice(0, 300)}` : ""}`);
+    throw new Error(`请求失败（HTTP ${response.status}）${readableDetail(text)}`);
   }
 
   const reader = response.body.getReader();
@@ -62,6 +62,31 @@ export async function streamSse(
   if (tail !== null) {
     onEvent(tail);
   }
+}
+
+/**
+ * 从开流前的错误体里取出**给人看**的原因。
+ *
+ * 后端失败给的是 `{"detail":"模型未配置：…"}`（可读原因）；直接把整段 JSON
+ * slice 出去会连花括号一起甩给用户（`请求失败（HTTP 409）：{"detail":"…"}`）。
+ * 与 `shared/api/errors.ts` 的 apiErrorMessage 同一取舍：有 detail 就取它。
+ */
+function readableDetail(text: string): string {
+  if (!text) {
+    return "";
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === "object" && "detail" in parsed) {
+      const detail = (parsed as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim() !== "") {
+        return `：${detail}`;
+      }
+    }
+  } catch {
+    // 不是 JSON —— 原样截断展示
+  }
+  return `：${text.slice(0, 300)}`;
 }
 
 function parseBlock(block: string): Record<string, unknown> | null {

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
@@ -21,11 +22,28 @@ async function fetchStatus(): Promise<CrawlStatus> {
  * （旧界面对快照的用法一致：开始抓取后才密集拉。）
  */
 export function useCrawlStatus() {
-  return useQuery({
+  const queryClient = useQueryClient();
+  const wasRunning = useRef(false);
+  const query = useQuery({
     queryKey: ["crawl", "status"],
     queryFn: fetchStatus,
     refetchInterval: (query) => (query.state.data?.running ? POLL_MS : false),
   });
+
+  // 一轮抓取从「进行中」变成「结束」时失效岗位库。
+  //
+  // 抓完一轮岗位库的内容已经变了，而 `["jobs"]` 的 staleTime 是 30 秒：不失效的话，
+  // 用户抓完立刻回岗位库看到的还是本轮之前的列表 —— 看起来像「抓了但没进来」，
+  // 于是再抓一轮，白给站点添一次压力。
+  const running = query.data?.running ?? false;
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    }
+    wasRunning.current = running;
+  }, [running, queryClient]);
+
+  return query;
 }
 
 export function useStartCrawl() {

@@ -61,4 +61,18 @@ describe("JobsTable", () => {
     expect(scoring.hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "记录投递" }).hasAttribute("disabled")).toBe(false);
   });
+
+  it("每行的可访问描述带上该行岗位（屏幕阅读器不该只念一串「评分」）", () => {
+    // 列表里每行的按钮同名，光靠名字分不清是哪一行。可访问名保持不变
+    // （「评分」—— WCAG 2.5.3 要求可访问名包含可见标签），行信息经
+    // `aria-describedby` 补上，两边都不吃亏。
+    render(<JobsTable jobs={[JOB]} onApply={() => {}} onScore={() => {}} />);
+    for (const name of ["评分", "记录投递"]) {
+      const button = screen.getByRole("button", { name });
+      const describedBy = button.getAttribute("aria-describedby");
+      expect(describedBy, `${name} 缺 aria-describedby`).toBeTruthy();
+      const target = document.getElementById(describedBy!);
+      expect(target?.textContent).toContain("AI产品经理");
+    }
+  });
 });

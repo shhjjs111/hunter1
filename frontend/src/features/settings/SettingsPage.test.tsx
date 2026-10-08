@@ -35,6 +35,33 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("加载期间用户先敲进去的内容不会被回填覆盖", async () => {
+    // 慢网络下「页面一打开就开始输入」是常态。回填时若无视用户已经动过的字段，
+    // 刚敲的地址会在响应到达那一刻被服务端旧值吃掉。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return jsonResponse(SETTINGS);
+      }),
+    );
+
+    renderPage();
+    const baseUrl = (await screen.findByLabelText(/Base URL/)) as HTMLInputElement;
+    fireEvent.change(baseUrl, { target: { value: "https://typed.example.com/v1" } });
+
+    release();
+    // 等回填确实发生过（没被用户动过的 model 被填上服务器值）……
+    const model = (await screen.findByLabelText(/模型/)) as HTMLInputElement;
+    await waitFor(() => expect(model.value).toBe("deepseek-chat"));
+    // ……同时用户敲过的 base_url 保持原样
+    expect(baseUrl.value).toBe("https://typed.example.com/v1");
+  });
+
   it("用户改过的字段不会被 refetch 偷偷填回服务器旧值", async () => {
     let payload: unknown = SETTINGS;
     vi.stubGlobal(

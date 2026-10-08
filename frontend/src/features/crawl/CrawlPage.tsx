@@ -34,18 +34,27 @@ export function CrawlPage() {
       />
 
       {status.isError && <ErrorNotice message={(status.error as Error).message} />}
-      {start.data && !start.data.started && (
+      {/* 「上一轮还在跑」只在**确实还在跑**时显示：抓取结束后 status 会变成
+          running=false，这条提示必须跟着消失（否则它会永远挂在页面上，用户以为
+          自己的点击被永久拒绝了）。 */}
+      {start.data && !start.data.started && running && (
         <p className="mb-4 text-sm text-amber-700">上一轮还在跑，未启动新的。</p>
       )}
       {start.isError && <ErrorNotice message={(start.error as Error).message} />}
 
-      {snapshot && snapshot.sites.length === 0 ? (
+      {snapshot === undefined ? (
+        // 首屏/读取失败时别渲染一张空白 Card —— 那与「跑过但一个站点都没有」
+        // 看起来一样。
+        <Card>
+          <p className="px-4 py-6 text-sm text-slate-500">正在读取抓取进度…</p>
+        </Card>
+      ) : snapshot.sites.length === 0 ? (
         <EmptyState>
           还没有跑过抓取。点右上角「开始抓取」跑一轮；站点来自后端注册表。
         </EmptyState>
       ) : (
         <Card>
-          {snapshot && <SiteProgressList sites={snapshot.sites} />}
+          <SiteProgressList sites={snapshot.sites} />
         </Card>
       )}
 

@@ -45,7 +45,11 @@ export function JobsTable({
         <tbody>
           {jobs.map((job) => (
             <tr key={job.id} className="border-b border-slate-100">
-              <td className="py-2 pr-4">
+              {/* 行内按钮的**可访问名**保持「评分 / 记录投递」（不覆盖可见文案：
+                  WCAG 2.5.3 要求可访问名包含可见标签），岗位信息经
+                  `aria-describedby` 补上 —— 屏幕阅读器会念「评分，AI产品经理 字节跳动」，
+                  视觉用户靠行位置区分，两边都不吃亏。 */}
+              <td className="py-2 pr-4" id={`job-${job.id}-label`}>
                 <a
                   className="text-blue-700 hover:underline"
                   href={job.detail_url}
@@ -73,6 +77,7 @@ export function JobsTable({
                     className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
                     disabled={scoringId === job.id}
                     onClick={() => onScore(job.id)}
+                    aria-describedby={`job-${job.id}-label`}
                   >
                     {scoringId === job.id ? "评分中…" : "评分"}
                   </button>
@@ -81,6 +86,7 @@ export function JobsTable({
                     className="rounded border border-slate-300 px-3 py-1 hover:bg-slate-100 disabled:opacity-50"
                     disabled={applyingId === job.id}
                     onClick={() => onApply(job.id)}
+                    aria-describedby={`job-${job.id}-label`}
                   >
                     {applyingId === job.id ? "记录中…" : "记录投递"}
                   </button>

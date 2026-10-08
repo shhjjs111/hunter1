@@ -1,10 +1,45 @@
+import { useRef, useState } from "react";
+
 import { Button, Card, EmptyState, ErrorNotice, PageHeader, Tag } from "../../shared/ui";
 import { STAGE_LABELS, STAGE_ORDER, useApplications, useChangeStage, useDeleteApplication } from "./api";
+
+/**
+ * 把 ISO 时间戳按**本地时区**格式化为 YYYY-MM-DD。
+ *
+ * 不能用 `updated_at.slice(0, 10)`：那取的是 UTC 日期，UTC+8 的
+ * 00:00–07:59 会显示成前一天。后端发的是带时区的 ISO 串，交给 Date 本地化即可。
+ */
+function formatDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 
 export function ApplicationsPage() {
   const applications = useApplications();
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
+
+  // 阶段选择的**乐观值**：不设它的话，用户在下拉里选中的值在请求回来前会被
+  // 服务端旧值覆盖（视觉回弹），失败时选择被静默撤销 —— 两种都像「点了没反应」。
+  // 失败时清掉草稿，让选择回落到服务端真值，并保留上面的 ErrorNotice 提示。
+  const [stageDraft, setStageDraft] = useState<Record<string, string>>({});
+  // 每行「最近一次提交的阶段」。并发改同一行时由它裁定谁能撤销草稿：
+  // 没有它的话，先失败的那次 onError 会删掉后一次刚写入的乐观值（下拉框回弹到
+  // 旧值，而用户刚选的新值看起来被系统吞了）。
+  const latestRequest = useRef<Record<string, string>>({});
+
+  function clearDraft(applicationId: string) {
+    delete latestRequest.current[applicationId];
+    setStageDraft((prev) => {
+      const next = { ...prev };
+      delete next[applicationId];
+      return next;
+    });
+  }
 
   return (
     <>
@@ -48,14 +83,46 @@ export function ApplicationsPage() {
                     <td className="px-4 py-2">
                       <select
                         className="rounded border border-slate-300 bg-white px-2 py-1"
-                        value={item.stage}
-                        onChange={(event) =>
-                          changeStage.mutate({
-                            applicationId: item.id,
-                            stage: event.target.value,
-                            note: item.note ?? undefined,
-                          })
-                        }
+                        aria-label={`「${item.title}」（${item.company}）的投递阶段`}
+                        value={stageDraft[item.id] ?? item.stage}
+                        onChange={(event) => {
+                          const stage = event.target.value;
+                          latestRequest.current[item.id] = stage;
+                          setStageDraft((prev) => ({ ...prev, [item.id]: stage }));
+                          changeStage.mutate(
+                            {
+                              applicationId: item.id,
+                              stage,
+                              note: item.note ?? undefined,
+                            },
+                            {
+                              // 成功：这条草稿已经等于服务端真值 → 交还给查询数据。
+                              // 不清理的话它会**永久**压住后续 refetch 的结果
+                              // （包括在别处改出来的新阶段）。
+                              onSuccess: () => {
+                                if (latestRequest.current[item.id] === stage) {
+                                  clearDraft(item.id);
+                                }
+                              },
+                              // 失败：撤销乐观值，选择回到服务端真值（错误另有
+                              // ErrorNotice）。只在这仍是**最新意图**时撤销 ——
+                              // 否则会把用户后来那次的选择一起抹掉。
+                              //
+                              // 实测说明：@tanstack/react-query v5 的
+                              // `MutationObserver.mutate()` 会在发起新调用前
+                              // `removeObserver`，所以同一行连改两次时**前一次的回调
+                              // 根本不会被调用**、这条守卫在今天不可达。留着它是因为
+                              // 「最新意图」的判断本身是这段逻辑的正确性条件：
+                              // 一旦换用 mutationCache / 换回 v4 语义，缺了它就真会
+                              // 把用户后一次的选择抹掉。
+                              onError: () => {
+                                if (latestRequest.current[item.id] === stage) {
+                                  clearDraft(item.id);
+                                }
+                              },
+                            },
+                          );
+                        }}
                       >
                         {STAGE_ORDER.map((stage) => (
                           <option key={stage} value={stage}>
@@ -64,7 +131,7 @@ export function ApplicationsPage() {
                         ))}
                       </select>
                     </td>
-                    <td className="px-4 py-2 text-slate-500">{item.updated_at.slice(0, 10)}</td>
+                    <td className="px-4 py-2 text-slate-500">{formatDate(item.updated_at)}</td>
                     <td className="px-4 py-2 text-slate-500">{item.note ?? "—"}</td>
                     <td className="px-4 py-2 text-right">
                       <Button

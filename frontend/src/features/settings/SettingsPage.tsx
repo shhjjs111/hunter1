@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { ProfileEditor } from "../scoring/components/ProfileEditor";
 import { Button, Card, ErrorNotice, PageHeader, SuccessNotice } from "../../shared/ui";
@@ -9,27 +9,20 @@ export function SettingsPage() {
   const save = useSaveSettings();
   const probe = useTestConnection();
 
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
+  // 表单值：`null` = 「用户还没动过这个字段」→ 显示服务端值。
+  //
+  // 用**派生**而不是「effect 回填」：effect 里 setState 会多一轮渲染（eslint 的
+  // `react-hooks/set-state-in-effect` 也在拦这个模式），而且必须靠「已回填」标记
+  // 加 `touched` 才能不被 refetch 覆盖 —— 慢网络下「页面一打开就输入」是常态，
+  // 回填一旦盖住用户刚敲的内容就是在吃数据。派生写法天生满足两条：
+  // - 没动过的字段永远跟随服务端（首次加载、保存后 refetch 都对）；
+  // - 动过的字段以用户为准，包括**清空**（`""` 是有效草稿，不是「没动过」——
+  //   写 `value || server` 那种「首个非空锁死」才是真错，用户清不掉的）。
+  const [baseUrlEdit, setBaseUrlEdit] = useState<string | null>(null);
+  const [modelEdit, setModelEdit] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
-  const hydrated = useRef(false);
-
-  // 把读到的配置回填表单 —— **只回填一次**。
-  //
-  // 必须用「已回填」标记，不能写成 `setX(current => current || server)`：
-  // 后者表面上是「不覆盖用户输入」，实际是「首个非空值永久锁定」——
-  // 用户清空某字段后，`current` 变成 ""，任何一次 refetch（保存后 invalidate、
-  // 窗口焦点回归）都会把服务器旧值**静默填回去**，用户以为自己清掉了。
-  //
-  // 也不能只靠依赖数组：`settings.data` 每次 refetch 都是新对象，引用必变。
-  useEffect(() => {
-    if (!settings.data || hydrated.current) {
-      return;
-    }
-    hydrated.current = true;
-    setBaseUrl(settings.data.base_url);
-    setModel(settings.data.model);
-  }, [settings.data]);
+  const baseUrl = baseUrlEdit ?? settings.data?.base_url ?? "";
+  const model = modelEdit ?? settings.data?.model ?? "";
 
   return (
     <>
@@ -52,6 +45,14 @@ export function SettingsPage() {
       {settings.data?.broken && (
         <div className="mb-4">
           <ErrorNotice message="已保存的模型配置不合法（可能被改坏或来自旧版本）。下方表单已留空，重新填写并保存即可恢复。" />
+        </div>
+      )}
+
+      {/* 非致命提示（如明文 http:// 指向公网）：值仍可用，但用户该知道 Key 会
+          明文过网。后端算的，前端只显示 —— 判断逻辑只有一处。 */}
+      {settings.data?.warning && (
+        <div className="mb-4">
+          <ErrorNotice message={settings.data.warning} />
         </div>
       )}
 
@@ -78,7 +79,7 @@ export function SettingsPage() {
             <input
               className="w-full rounded border border-slate-300 px-3 py-2"
               value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
+              onChange={(event) => setBaseUrlEdit(event.target.value)}
               placeholder="https://api.example.com/v1"
               required
             />
@@ -88,7 +89,7 @@ export function SettingsPage() {
             <input
               className="w-full rounded border border-slate-300 px-3 py-2"
               value={model}
-              onChange={(event) => setModel(event.target.value)}
+              onChange={(event) => setModelEdit(event.target.value)}
               placeholder="deepseek-chat"
               required
             />

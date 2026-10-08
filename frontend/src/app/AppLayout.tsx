@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router";
+import { NavLink, Outlet, useLocation } from "react-router";
 
 import { ErrorBoundary } from "./ErrorBoundary";
 
@@ -22,6 +22,10 @@ const NAV = [
 ];
 
 export function AppLayout() {
+  // ErrorBoundary 的 key 绑当前路径：路由一变就重建，重置 error 状态。
+  // 否则任一页面抛错后 state.error 永久有效（AppLayout 不随子路由卸载），
+  // 切到别的页面仍显示「这个页面出错了」，唯一复位路径是手点「重试」。
+  const location = useLocation();
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="shrink-0 border-b border-slate-200 bg-white md:w-48 md:border-r md:border-b-0">
@@ -49,7 +53,7 @@ export function AppLayout() {
         </nav>
       </aside>
       <main className="min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8">
-        <ErrorBoundary>
+        <ErrorBoundary key={location.pathname}>
           <Outlet />
         </ErrorBoundary>
       </main>

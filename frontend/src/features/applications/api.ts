@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
+import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type ApplicationSummary = components["schemas"]["ApplicationSummary"];
@@ -26,9 +27,9 @@ export const STAGE_ORDER: ApplicationStage[] = [
 ];
 
 async function fetchApplications(): Promise<ApplicationSummary[]> {
-  const { data, error } = await api.GET("/api/applications");
+  const { data, error, response } = await api.GET("/api/applications");
   if (error || !data) {
-    throw new Error("加载投递记录失败");
+    throw new Error(apiErrorMessage(error, "加载投递记录失败", response));
   }
   return data.items;
 }
@@ -48,7 +49,7 @@ export function useChangeStage() {
         body: { stage: input.stage as ApplicationStage, note: input.note ?? null },
       });
       if (error || !data) {
-        throw new Error(`改阶段失败（HTTP ${response.status}）`);
+        throw new Error(apiErrorMessage(error, "改阶段失败", response));
       }
       return data;
     },
@@ -66,7 +67,7 @@ export function useDeleteApplication() {
         params: { path: { application_id: applicationId } },
       });
       if (error) {
-        throw new Error(`删除失败（HTTP ${response.status}）`);
+        throw new Error(apiErrorMessage(error, "删除失败", response));
       }
     },
     onSuccess: () => {
@@ -89,7 +90,7 @@ export function useApplyToJob() {
         body: { job_id: jobId },
       });
       if (error || !data) {
-        throw new Error(`记录投递失败（HTTP ${response.status}）`);
+        throw new Error(apiErrorMessage(error, "记录投递失败", response));
       }
       return data;
     },

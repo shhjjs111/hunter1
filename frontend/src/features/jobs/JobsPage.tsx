@@ -46,11 +46,10 @@ export function JobsPage() {
         />
       )}
 
-      <Pager
-        page={jobs.data?.page ?? 1}
-        hasNext={jobs.data?.has_next ?? false}
-        onPageChange={setPage}
-      />
+      {/* 页码用**本地 state**，不用 `jobs.data.page`：placeholderData 保留上一页
+          数据时服务端回的 page 仍是旧值，Pager 据此把「下一页」算成同一个目标页 ——
+          连点第二下 setPage 值不变、静默无响应（要等首个请求回来才恢复）。 */}
+      <Pager page={page} hasNext={jobs.data?.has_next ?? false} onPageChange={setPage} />
 
       {apply.isError && (
         <p className="mt-2 text-sm text-red-600">{(apply.error as Error).message}</p>

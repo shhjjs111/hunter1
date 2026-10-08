@@ -87,4 +87,16 @@ describe("streamSse", () => {
     );
     await expect(streamSse("/x", {}, () => {})).rejects.toThrow(/HTTP 500.*模型未配置/);
   });
+
+  it("错误体里的 detail 被取出，不把原始 JSON 甩给用户", async () => {
+    // 直接 slice 原始 JSON 会得到 `请求失败（HTTP 409）：{"detail":"…"}`——
+    // 花括号一起给用户。这里断言消息里**不含**那段 JSON 包装。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"detail":"画像未配置：请先去配置页"}', { status: 409 })),
+    );
+    await expect(streamSse("/x", {}, () => {})).rejects.toThrow(
+      "请求失败（HTTP 409）：画像未配置：请先去配置页",
+    );
+  });
 });
