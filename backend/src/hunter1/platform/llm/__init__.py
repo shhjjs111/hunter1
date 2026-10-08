@@ -25,6 +25,7 @@ import httpx
 from hunter1.domain.assistant import Message, ToolCall, parse_tool_calls, to_openai_messages
 from hunter1.domain.llm import LLMError, LLMResponse, StreamComplete, TextDelta
 from hunter1.platform.llm.streaming import parse_sse_lines
+from hunter1.platform.text import redact_secret
 
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 STRUCTURED_MODES = ("json_schema", "json_object", "none")
@@ -126,6 +127,13 @@ class OpenAICompatibleClient:
         parsed = urlsplit(cleaned_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError(f"invalid base_url: {base_url!r}")
+        # `netloc` 非空不代表端口合法：`https://api.example.com:notaport/v1` 照样
+        # 通过上面的检查，却会在 httpx 建请求时抛 `InvalidURL`。在这里提前挡住 ——
+        # 构造期失败（配置页能显示原因）胜过请求期失败（用户看到 500）。
+        try:
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError(f"invalid base_url: {base_url!r}") from exc
         if not (api_key or "").strip():
             raise ValueError("api_key is required")
         if not (model or "").strip():
@@ -270,7 +278,9 @@ class OpenAICompatibleClient:
                             messages=messages, tools=tools, max_tokens=max_tokens
                         )
                         return
-                    raise LLMError(f"http_{response.status_code}", _short(response.text))
+                    raise LLMError(
+                        f"http_{response.status_code}", _short(self._redact(response.text))
+                    )
 
                 content_type = response.headers.get("content-type", "")
                 if "event-stream" in content_type.lower():
@@ -281,6 +291,12 @@ class OpenAICompatibleClient:
                         yield event
                     return
                 body = response.read()
+        except httpx.InvalidURL as exc:
+            # 建连前 URL 非法（坏端口、坏 IDNA 主机名…）。`InvalidURL` 的 mro 是
+            # `InvalidURL → Exception` —— **不是** `httpx.HTTPError`，只 catch HTTPError
+            # 会让它裸穿到调用方（只认 LLMError）→ 用户配置里的畸形 URL 变成 500。
+            # 重试无意义：URL 不会自己变好。
+            raise LLMError("invalid_url", _short(str(exc))) from exc
         except httpx.HTTPError as exc:
             if yielded:
                 # 流已产出内容 —— 重发必然重复。如实抛错，由调用方决定半截结果怎么办
@@ -412,6 +428,10 @@ class OpenAICompatibleClient:
 
     # ---- 传输 ----
 
+    def _redact(self, text: str) -> str:
+        """把厂商回显在错误体里的 API Key 抹掉（见 `platform.text.redact_secret`）。"""
+        return redact_secret(text, self.api_key)
+
     def _post(self, payload: dict[str, Any], *, reject_mode: str | None = None) -> dict[str, Any]:
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -423,6 +443,12 @@ class OpenAICompatibleClient:
         for attempt in range(1, self.max_retries + 1):
             try:
                 response = self._client.post(url, headers=headers, json=payload)
+            except httpx.InvalidURL as exc:
+                # `InvalidURL` 的 mro 是 `InvalidURL → Exception` —— **不是**
+                # `httpx.HTTPError`。只 catch HTTPError 会让它裸穿（调用方只认
+                # `LLMError`）：配置页存下的畸形 URL 于是变成 500 + traceback。
+                # 重试没有意义 —— URL 不会自己变好。
+                raise LLMError("invalid_url", _short(str(exc))) from exc
             except httpx.HTTPError:
                 code = "transport_failed"
                 if attempt >= self.max_retries:
@@ -452,8 +478,8 @@ class OpenAICompatibleClient:
                 ):
                     if _looks_like_format_rejection(response.text):
                         self._rejected_modes.add(reject_mode)
-                    raise LLMError("format_unsupported", _short(response.text))
-                raise LLMError(f"http_{response.status_code}", _short(response.text))
+                    raise LLMError("format_unsupported", _short(self._redact(response.text)))
+                raise LLMError(f"http_{response.status_code}", _short(self._redact(response.text)))
 
             try:
                 data = response.json()

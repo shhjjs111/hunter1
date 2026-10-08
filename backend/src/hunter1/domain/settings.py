@@ -35,6 +35,13 @@ class LLMSettings(_Config):
         parts = urlsplit(cleaned)
         if parts.scheme not in {"http", "https"} or not parts.netloc:
             raise ValueError(f"base_url 必须是 http(s) 地址，收到 {value!r}")
+        # 端口必须可解析：`https://api.example.com:notaport/v1` 的 netloc 非空，
+        # 能通过上面的检查并**存进库**，却会在发出请求时抛 httpx.InvalidURL ——
+        # 到那一步就只剩 500。在这里挡住，用户当场看到 422 与原因。
+        try:
+            _ = parts.port
+        except ValueError as exc:
+            raise ValueError(f"base_url 的端口不合法：{value!r}") from exc
         return cleaned
 
     @field_validator("model")

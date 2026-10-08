@@ -15,6 +15,7 @@ from typing import ClassVar
 import httpx
 import pytest
 
+from hunter1.domain.assistant import Message, Role
 from hunter1.platform.llm import (
     PROVIDER_PRESETS,
     LLMError,
@@ -512,3 +513,66 @@ class TestFormatRejectionHeuristic:
         second.close()
 
         assert seen == [None], f"应直接用 none 模式，不再发多余请求；实际 {seen}"
+
+
+class TestInvalidUrlStaysLlmError:
+    """`httpx.InvalidURL` 不是 `httpx.HTTPError` 子类 —— 必须翻译成 `LLMError`。
+
+    `InvalidURL` 的 mro 是 `InvalidURL → Exception`，只 catch `HTTPError` 会让它裸穿；
+    调用方（scoring / assistant / settings）只认 `LLMError`，于是用户配置里的畸形
+    URL 变成 500 + traceback，而不是一条可读的失败。
+    """
+
+    def test_bad_port_is_rejected_at_construction(self) -> None:
+        """构造期就挡住坏端口 —— 配置页能当场显示原因，胜过请求期 500。"""
+        with pytest.raises(ValueError):
+            OpenAICompatibleClient(
+                base_url="https://api.example.com:notaport/v1", api_key="k", model="m"
+            )
+
+    def test_invalid_url_during_send_is_llm_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.InvalidURL("bad port in url")
+
+        with pytest.raises(LLMError) as excinfo:
+            _client(handler).complete(system_prompt="s", user_prompt="u")
+        assert excinfo.value.code == "invalid_url"
+
+    def test_invalid_url_during_stream_is_llm_error(self) -> None:
+        """流式路径同样不能把 `InvalidURL` 漏出去（助手走的就是这条路）。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.InvalidURL("bad host in url")
+
+        client = _client(handler)
+        with pytest.raises(LLMError) as excinfo:
+            list(
+                client.stream_with_tools(messages=[Message(role=Role.USER, content="hi")], tools=[])
+            )
+        assert excinfo.value.code == "invalid_url"
+
+
+class TestApiKeyRedaction:
+    """厂商 4xx 体回显 Authorization 时，`LLMError` 文案不能含完整密钥。"""
+
+    def test_vendor_echoed_key_is_masked(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, text='{"error":"invalid api key: sk-secret-abc123"}')
+
+        with pytest.raises(LLMError) as excinfo:
+            _client(handler, api_key="sk-secret-abc123").complete(
+                system_prompt="s", user_prompt="u"
+            )
+        assert "sk-secret-abc123" not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
+
+    def test_vendor_echoed_key_is_masked_in_stream(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, text="Authorization: Bearer sk-secret-abc123")
+
+        client = _client(handler, api_key="sk-secret-abc123")
+        with pytest.raises(LLMError) as excinfo:
+            list(
+                client.stream_with_tools(messages=[Message(role=Role.USER, content="hi")], tools=[])
+            )
+        assert "sk-secret-abc123" not in str(excinfo.value)
