@@ -114,10 +114,17 @@ echo "== 示例：静态检查 (ruff check) =="
 echo "== 示例：类型检查 (pyright) =="
 (cd "$ROOT/backend" && "$PY" -m pyright --pythonpath "$PY_NATIVE" ../examples)
 
-# 离线冒烟：不依赖网络的三份示例要**真能跑通**。静态检查抓不到运行时崩溃
-# （上面那个 GBK 问题就是典型）。`demo_crawl` 需要真实站点，不在此列。
+# 离线冒烟：不依赖网络的示例要**真能跑通**。静态检查抓不到运行时崩溃
+# （上面那个 GBK 问题就是典型）。
+#
+# `demo_crawl` 也在列 —— 它自带 `--offline`（内联 HTML，不联网）。此前以
+# 「需要真实站点」为由被排除，而它恰好是**唯一已经腐化**的示例：本地 SPEC 的
+# 选择器与 `slices/crawl/sites.py` 的注册表早已漂移（`div.enterprise-list-item`
+# vs `.enterprise-list-item` / `.enterprise-list-title`）。没人跑它，也就没人
+# 发现它坏了一年 —— 这正是「不覆盖的示例最先烂掉」的实例。
 echo "== 示例：离线冒烟 =="
 (cd "$ROOT" && "$PY" examples/demo_assistant.py > /dev/null)
+(cd "$ROOT" && "$PY" examples/demo_crawl.py --offline > /dev/null)
 (cd "$ROOT" && "$PY" examples/demo_persist.py > /dev/null)
 (cd "$ROOT" && "$PY" examples/demo_sites.py --offline > /dev/null)
 

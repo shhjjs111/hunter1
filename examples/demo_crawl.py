@@ -8,8 +8,11 @@
 演示 M2 抓取层的完整链路：HttpFetcher（限流/重试/UA）→ StaticHtmlCrawler
 （声明式选择器）→ crawl_company 用例（幂等 upsert）→ SQLite。
 
-注意：本演示用**应届生**的首页企业列表。它是服务端渲染的静态列表，
-适合验证链路；但真实「逐站适配」通常还需要为每个站调整选择器与分页规则。
+**规格直接取自站点注册表**（`slices/crawl/sites.py` 的 `yingjiesheng`），不在这里
+再抄一份。本地副本会随站点改版悄悄腐化 —— 实测这份示例的
+`div.enterprise-list-item` / `a` 与注册表的 `.enterprise-list-item` /
+`.enterprise-list-title` 早已对不上，而它恰好是唯一没进离线冒烟的示例：
+没人跑，也就没人发现。现在规格只有一处定义，示例跟着注册表一起被测试覆盖。
 """
 
 from __future__ import annotations
@@ -22,20 +25,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src
 
 from hunter1.platform.db import Database
 from hunter1.platform.fetch.http import FetchError, HttpFetcher
-from hunter1.slices.crawl import ListPageSpec, StaticHtmlCrawler, crawl_company
+from hunter1.slices.crawl import SITES, StaticHtmlCrawler, crawl_company
 
-TARGET_URL = "https://www.yingjiesheng.com/"
-SPEC = ListPageSpec(
-    url_template=TARGET_URL,
-    item_selector="div.enterprise-list-item",
-    title_selector="a",
-    max_pages=1,
-)
+#: 演示用的站点 key —— 应届生首页企业列表（服务端渲染的静态列表，适合验证链路）。
+TARGET_KEY = "yingjiesheng"
+SITE = SITES[TARGET_KEY]
+TARGET_URL = SITE.careers_url
+SPEC = SITE.spec
 
+# 离线自检用的内联页面：必须与**注册表里的选择器**对得上，否则这个自检会在
+# 改版后变成「永远抓 0 条」。结构照 `tests/slices/crawl/fixtures/yingjiesheng.html` 写。
 OFFLINE_HTML = """
 <html><body>
-  <div class="enterprise-list-item"><a href="/job/1">某公司2027校园招聘</a></div>
-  <div class="enterprise-list-item"><a href="/job/2">另一公司管培生计划</a></div>
+  <div class="enterprise-list-item">
+    <a href="/job/1"><span class="enterprise-list-title">某公司2027校园招聘</span></a>
+  </div>
+  <div class="enterprise-list-item">
+    <a href="/job/2"><span class="enterprise-list-title">另一公司管培生计划</span></a>
+  </div>
 </body></html>
 """
 
@@ -54,7 +61,10 @@ def main(argv: list[str]) -> int:
     if offline:
         print("[离线模式] 使用内联 HTML，不联网")
         crawler: StaticHtmlCrawler = StaticHtmlCrawler(
-            company="应届生(离线)", careers_url=TARGET_URL, spec=SPEC, fetcher=_OfflineFetcher()
+            company=f"{SITE.label}(离线)",
+            careers_url=TARGET_URL,
+            spec=SPEC,
+            fetcher=_OfflineFetcher(),
         )
         result = crawl_company(crawler, jobs=db.jobs())
         fetcher = None
@@ -62,7 +72,7 @@ def main(argv: list[str]) -> int:
         print(f"[联网模式] 目标: {TARGET_URL}")
         fetcher = HttpFetcher(timeout=20, retries=2)
         crawler = StaticHtmlCrawler(
-            company="应届生", careers_url=TARGET_URL, spec=SPEC, fetcher=fetcher
+            company=SITE.label, careers_url=TARGET_URL, spec=SPEC, fetcher=fetcher
         )
         try:
             result = crawl_company(crawler, jobs=db.jobs())
