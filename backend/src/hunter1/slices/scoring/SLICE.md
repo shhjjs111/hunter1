@@ -68,6 +68,14 @@
 | `GET /profile` | 200 + `profile: null` + `warning` | 必须能打开表单去修；返 500 则永远修不了 |
 | `POST /scoring/{id}` | 409 + 原因 | 状态未就绪就不该往下走 |
 
+## 岗位描述上限（同一道闸门的另一半）
+
+画像有上限、JD 此前**没有** —— 而 JD 是两者中更大的那个输入（实测 10 万字符 JD →
+100,138 字符提示词，闸门恰好用错地方）。现在 `build_user_prompt` 一律经
+`platform.text.fence_untrusted_jd`：先剥掉围栏标记（否则 JD 正文写一行 `JD>>>`
+就能提前闭合围栏、把后续文本伪装成画像 / 指令段落），再按 `MAX_JD_CHARS`（1500）
+截断。求职助手回灌 JD 时用**同一份实现**（`job_tools.JD_PREVIEW_LIMIT`）。
+
 ## 独立验证命令
 
 ```bash
