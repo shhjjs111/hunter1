@@ -605,6 +605,7 @@ def regenerate_manifest(owner: str, repo: str, tag: str) -> Path:
     out.write_text(
         json.dumps(manifest.model_dump(exclude_none=True), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",  # 见 export_openapi.py：产物不该由平台决定行尾
     )
     print(f"  ✓ 清单已用真实地址重新生成：{manifest.assets[0].url}")
     return out

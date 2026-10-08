@@ -202,6 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     out.write_text(
         json.dumps(manifest.model_dump(exclude_none=True), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",  # 见 export_openapi.py：产物不该由平台决定行尾
     )
 
     warning = warn_if_placeholder(args.url_base)

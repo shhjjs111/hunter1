@@ -47,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     out.write_text(
         json.dumps(spec, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+        # 行尾固定成 LF：`.gitattributes` 声明 `* text=auto eol=lf`，而 Python 在
+        # Windows 上默认把换行翻成 CRLF —— 快照在**工作树**里是 CRLF、在 git blob
+        # 里是 LF。于是 fresh checkout（LF）后的第一次 `contracts.sh --check` 会拿
+        # LF 快照去比 CRLF 生成物 → 判成「漂移」，而它给的修复动作（重跑导出）写出的
+        # 仍是 CRLF、提交时被 git 归一化掉 —— 本机红、CI 绿，且按提示修不掉。
+        # 判据是内容等价，行尾就不该由平台决定。
+        newline="\n",
     )
 
     paths = len(spec.get("paths", {}))  # type: ignore[arg-type]
