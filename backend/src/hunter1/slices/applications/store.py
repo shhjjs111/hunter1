@@ -23,8 +23,20 @@ class ApplicationStore:
         self._db = db
 
     def upsert(self, application: Application) -> None:
-        """存在即更新，否则插入。"""
+        """存在即更新，否则插入（按**主键**）。"""
         self._db.applications().upsert(application)
+
+    def insert_for_job(self, application: Application) -> Application:
+        """插入一条投递；该岗位已有记录时返回既有的那条（并发下也是幂等的）。
+
+        竞态兜底在数据库（`UNIQUE(job_id)`）—— 见 `platform/db/applications.py`
+        的 `insert_for_job`。`upsert` 按主键判断，挡不住「两个请求各生成新 uuid」。
+        """
+        return self._db.applications().insert_for_job(application)
+
+    def update_existing(self, application: Application) -> bool:
+        """只更新已存在的行；行已被删则返回 False（**不**把它插回去）。"""
+        return self._db.applications().update_existing(application)
 
     def get(self, application_id: str) -> Application | None:
         return self._db.applications().get(application_id)
@@ -36,6 +48,10 @@ class ApplicationStore:
 
     def by_job(self, job_id: str) -> list[Application]:
         return self._db.applications().by_job(job_id)
+
+    def by_job_prefix(self, prefix: str, *, limit: int = 20) -> list[Application]:
+        """按岗位 id 前缀查投递（助手看到的是 8 位前缀）。"""
+        return self._db.applications().by_job_prefix(prefix, limit=limit)
 
     def count(self) -> int:
         return self._db.applications().count()

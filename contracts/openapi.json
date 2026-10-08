@@ -2,18 +2,28 @@
   "components": {
     "schemas": {
       "ApplicationListResponse": {
-        "description": "投递列表页。",
+        "description": "投递列表页。\n\n`total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），\n没有它们时第 201 条起永久不可见、且界面看起来「这就是全部」。",
         "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/ApplicationSummary"
             },
             "title": "Items",
             "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
           }
         },
         "required": [
-          "items"
+          "items",
+          "total",
+          "has_more"
         ],
         "title": "ApplicationListResponse",
         "type": "object"
@@ -889,6 +899,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyResponse"
+                }
+              }
+            },
+            "description": "该岗位已有投递记录（幂等命中）—— 返回既有记录的 id"
+          },
           "201": {
             "content": {
               "application/json": {

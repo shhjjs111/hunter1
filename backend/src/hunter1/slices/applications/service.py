@@ -12,11 +12,25 @@ jobs 切片只提供岗位查询（依赖方向 `applications → jobs` 是白�
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
 from hunter1.domain.models import Application, ApplicationStage, Job
 from hunter1.slices.applications.store import ApplicationStore
+
+
+@dataclass(frozen=True)
+class ApplyOutcome:
+    """一次「记录投递」的结果。
+
+    `created=False` = 该岗位已有投递记录（幂等命中或并发下别人先落库）——
+    路由据此决定返回 201 还是 200：状态码谎称「新建了资源」会让调用方做出
+    错误的后续动作（例如再弹一次「已记录」提示、或以为产生了新 id）。
+    """
+
+    application: Application
+    created: bool
 
 
 def new_application(
@@ -66,19 +80,25 @@ def change_stage(
 
 def apply_to_job(
     *, store: ApplicationStore, job: Job, now: datetime, note: str | None = None
-) -> Application:
+) -> ApplyOutcome:
     """记录一条投递（公司名与标题快照下来）。
 
     **幂等**：同一岗位已投递过则返回既有记录，不新建 —— 重复点击不该堆出多条
     投递。判据是「该岗位有没有投递记录」，不是「最近一条投递是不是这个岗位」。
+
+    ⚠ 先读后写**本身挡不住并发**（路由是同步 `def`，FastAPI 放线程池真并行：两个
+    请求都读到空、各插一条）。所以写入走 `store.insert_for_job` —— 它由数据库的
+    `UNIQUE(job_id)` 兜底，撞了就返回先落库的那条。这里保留先读只是快速路径
+    （绝大多数请求是重复点击，一次查询就能返回）。
     """
     existing = store.by_job(job.id)
     if existing:
-        return existing[0]
+        return ApplyOutcome(application=existing[0], created=False)
 
-    application = new_application(job=job, now=now, note=note)
-    store.upsert(application)
-    return application
+    candidate = new_application(job=job, now=now, note=note)
+    stored = store.insert_for_job(candidate)
+    # 落库回来的若不是我们构造的那条，说明并发下别人先插了 —— 那次不算「新建」。
+    return ApplyOutcome(application=stored, created=stored.id == candidate.id)
 
 
-__all__ = ["apply_to_job", "change_stage", "new_application"]
+__all__ = ["ApplyOutcome", "apply_to_job", "change_stage", "new_application"]

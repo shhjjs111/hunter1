@@ -269,10 +269,17 @@ export interface components {
         /**
          * ApplicationListResponse
          * @description 投递列表页。
+         *
+         *     `total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），
+         *     没有它们时第 201 条起永久不可见、且界面看起来「这就是全部」。
          */
         ApplicationListResponse: {
+            /** Has More */
+            has_more: boolean;
             /** Items */
             items: components["schemas"]["ApplicationSummary"][];
+            /** Total */
+            total: number;
         };
         /**
          * ApplicationStage
@@ -705,6 +712,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description 该岗位已有投递记录（幂等命中）—— 返回既有记录的 id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResponse"];
+                };
+            };
             /** @description Successful Response */
             201: {
                 headers: {

@@ -114,25 +114,60 @@ class TestApplyToJob:
 
     def test_snapshots_company_and_title(self, store: ApplicationStore) -> None:
         """投递要快照公司名与标题（岗位库清空后记录仍可读）。"""
-        application = apply_to_job(store=store, job=_job(), now=NOW)
-        assert application.job_id == "j1"
-        assert application.company == "字节跳动"
-        assert application.title == "AI产品经理"
+        outcome = apply_to_job(store=store, job=_job(), now=NOW)
+        assert outcome.application.job_id == "j1"
+        assert outcome.application.company == "字节跳动"
+        assert outcome.application.title == "AI产品经理"
 
     def test_is_persisted(self, store: ApplicationStore) -> None:
-        application = apply_to_job(store=store, job=_job(), now=NOW)
-        assert store.get(application.id) is not None
+        outcome = apply_to_job(store=store, job=_job(), now=NOW)
+        assert store.get(outcome.application.id) is not None
+
+    def test_first_apply_is_reported_as_created(self, store: ApplicationStore) -> None:
+        """第一次投递是新建（路由据此回 201）。"""
+        assert apply_to_job(store=store, job=_job(), now=NOW).created is True
 
     def test_repeat_apply_is_idempotent(self, store: ApplicationStore) -> None:
         """重复投递同一岗位只产生一条记录 —— 重复点击不该堆出多条投递。"""
         first = apply_to_job(store=store, job=_job(), now=NOW)
         second = apply_to_job(store=store, job=_job(), now=NOW)
-        assert second.id == first.id
+        assert second.application.id == first.application.id
+        assert second.created is False
+        assert len(store.by_job("j1")) == 1
+
+    def test_concurrent_apply_keeps_a_single_record(self, store: ApplicationStore) -> None:
+        """并发投递同一岗位仍只留一条 —— 唯一约束是最后一道闸。
+
+        两个线程同时越过「先读」（都读到空）时，第二个 INSERT 会被
+        `uq_applications_job` 拒掉，`insert_for_job` 转而返回先落库的那条。
+        """
+        import threading
+
+        barrier = threading.Barrier(2, timeout=10)
+        outcomes: list[object] = []
+        lock = threading.Lock()
+
+        def apply() -> None:
+            barrier.wait()
+            outcome = apply_to_job(store=store, job=_job(), now=NOW)
+            with lock:
+                outcomes.append(outcome)
+
+        threads = [threading.Thread(target=apply) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+
+        assert len(outcomes) == 2
+        ids = {outcome.application.id for outcome in outcomes}  # type: ignore[attr-defined]
+        assert len(ids) == 1, f"并发下产生了多条投递：{ids}"
+        assert [outcome.created for outcome in outcomes].count(True) == 1  # type: ignore[attr-defined]
         assert len(store.by_job("j1")) == 1
 
     def test_different_jobs_are_separate_records(self, store: ApplicationStore) -> None:
         """幂等只针对同一岗位 —— 不同岗位各记一条。"""
         first = apply_to_job(store=store, job=_job(id="j1"), now=NOW)
         second = apply_to_job(store=store, job=_job(id="j2"), now=NOW)
-        assert first.id != second.id
+        assert first.application.id != second.application.id
         assert store.count() == 2

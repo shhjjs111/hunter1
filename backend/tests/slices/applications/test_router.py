@@ -82,27 +82,52 @@ class TestListEndpoint:
     def test_empty(self, client: TestClient) -> None:
         response = client.get("/api/applications")
         assert response.status_code == 200
-        assert response.json() == {"items": []}
+        assert response.json() == {"items": [], "total": 0, "has_more": False}
 
     def test_lists_recent_first_with_shape(
         self, client: TestClient, store: ApplicationStore
     ) -> None:
-        store.upsert(_application(id="old", updated_at=datetime(2026, 9, 2, tzinfo=UTC)))
+        store.upsert(
+            _application(id="old", job_id="j-old", updated_at=datetime(2026, 9, 2, tzinfo=UTC))
+        )
         store.upsert(
             _application(
                 id="new",
+                job_id="j-new",
                 stage=ApplicationStage.INTERVIEW,
                 updated_at=datetime(2026, 10, 2, tzinfo=UTC),
             )
         )
         payload = client.get("/api/applications").json()
         assert [item["id"] for item in payload["items"]] == ["new", "old"]
+        assert payload["total"] == 2
+        assert payload["has_more"] is False
         first = payload["items"][0]
         # 契约字段齐备，且 stage 是字面值、公司是**人读的名字**
         assert first["company"] == "字节跳动"
         assert first["title"] == "AI产品经理"
         assert first["stage"] == "interview"
-        assert first["job_id"] == "j1"
+        assert first["job_id"] == "j-new"
+
+    def test_truncation_is_reported_not_silent(
+        self, client: TestClient, store: ApplicationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """超过上限时必须说「还有更多」——否则第 N+1 条起永久不可见且看不出来。"""
+        import hunter1.slices.applications.router as router_module
+
+        monkeypatch.setattr(router_module, "LIST_LIMIT", 2)
+        for index in range(3):
+            store.upsert(
+                _application(
+                    id=f"a{index}",
+                    job_id=f"j{index}",
+                    updated_at=datetime(2026, 9, 1 + index, tzinfo=UTC),
+                )
+            )
+        payload = client.get("/api/applications").json()
+        assert len(payload["items"]) == 2
+        assert payload["total"] == 3
+        assert payload["has_more"] is True
 
 
 class TestStageEndpoint:
@@ -125,6 +150,29 @@ class TestStageEndpoint:
     def test_missing_is_404(self, client: TestClient) -> None:
         response = client.post("/api/applications/zzzz/stage", json={"stage": "interview"})
         assert response.status_code == 404
+
+    def test_deleted_mid_flight_is_not_resurrected(
+        self, client: TestClient, store: ApplicationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """get 与写入之间记录被删掉 → 404，且**不把记录插回去**。
+
+        原实现是 `get` 后 `upsert`，而 upsert 见不到行就 INSERT —— 用户刚删掉的记录
+        会在这次（可能来自另一个标签页的）阶段变更里悄悄复活，看起来像「删不掉」。
+        """
+        store.upsert(_application(id="a1"))
+
+        original = store.get
+
+        def racing_get(application_id: str):
+            loaded = original(application_id)
+            store.delete(application_id)  # 读到之后、写入之前被删
+            return loaded
+
+        monkeypatch.setattr(store, "get", racing_get)
+        response = client.post("/api/applications/a1/stage", json={"stage": "interview"})
+
+        assert response.status_code == 404
+        assert store.get("a1") is None, "记录被删后不该被阶段变更插回来"
 
 
 class TestApplyEndpoint:
@@ -164,6 +212,47 @@ class TestApplyEndpoint:
             "application_id"
         ]
         assert second == first
+        assert len(store.by_job(JOB_FULL)) == 1
+
+    def test_repeat_apply_is_not_reported_as_created(
+        self, client: TestClient, db: Database
+    ) -> None:
+        """没有新建资源就不该回 201 —— 201 是「这次真的记了一条」的承诺。"""
+        _seed_job(db)
+        first = client.post("/api/applications", json={"job_id": JOB_FULL})
+        second = client.post("/api/applications", json={"job_id": JOB_FULL})
+        assert first.status_code == 201
+        assert second.status_code == 200
+
+    def test_concurrent_apply_creates_exactly_one_record(
+        self, client: TestClient, db: Database, store: ApplicationStore
+    ) -> None:
+        """并发下「同一岗位只有一条投递」仍然成立。
+
+        路由是同步 `def`，FastAPI 放线程池**真并行** —— 两个请求都可能在对方落库前
+        读到空。这条用例用线程 + 栅栏把那个窗口撑开：修复前会插入两条（断言红），
+        修复后由 `uq_applications_job` 拒掉第二个。
+        """
+        import threading
+
+        _seed_job(db)
+        barrier = threading.Barrier(2, timeout=10)
+        statuses: list[int] = []
+        lock = threading.Lock()
+
+        def apply() -> None:
+            barrier.wait()  # 让两个请求尽可能同时进入
+            response = client.post("/api/applications", json={"job_id": JOB_FULL})
+            with lock:
+                statuses.append(response.status_code)
+
+        threads = [threading.Thread(target=apply) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+
+        assert sorted(statuses) == [200, 201], f"两个请求的状态码：{statuses}"
         assert len(store.by_job(JOB_FULL)) == 1
 
 
