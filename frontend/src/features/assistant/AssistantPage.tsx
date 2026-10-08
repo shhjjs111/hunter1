@@ -16,7 +16,17 @@ export function AssistantPage() {
   const [live, setLive] = useState<ChatItem[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 本轮回答的「截断/降级」提示（正常回答时为 null）
+  const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 发问那一刻的历史长度：历史随后长出这一截，就说明本轮已经落库，live 可以退场。
+  const [turnBaseline, setTurnBaseline] = useState<number | null>(null);
+  // live 的镜像，给异步回调读（`send` 闭包里的 live 是提交那一刻的旧值）。
+  const liveRef = useRef<ChatItem[]>([]);
+
+  useEffect(() => {
+    liveRef.current = live;
+  }, [live]);
 
   // 卸载时中止在飞的流：否则回调会继续对已卸载的组件 setState
   // （切走路由后流还在跑，白耗流量也白改状态）。
@@ -31,7 +41,17 @@ export function AssistantPage() {
     role: item.role,
     content: item.content,
   }));
-  const items = currentId === null ? live : [...history, ...live];
+  // 本轮 live 何时退场：历史已经长出「发问那一刻」的那一截 → 本轮已写进历史。
+  //
+  // 历史请求失败/慢时这个条件一直为 false，live 因此留在屏幕上 —— 而不是像
+  // 「done 里立刻清 live」那样让刚显示的回答凭空消失（后端其实已经落库）。
+  // 判据是纯计算，不引入额外渲染帧，所以也不会闪出两份。
+  const turnPersisted = turnBaseline !== null && history.length > turnBaseline;
+  const items = currentId === null ? live : [...history, ...(turnPersisted ? [] : live)];
+  // M8：历史查询的加载/错误态必须显式呈现 —— 否则点开已有会话的瞬间会显示
+  // 「新会话」引导语（看起来消息丢了），历史请求失败时永久停在空态、无任何提示。
+  const historyLoading = currentId !== null && messages.isLoading;
+  const historyError = currentId !== null && messages.isError;
 
   async function send() {
     const text = input.trim();
@@ -40,11 +60,17 @@ export function AssistantPage() {
     }
     setInput("");
     setError(null);
+    setNotice(null);
     setLive([{ role: "user", content: text }]);
+    // 记下「发问那一刻」的历史长度：历史以后长过它 = 本轮落库了
+    setTurnBaseline(history.length);
     setStreaming(true);
 
     const controller = new AbortController();
     abortRef.current = controller;
+
+    // 「收到 done」= 整轮正常结束（含截断/降级，那两种也走 done）
+    let finished = false;
 
     try {
       await streamSse(
@@ -70,19 +96,28 @@ export function AssistantPage() {
               },
             ]);
           } else if (event.type === "done") {
+            finished = true;
             const id = String(event.conversation_id ?? "");
             if (id) {
               setCurrentId(id);
             }
-            // 关键顺序：先清 live，再 refresh。
+            // L7：截断/降级是「回答不完整」的信号，不能当正常结果静默呈现。
+            const truncated = event.truncated === true;
+            const degraded = event.degraded === true;
+            setNotice(
+              truncated
+                ? "回答达到轮次上限被截断，内容可能不完整。"
+                : degraded
+                  ? "本次回答由模型降级返回（可能不完整）。"
+                  : null,
+            );
+            // 关键：这里**只 refresh，不清 live**。
             //
             // 后端在 yield `done` **之前**就 `_persist` 落库了（见 router.py 的
-            // `_stream_turn`），所以 refresh 拉回来的 history 已经包含本轮两条消息。
-            // 若不先清 live，`items = [...history, ...live]` 会把本轮显示两遍。
-            //
-            // 代价：history 重取完成前会短暂空一瞬。本工具是本地 SQLite，
-            // 重取是毫秒级；而「消息重复显示」是确定性错误 —— 两害相权取此。
-            setLive([]);
+            // `_stream_turn`），所以 refresh 拉回来的 history 会包含本轮两条消息。
+            // 原实现先 `setLive([])` 再 refresh：历史请求失败/慢时，刚显示出来的
+            // 回答会凭空消失（后端其实已经存了）—— 看起来像「消息丢了」。
+            // 现在由 `turnPersisted` 判断退场时机：历史确实长出本轮才丢 live。
             refresh();
           } else if (event.type === "error") {
             setError(String(event.message ?? "未知错误"));
@@ -91,14 +126,30 @@ export function AssistantPage() {
         controller.signal,
       );
     } catch (exc) {
-      // 用户主动「中止」不是错误 —— 别把 AbortError 当失败弹给用户
-      const aborted = exc instanceof DOMException && exc.name === "AbortError";
+      // 用户主动「中止」不是错误 —— 别把 AbortError 当失败弹给用户。
+      // 两种形态都要认：`fetch` 在各运行时里的行为不同（有的让 `reader.read()`
+      // 抛 AbortError，有的只是把流转成 done 让整条流安静结束）。
+      const aborted =
+        controller.signal.aborted ||
+        (exc instanceof DOMException && exc.name === "AbortError");
       if (!aborted) {
         setError(exc instanceof Error ? exc.message : String(exc));
       }
     } finally {
       setStreaming(false);
       abortRef.current = null;
+    }
+
+    // 用户中止了本轮（且没等到 done）：半截回答留在屏幕上是对的（他还要看），
+    // 但必须说清它**不会被保存** —— 后端对中止的轮次不落库（见 router 的
+    // 「整轮跑完才落库」），切走或刷新后内容就没了，不说清楚就像丢数据。
+    if (controller.signal.aborted && !finished) {
+      const hasHalfAnswer = liveRef.current.some(
+        (item) => item.role === "assistant" && item.content.trim() !== "",
+      );
+      if (hasHalfAnswer) {
+        setNotice("已中止：这段回答没有保存，刷新或切换会话后不会保留。");
+      }
     }
   }
 
@@ -124,7 +175,9 @@ export function AssistantPage() {
             onClick={() => {
               setCurrentId(null);
               setLive([]);
+              setTurnBaseline(null);
               setError(null);
+              setNotice(null);
             }}
           >
             新对话
@@ -144,7 +197,9 @@ export function AssistantPage() {
                 onClick={() => {
                   setCurrentId(item.id);
                   setLive([]);
+                  setTurnBaseline(null);
                   setError(null);
+                  setNotice(null);
                 }}
               >
                 {item.title}
@@ -158,17 +213,31 @@ export function AssistantPage() {
         <PageHeader title="求职助手" subtitle="只读：它查岗位与投递、给建议；写操作由你确认" />
 
         <Card className="flex-1 overflow-y-auto p-4" >
-          {items.length === 0 ? (
-            <EmptyState>问点什么吧，比如「有哪些产品经理的岗位？」</EmptyState>
-          ) : (
+          {/* M8 的历史加载/错误提示只**顶替空态**，绝不能盖住消息列表：
+              `items` 里含本轮的 live 消息（历史请求失败时更是只有 live）。
+              把整块换成提示，会让用户刚发出的问题与正在流式输出的回答凭空消失
+              —— 后端其实已经落库，看起来却像「消息丢了」。 */}
+          {historyError && (
+            <div className="mb-3">
+              <ErrorNotice message={`加载会话历史失败：${(messages.error as Error).message}`} />
+            </div>
+          )}
+          {historyLoading && <p className="mb-3 text-sm text-slate-500">加载会话历史…</p>}
+          {items.length > 0 && (
             <div className="space-y-3">
               {items.map((item, index) => (
-                // 消息模型没有 id，用「role + 内容前缀 + 序号」组合做 key：
-                // 列表只追加、不重排，这个组合在其中是稳定的；纯 index 在将来若
-                // 支持重排/删除时会复用错 keyed 状态。
-                <MessageBubble key={`${item.role}:${item.content.slice(0, 32)}:${index}`} item={item} />
+                // key 用「role + 序号」：列表只追加、不重排，序号在流式期间是稳定的
+                // —— 同一个气泡的分片一直落在同一位置，DOM 不会被重建。
+                //
+                // 原先把 `content.slice(0, 32)` 也编进 key：内容一变 key 就变，
+                // 于是**前 32 个字符内每个分片都会卸载重建这个气泡**（选区被清、
+                // 动画重放）。将来若支持重排/删除，再给消息加真正的 id。
+                <MessageBubble key={`${item.role}:${index}`} item={item} />
               ))}
             </div>
+          )}
+          {items.length === 0 && !historyLoading && !historyError && (
+            <EmptyState>问点什么吧，比如「有哪些产品经理的岗位？」</EmptyState>
           )}
         </Card>
 
@@ -176,6 +245,10 @@ export function AssistantPage() {
           <div className="mt-3">
             <ErrorNotice message={error} />
           </div>
+        )}
+
+        {notice !== null && error === null && (
+          <p className="mt-3 text-sm text-amber-600">{notice}</p>
         )}
 
         <form
@@ -188,6 +261,7 @@ export function AssistantPage() {
           <input
             className="flex-1 rounded border border-slate-300 px-3 py-2"
             placeholder="有什么想问的？"
+            aria-label="输入要问助手的问题"
             value={input}
             onChange={(event) => setInput(event.target.value)}
             disabled={streaming}
