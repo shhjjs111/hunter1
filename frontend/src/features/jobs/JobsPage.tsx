@@ -26,7 +26,13 @@ export function JobsPage() {
         title="岗位库"
         actions={
           <span className="text-sm text-muted">
-            {jobs.data ? `共 ${jobs.data.total} 条` : "加载中…"}
+            {jobs.data
+              ? `共 ${jobs.data.total} 条`
+              : jobs.isError
+                ? // 与主体一致：读取失败时标题栏不能说「加载中…」—— 它永远不会变，
+                  // 会与下面的错误提示长期矛盾。
+                  "读取失败"
+                : "加载中…"}
           </span>
         }
       />

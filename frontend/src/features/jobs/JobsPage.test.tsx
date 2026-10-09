@@ -102,3 +102,20 @@ describe("JobsPage", () => {
     expect((postCalls[0][0] as Request).url).toContain("/api/applications");
   });
 });
+
+describe("JobsPage 读取失败", () => {
+  /** 回归护栏：读取失败时页头不能停在「加载中…」—— 它永远不会变，会与错误提示长期矛盾。 */
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("失败时页头不停在「加载中…」，且给出可读原因", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ detail: "服务暂时不可用" }, 503)),
+    );
+    renderPage();
+    await screen.findByText(/加载岗位失败/);
+    expect(screen.queryByText("加载中…")).toBeNull();
+  });
+});

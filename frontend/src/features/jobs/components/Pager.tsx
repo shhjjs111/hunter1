@@ -20,7 +20,7 @@ export function Pager({
     return null;
   }
   return (
-    <nav className="mt-4 flex items-center gap-3 text-sm">
+    <nav aria-label="岗位分页" className="mt-4 flex items-center gap-3 text-sm">
       <Button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
         ← 上一页
       </Button>
