@@ -1,11 +1,10 @@
 import { useState } from "react";
 
-import { ErrorNotice, PageHeader, SuccessNotice } from "../../shared/ui";
+import { ErrorNotice, PageHeader, Pager, SuccessNotice } from "../../shared/ui";
 import { useScoreJob } from "../scoring/api";
 import { useApplyToJob } from "../applications/api";
 import { useJobs } from "./api";
 import { JobsTable } from "./components/JobsTable";
-import { Pager } from "./components/Pager";
 import { SearchBar } from "./components/SearchBar";
 
 export function JobsPage() {
@@ -63,7 +62,12 @@ export function JobsPage() {
       {/* 页码用**本地 state**，不用 `jobs.data.page`：placeholderData 保留上一页
           数据时服务端回的 page 仍是旧值，Pager 据此把「下一页」算成同一个目标页 ——
           连点第二下 setPage 值不变、静默无响应（要等首个请求回来才恢复）。 */}
-      <Pager page={page} hasNext={jobs.data?.has_next ?? false} onPageChange={setPage} />
+      <Pager
+        ariaLabel="岗位分页"
+        page={page}
+        hasNext={jobs.data?.has_next ?? false}
+        onPageChange={setPage}
+      />
 
       {apply.isError && (
         <div className="mt-2">

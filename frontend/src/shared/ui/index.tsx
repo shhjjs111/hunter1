@@ -122,3 +122,46 @@ export function PageHeader({
     </header>
   );
 }
+
+/**
+ * 分页控件（纯展示）。首页且无下一页时不渲染。
+ *
+ * 住在 `shared/ui` 而不是某个 feature 目录里：岗位库与会话侧栏都要用，
+ * 同一语义只该有一处定义。原先它内联在 `features/jobs/components/` 下，
+ * 别的 feature 要用就只能深链别人的领地（AGENTS.md 的切片所有权）。
+ *
+ * `ariaLabel` 是**必填**：页内可能同时存在多个 `<nav>`，没有可访问名时
+ * 屏幕阅读器的地标列表里会出现两个无法区分的「navigation」。
+ * `className` 供调用方补布局（如窄侧栏里 `flex-wrap`），视觉词汇仍由这里定。
+ */
+export function Pager({
+  page,
+  hasNext,
+  onPageChange,
+  ariaLabel,
+  className = "",
+}: {
+  page: number;
+  hasNext: boolean;
+  onPageChange: (page: number) => void;
+  ariaLabel: string;
+  className?: string;
+}) {
+  if (page <= 1 && !hasNext) {
+    return null;
+  }
+  return (
+    <nav
+      aria-label={ariaLabel}
+      className={`mt-4 flex items-center gap-3 text-sm ${className}`}
+    >
+      <Button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+        ← 上一页
+      </Button>
+      <span className="text-muted">第 {page} 页</span>
+      <Button disabled={!hasNext} onClick={() => onPageChange(page + 1)}>
+        下一页 →
+      </Button>
+    </nav>
+  );
+}
