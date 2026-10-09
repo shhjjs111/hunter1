@@ -6,11 +6,16 @@ import type { components } from "../../shared/api/schema";
 
 export type ConversationSummary = components["schemas"]["ConversationSummary"];
 export type ConversationMessageView = components["schemas"]["ConversationMessageView"];
-/** 列表响应整体 —— `total` / `has_more` 是**截断信号**（见后端 router 的 `LIST_LIMIT`）。 */
+/** 会话列表页 —— **分页**的（`page` / `page_size` / `has_next`，见后端 `MAX_PAGE_SIZE`）。 */
 export type ConversationList = components["schemas"]["ConversationListResponse"];
 
-export async function fetchConversations(): Promise<ConversationList> {
-  const { data, error, response } = await api.GET("/api/assistant/conversations");
+/** 一页取多少个会话（后端上限也是 50）。 */
+export const CONVERSATIONS_PAGE_SIZE = 50;
+
+export async function fetchConversations(page: number): Promise<ConversationList> {
+  const { data, error, response } = await api.GET("/api/assistant/conversations", {
+    params: { query: { page, page_size: CONVERSATIONS_PAGE_SIZE } },
+  });
   if (error || !data) {
     // 用共享的错误漏斗取可读原因（后端 5xx 的 detail 由它按规则决定是否透出），
     // 不再手写固定文案把原因整段吞掉。
@@ -19,8 +24,13 @@ export async function fetchConversations(): Promise<ConversationList> {
   return data;
 }
 
-export function useConversations() {
-  return useQuery({ queryKey: ["assistant", "conversations"], queryFn: fetchConversations });
+export function useConversations(page: number) {
+  return useQuery({
+    queryKey: ["assistant", "conversations", page],
+    queryFn: () => fetchConversations(page),
+    // 翻页时保留上一页内容，避免侧栏闪白（与岗位库同一取舍）。
+    placeholderData: (previous) => previous,
+  });
 }
 
 export async function fetchMessages(conversationId: string): Promise<ConversationMessageView[]> {

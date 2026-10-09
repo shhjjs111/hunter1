@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Button, Card, EmptyState, ErrorNotice, PageHeader, fieldClass } from "../../shared/ui";
+import { Button, Card, EmptyState, ErrorNotice, PageHeader, Pager, fieldClass } from "../../shared/ui";
 import { apiUrl } from "../../shared/api/client";
 import { streamSse } from "../../shared/streaming/sse";
 import { useConversationMessages, useConversations, useRefreshConversations } from "./api";
@@ -18,8 +18,11 @@ function countUserMessages(items: ChatItem[], text: string): number {
 }
 
 export function AssistantPage() {
-  const conversations = useConversations();
   const [currentId, setCurrentId] = useState<string | null>(null);
+  // 会话列表的页码。列表是**分页**的（后端 `MAX_PAGE_SIZE` = 50）—— 第 51 个起的
+  // 会话靠翻页才够得着；没有它那些会话就是「无法触达」，而不是「不可见」。
+  const [page, setPage] = useState(1);
+  const conversations = useConversations(page);
   const messages = useConversationMessages(currentId);
   const refresh = useRefreshConversations();
 
@@ -140,6 +143,9 @@ export function AssistantPage() {
             const id = String(event.conversation_id ?? "");
             if (id) {
               setCurrentId(id);
+              // 刚更新的会话必然是最新的那个 → 落在第一页。停在第 2 页会让侧栏
+              // 看不到用户当前正在对话的会话。
+              setPage(1);
             }
             // L7：截断/降级是「回答不完整」的信号，不能当正常结果静默呈现。
             const truncated = event.truncated === true;
@@ -285,14 +291,22 @@ export function AssistantPage() {
           ))}
         </ul>
 
-        {/* 列表有固定上限（后端 `LIST_LIMIT`），`total` / `has_more` 是它给的**截断
-            信号**。不读的话第 51 个起的会话不只是不可见，连「还有更多」这件事都无从
-            知道 —— 界面看起来「这就是全部」。与投递页同一课（那里显示「共 N 条，
-            只显示最近 M 条」）。 */}
-        {conversations.data?.has_more && (
-          <p className="mt-2 px-2 text-xs text-muted">
-            共 {conversations.data.total} 个会话，只显示最近 {conversations.data.items.length} 个
-          </p>
+        {/* 列表是**分页**的（后端 `page_size` 上限 50）：有下一页或不在首页时才出现
+            总数与分页控件。原先只有一句「还有更多」却没有翻页入口 —— 第 51 个起的
+            会话不只是不可见，而是**无法触达**（数据在那儿，没有任何办法取出来）。
+            会话不多时这里什么都不渲染（Pager 在首页且无下一页时自己返回 null），
+            不占地方也不制造假警报。 */}
+        {conversations.data && (conversations.data.has_next || page > 1) && (
+          <div className="mt-2 px-2">
+            <p className="text-xs text-muted">共 {conversations.data.total} 个会话</p>
+            <Pager
+              ariaLabel="会话分页"
+              className="mt-1 flex-wrap"
+              page={page}
+              hasNext={conversations.data.has_next}
+              onPageChange={setPage}
+            />
+          </div>
         )}
       </aside>
 

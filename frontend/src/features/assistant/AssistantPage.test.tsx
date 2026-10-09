@@ -75,7 +75,7 @@ function stubApi(): void {
         ]);
       }
       if (url.includes("/api/assistant/conversations")) {
-        return jsonResponse({ items: [{ id: "c1", title: "你好" }], total: 1, has_more: false });
+        return jsonResponse({ items: [{ id: "c1", title: "你好" }], total: 1, page: 1, page_size: 50, has_next: false });
       }
       return jsonResponse({});
     }),
@@ -146,7 +146,7 @@ describe("AssistantPage", () => {
           );
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -199,7 +199,7 @@ describe("AssistantPage", () => {
           return jsonResponse({ detail: "boom" }, 500);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -261,7 +261,7 @@ describe("AssistantPage", () => {
           );
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -307,7 +307,7 @@ describe("AssistantPage", () => {
             { status: 200, headers: { "Content-Type": "text/event-stream" } },
           );
         }
-        return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+        return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
       }),
     );
 
@@ -337,7 +337,7 @@ describe("AssistantPage", () => {
             headers: { "Content-Type": "text/event-stream" },
           });
         }
-        return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+        return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
       }),
     );
 
@@ -399,7 +399,7 @@ describe("AssistantPage", () => {
           return jsonResponse({ detail: "boom" }, 500);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -462,7 +462,7 @@ describe("AssistantPage", () => {
           ]);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -534,7 +534,7 @@ describe("AssistantPage", () => {
           ]);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -594,7 +594,7 @@ describe("AssistantPage 流安静地结束（既没 done 也没 error）", () =>
           );
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [], total: 0, has_more: false });
+          return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -649,7 +649,7 @@ describe("AssistantPage SSE 块解析失败", () => {
           return jsonResponse([]);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [], total: 0, has_more: false });
+          return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -698,7 +698,7 @@ describe("AssistantPage 中止提示的判据不依赖渲染时序", () => {
           });
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse({ items: [], total: 0, has_more: false });
+          return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
         }
         return jsonResponse({});
       }),
@@ -724,47 +724,82 @@ describe("AssistantPage 中止提示的判据不依赖渲染时序", () => {
   });
 });
 
-describe("AssistantPage 会话列表的截断信号", () => {
+describe("AssistantPage 会话列表分页", () => {
   /**
-   * 回归护栏：后端给了 `total` / `has_more`（会话列表有 `LIST_LIMIT=50` 的上限），
-   * 界面必须读它。不读的话第 51 个起的会话不只是不可见 —— 用户连「还有更多」都
-   * 无从知道，界面看起来「这就是全部」。投递页早已这么做（「共 N 条，只显示最近
-   * M 条」），这里与它对齐。
+   * 回归护栏：会话列表是**分页**的（后端 `page_size` 上限 50），第 51 个起的会话
+   * 必须翻页够得着。
+   *
+   * 之前这里只有一句「还有更多」而没有翻页入口 —— 那些会话不是「不可见」，而是
+   * **无法触达**：数据在库里，界面没有任何办法把它取出来。
    */
-  function stubConversations(list: unknown): void {
+  function stubPages(): string[] {
+    const requested: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const { url } = reqInfo(input, init);
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse(list);
+          const matched = url.match(/[?&]page=(\d+)/);
+          const page = matched ? matched[1] : "1";
+          requested.push(page);
+          return page === "2"
+            ? jsonResponse({
+                items: [{ id: "old", title: "更旧的会话" }],
+                total: 60,
+                page: 2,
+                page_size: 50,
+                has_next: false,
+              })
+            : jsonResponse({
+                items: [{ id: "c1", title: "最近的会话" }],
+                total: 60,
+                page: 1,
+                page_size: 50,
+                has_next: true,
+              });
         }
         return jsonResponse({});
       }),
     );
+    return requested;
   }
 
-  it("会话被上限截断时说出来，而不是看起来「这就是全部」", async () => {
-    stubConversations({
-      items: [{ id: "c1", title: "最近的会话" }],
-      total: 80,
-      has_more: true,
-    });
+  it("有下一页时给分页控件，翻页真的会去取第 2 页", async () => {
+    const requested = stubPages();
 
     renderPage();
-    expect(await screen.findByText(/共 80 个会话/)).toBeDefined();
-    expect(screen.getByText(/只显示最近 1 个/)).toBeDefined();
+    expect(await screen.findByText("最近的会话")).toBeDefined();
+    expect(await screen.findByText("共 60 个会话")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "下一页 →" }));
+
+    // 第 2 页的内容真的取回来了（不只是 UI 变了个数字）
+    expect(await screen.findByText("更旧的会话")).toBeDefined();
+    expect(requested).toContain("2");
+    expect(screen.getByText("第 2 页")).toBeDefined();
   });
 
-  it("没被截断时不显示那条提示（不制造假警报）", async () => {
-    stubConversations({
-      items: [{ id: "c1", title: "唯一的会话" }],
-      total: 1,
-      has_more: false,
-    });
+  it("没有下一页时不给分页控件（不制造假警报）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({
+            items: [{ id: "c1", title: "唯一的会话" }],
+            total: 1,
+            page: 1,
+            page_size: 50,
+            has_next: false,
+          });
+        }
+        return jsonResponse({});
+      }),
+    );
 
     renderPage();
     await screen.findByText("唯一的会话");
-    expect(screen.queryByText(/只显示最近/)).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "会话分页" })).toBeNull();
+    expect(screen.queryByText(/共 /)).toBeNull();
   });
 });
