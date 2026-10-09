@@ -17,8 +17,8 @@ export const CRAWL_POLL_MAX_MS = 30_000;
  * 收敛条件挂在「拿到明确结论」上，不挂在「成功数据」上：
  *
  * - `running: true` → 继续轮询；
- * - `running: false` → 停（后端明确说空闲了）；
- * - **快照缺失**（首次请求还没回来，或上一次请求失败）→ 继续轮询。
+ * - `running: false` **且没有未消化的失败** → 停（后端明确说空闲了）；
+ * - 其余（快照缺失 / 这个快照之后还有失败）→ 继续轮询。
  *
  * 第三档是修出来的。原先写成 `query.state.data?.running ? POLL_MS : false`：
  * 一次瞬时失败（后端重启、代理闪断）拿不到快照，于是返回 `false`、**轮询永久停止**
@@ -26,16 +26,24 @@ export const CRAWL_POLL_MAX_MS = 30_000;
  * `running` 永久禁用、页面没有任何刷新入口，用户只能重启进程。这正是
  * `slices/crawl/runner.py` 立意要消灭的那种「静默失败」。
  *
- * `failures` = **连续**失败的次数（react-query 的 `fetchFailureCount`，一旦成功就归零）。
- * 拿不到明确结论时按指数退避、封顶在 `CRAWL_POLL_MAX_MS`：既保留「后端回来界面自己
- * 恢复」，又不会在后端长时间不可达时**每秒**硬打一遍（原实现没有上限，一个开着的
- * 页面会一直给已经倒下的后端施压）。
+ * ⚠️ 判停**不能**只看 `snapshot` 是否为 `undefined`：react-query 在请求失败时
+ * **保留上一次的数据**（`error` reducer 是 `{...state, error, …}`）。于是
+ * 「上一次成功时是空闲态」+ 之后一直失败，`snapshot` 会恒为 `{running: false}`，
+ * 拿它判停就退化成同一个「一击不中永久停摆」—— 只是触发形态从「data 为 undefined」
+ * 换成了「**陈旧**的 `running: false`」。所以还必须要求 `failures === 0`：
+ * 那才说明这个快照是**现在**拿到了结论，而不是上次的残影。
+ *
+ * `failures` = **连续**失败次数。由 `useCrawlStatus` 的 queryFn 自己维护
+ * （为什么不用 react-query 自带的计数器，见那里的注释）。拿不到明确结论时按指数
+ * 退避、封顶在 `CRAWL_POLL_MAX_MS`：既保留「后端回来界面自己恢复」，又不会在后端
+ * 长时间不可达时**每秒**硬打一遍（原实现没有上限，一个开着的页面会一直给已经倒下
+ * 的后端施压）。
  */
 export function crawlPollInterval(
   snapshot: { running: boolean } | undefined,
   failures = 0,
 ): number | false {
-  if (snapshot !== undefined && !snapshot.running) {
+  if (failures === 0 && snapshot !== undefined && !snapshot.running) {
     return false;
   }
   return backoff(POLL_MS, failures);

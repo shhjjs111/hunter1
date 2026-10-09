@@ -220,4 +220,50 @@ describe("CrawlPage 后端不可达时的轮询退避", () => {
       vi.useRealTimers();
     }
   });
+
+  it("上一次成功是空闲态、之后读取失败 —— 轮询不会停死（陈旧快照不是结论）", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    let failing = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        return failing ? jsonResponse({ detail: "后端暂时不可用" }, 503) : jsonResponse(IDLE);
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+    });
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <CrawlPage />
+        </QueryClientProvider>,
+      );
+      // 首次成功：后端说空闲 —— 此时按设计**停止**轮询
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(calls).toBe(1);
+
+      // 后端变得不可达，并触发一次后台重取（真实里来自窗口重新聚焦 / staleTime）
+      failing = true;
+      await act(async () => {
+        await client.refetchQueries({ queryKey: ["crawl", "status"] });
+      });
+      const afterFailure = calls;
+      expect(afterFailure).toBeGreaterThan(1);
+
+      // 修复前这一步失败：react-query 保留了上一次的 `{running:false}`，于是
+      // crawlPollInterval 返回 false，此后**一次都不会再重试** —— 后端恢复后界面
+      // 永远停在旧快照，而用户没有任何刷新入口。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(calls).toBeGreaterThan(afterFailure);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

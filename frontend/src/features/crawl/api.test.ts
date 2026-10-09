@@ -40,4 +40,15 @@ describe("crawlPollInterval", () => {
     expect(interval).not.toBe(false);
     expect(interval).toBeGreaterThan(POLL_MS);
   });
+
+  it("陈旧的空闲快照不算「明确结论」—— 失败期间不会让轮询停死", () => {
+    // react-query 在请求失败时**保留上一次的数据**，所以「上一次成功是空闲态」+
+    // 之后一直失败，会让 snapshot 恒为 `{running: false}`。只按它判停，就退化成
+    // 这个函数本来要消灭的那个「一击不中永久停摆」—— 只是触发形态从
+    // 「data 为 undefined」换成了「陈旧的 running:false」。
+    expect(crawlPollInterval({ running: false }, 1)).toBe(POLL_MS * 2);
+    expect(crawlPollInterval({ running: false }, 3)).toBe(POLL_MS * 8);
+    // 只有**没有失败**时，「空闲」才是当下的结论
+    expect(crawlPollInterval({ running: false }, 0)).toBe(false);
+  });
 });
