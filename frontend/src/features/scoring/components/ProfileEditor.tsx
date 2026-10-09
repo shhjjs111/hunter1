@@ -29,9 +29,6 @@ export function ProfileEditor() {
   if (profile.isLoading) {
     return <p className="text-sm text-muted">正在加载画像…</p>;
   }
-  if (profile.isError) {
-    return <ErrorNotice message={(profile.error as Error).message} />;
-  }
 
   const current = profile.data?.profile ?? null;
   const warning = profile.data?.warning ?? null;
@@ -44,6 +41,18 @@ export function ProfileEditor() {
           ? "评分会拿它跟岗位对照。改了立刻生效，不必重启。"
           : "还没配画像 —— 评分要用它，配好之后就能给岗位打分了。"}
       </p>
+
+      {/* 读取失败：说明原因，但**不卸载表单**。
+          三个 textarea 是非受控的（`defaultValue`），整块早返回会把用户敲进去、
+          还没保存的内容一起抹掉，屏幕上只剩一条错误提示 —— 而全局 staleTime 30 秒 +
+          retry 会在一轮后台 refetch（切走窗口再切回）失败时触发。换句话说，
+          「错误提示」与「表单可用」必须同屏。隔壁 SettingsPage 用派生值避开同一个坑，
+          这里对齐它的取舍：错误内联显示，表单照留（用户能重填覆盖）。 */}
+      {profile.isError && (
+        <div className="mb-4">
+          <ErrorNotice message={(profile.error as Error).message} />
+        </div>
+      )}
 
       {/* 存储里的画像不可用：说明原因，表单仍可用，用户直接重填覆盖即可 */}
       {warning && (

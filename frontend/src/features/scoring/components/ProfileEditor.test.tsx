@@ -169,3 +169,54 @@ describe("ProfileEditor", () => {
     expect(await screen.findByText(/单条 100 字符/)).toBeDefined();
   });
 });
+
+describe("ProfileEditor 读取失败", () => {
+  /**
+   * 回归护栏：读取失败时**不得**整块早返回把表单卸载。
+   *
+   * 三个 textarea 是**非受控**的（`defaultValue`），一旦卸载，用户敲进去、还没保存
+   * 的内容就随组件一起消失，屏幕上只剩一条错误提示。而全局 `staleTime` 30 秒 +
+   * `retry: 1`：编辑到一半切走窗口再切回、一次后台 refetch 失败就会触发。
+   *
+   * 隔壁 `SettingsPage` 的注释把同一个教训写得很清楚（回填不许盖住用户刚敲的内容），
+   * 那里改用派生值 + 内联错误提示避开了。这里对齐同一取舍。
+   */
+  it("编辑中 refetch 失败不吃掉已输入的内容（表单不卸载）", async () => {
+    let failing = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        if (failing) {
+          return jsonResponse({ detail: "后端暂时不可用" }, 503);
+        }
+        return jsonResponse({
+          profile: { keywords: ["旧关键词"], directions: [], summary: "旧摘要" },
+        });
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <ProfileEditor />
+      </QueryClientProvider>,
+    );
+
+    const keywords = (await screen.findByLabelText(/目标关键词/)) as HTMLTextAreaElement;
+    await waitFor(() => expect(keywords.value).toBe("旧关键词"));
+
+    // 用户开始编辑（还没保存）
+    fireEvent.change(keywords, { target: { value: "我敲了一半" } });
+    expect(keywords.value).toBe("我敲了一半");
+
+    // 下一次读取失败 —— 模拟窗口重新聚焦 / 保存后失效触发的后台 refetch
+    failing = true;
+    await client.refetchQueries({ queryKey: ["scoring", "profile"] });
+
+    // 不静默：错误必须说出来
+    expect(await screen.findByText(/后端暂时不可用|加载画像失败/)).toBeDefined();
+    // 关键：表单没被卸载，用户敲进去的内容仍在
+    expect((screen.getByLabelText(/目标关键词/) as HTMLTextAreaElement).value).toBe("我敲了一半");
+  });
+});
