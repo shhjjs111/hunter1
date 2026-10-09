@@ -174,3 +174,32 @@ describe("前端阶段枚举与契约一致", () => {
     expect(new Set(STAGE_ORDER).size).toBe(STAGE_ORDER.length); // 无重复
   });
 });
+
+describe("ApplicationsPage 读取失败", () => {
+  /**
+   * 这组是「错误态与空态/加载态同屏」的回归护栏 —— 原先失败时页头永久停在
+   * 「加载中…」、主体还渲染「还没有投递记录」空态，把**读失败**讲成**你没有数据**，
+   * 用户于是不会去重试。此前该页面没有任何失败路径用例，所以测不出来。
+   */
+
+  function stubFailingFetch() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ detail: "服务暂时不可用" }, 503)),
+    );
+  }
+
+  it("失败时不给「还没有投递记录」空态（把读失败讲成没数据）", async () => {
+    stubFailingFetch();
+    renderPage();
+    await screen.findByText(/服务暂时不可用|加载投递记录失败/);
+    expect(screen.queryByText(/还没有投递记录/)).toBeNull();
+  });
+
+  it("失败时页头不停在「加载中…」", async () => {
+    stubFailingFetch();
+    renderPage();
+    await screen.findByText(/服务暂时不可用|加载投递记录失败/);
+    expect(screen.queryByText("加载中…")).toBeNull();
+  });
+});

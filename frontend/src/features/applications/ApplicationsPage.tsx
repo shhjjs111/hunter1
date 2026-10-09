@@ -33,7 +33,11 @@ export function ApplicationsPage() {
     ? truncated
       ? `共 ${total} 条，只显示最近 ${shown} 条`
       : `共 ${total} 条`
-    : "加载中…";
+    : applications.isError
+      ? // 读取失败时不能说「加载中…」：那句会与下面的 ErrorNotice 矛盾，
+        // 而且它会永久停在那里（失败后 isLoading 转 false，不会再变）。
+        "读取失败"
+      : "加载中…";
 
   // 阶段选择的**乐观值**：不设它的话，用户在下拉里选中的值在请求回来前会被
   // 服务端旧值覆盖（视觉回弹），失败时选择被静默撤销 —— 两种都像「点了没反应」。
@@ -57,11 +61,12 @@ export function ApplicationsPage() {
     <>
       <PageHeader title="投递记录" subtitle={subtitle} />
 
-      {applications.isError && <ErrorNotice message={(applications.error as Error).message} />}
-      {changeStage.isError && <ErrorNotice message={(changeStage.error as Error).message} />}
-      {remove.isError && <ErrorNotice message={(remove.error as Error).message} />}
-
-      {applications.isLoading ? (
+      {/* 列表的三种状态**互斥**：读取失败时绝不能再渲染「还没有投递记录」空态 ——
+          那会把「读失败」讲成「你没有数据」，用户于是不会去重试（JobsPage 早已是
+          互斥分支，这里与之对齐）。阶段/删除的失败是**另一次操作**的错误，另列。 */}
+      {applications.isError ? (
+        <ErrorNotice message={(applications.error as Error).message} />
+      ) : applications.isLoading ? (
         // 显式加载态：否则首帧会渲染一张空表，与「一条都没有」看起来一样
         <Card>
           <p className="px-4 py-6 text-sm text-muted">加载中…</p>
@@ -165,6 +170,10 @@ export function ApplicationsPage() {
           </div>
         </Card>
       )}
+
+      {/* 阶段变更 / 删除的失败是**另一次操作**的错误，与列表状态无关，单独列在这里。 */}
+      {changeStage.isError && <ErrorNotice message={(changeStage.error as Error).message} />}
+      {remove.isError && <ErrorNotice message={(remove.error as Error).message} />}
 
       <p className="mt-4 text-xs text-muted">
         投递记录里的公司名与岗位名是<b>下单时刻的快照</b> —— 岗位被重抓或改名时，

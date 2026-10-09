@@ -10,7 +10,7 @@ export type ApplicationList = components["schemas"]["ApplicationListResponse"];
 /** 契约里的阶段枚举（后端 `ApplicationStage`）—— 现已进契约，不再是魔法字符串。 */
 export type ApplicationStage = components["schemas"]["ApplicationStage"];
 
-export const STAGE_LABELS: Record<string, string> = {
+export const STAGE_LABELS: Record<ApplicationStage, string> = {
   applied: "已投递",
   written_test: "笔试",
   interview: "面试",
