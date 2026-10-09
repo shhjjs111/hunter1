@@ -34,10 +34,19 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/applications` | 投递列表（按 `updated_at` 倒序，取最近 200 条） |
+| GET | `/api/applications` | 投递列表（按 `updated_at` 倒序，取最近 200 条；`{items, total, has_more}`） |
 | POST | `/api/applications` | 记录投递（201；body `{job_id}`，支持唯一前缀；歧义 → 409、不存在 → 404；**幂等**） |
 | POST | `/api/applications/{application_id}/stage` | 推进阶段（200；不存在 → 404；非法 stage → 422） |
 | DELETE | `/api/applications/{application_id}` | 删除投递（204；不存在为 no-op） |
+
+**`stage` 在契约里是真 enum**（`ApplicationStage`），三处同形：`ApplicationSummary.stage`、
+`StageUpdateRequest.stage`、`StageUpdateResponse.stage`。前端因此能照契约穷尽/比对，
+不必维护一份手抄的取值表（`frontend/src/features/applications/api.ts` 的
+`STAGE_LABELS` / `STAGE_ORDER` 有测试逐条比对契约，防漂移）。
+
+**阶段没有跃迁守卫**（可任意前进/回退，含 `rejected → applied`）：允许回退是刻意的
+（用户误点后要能改），不做顺序校验 —— 这是**记录**不是**流程引擎**。
+`domain/models.py` 的 `ApplicationStage` 顺序只描述界面进度条的排列，不构成业务规则。
 
 ## 独立验证命令
 

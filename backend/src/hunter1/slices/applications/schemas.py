@@ -21,7 +21,10 @@ class ApplicationSummary(BaseModel):
     job_id: str
     company: str
     title: str
-    stage: str
+    #: 用 `ApplicationStage` 而非 `str`：契约里会输出**真正的 enum**，前端因此能
+    #: 照契约比对/穷尽，而不是维护一份手抄的取值表（`StageUpdateRequest.stage`
+    #: 早已是 enum —— 同一枚举在列表路径退化成裸 string，是这两处唯一的不一致）。
+    stage: ApplicationStage
     applied_at: datetime
     updated_at: datetime
     note: str | None = None
@@ -33,7 +36,7 @@ class ApplicationSummary(BaseModel):
             job_id=application.job_id,
             company=application.company,
             title=application.title,
-            stage=application.stage.value,
+            stage=application.stage,
             applied_at=application.applied_at,
             updated_at=application.updated_at,
             note=application.note,
@@ -56,7 +59,9 @@ class StageUpdateResponse(BaseModel):
     """推进投递阶段的结果。"""
 
     application_id: str
-    stage: str
+    #: 与 `ApplicationSummary.stage` / `StageUpdateRequest.stage` 同一枚举 —— 同一
+    #: 概念在三处必须同形，否则前端又得为它单独手抄一份取值表。
+    stage: ApplicationStage
 
 
 class ApplicationListResponse(BaseModel):

@@ -71,7 +71,7 @@ def build_router(
         if ambiguous:
             raise HTTPException(
                 status_code=409,
-                detail=f"id 前缀 {body.job_id} 有 {ambiguous} 条匹配，请给更长的 id",
+                detail=f"id 前缀 {body.job_id} 至少有 {ambiguous} 条匹配，请给更长的 id",
             )
         if job is None:
             raise HTTPException(status_code=404, detail=f"岗位不存在：{body.job_id}")
@@ -98,7 +98,7 @@ def build_router(
             # get 与写入之间记录被删了：只更新、不插回 —— 否则用户删掉的记录会
             # 「复活」（静默撤销删除）。此时按「已不存在」如实回 404。
             raise HTTPException(status_code=404, detail=f"投递已被删除：{application_id}")
-        return schemas.StageUpdateResponse(application_id=updated.id, stage=updated.stage.value)
+        return schemas.StageUpdateResponse(application_id=updated.id, stage=updated.stage)
 
     @router.delete("/applications/{application_id}", status_code=204, summary="删除投递")
     def delete_application(application_id: str) -> Response:
