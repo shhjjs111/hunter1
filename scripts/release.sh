@@ -44,6 +44,20 @@ fi
 VERSION="$("$PY" -c "import sys; sys.path.insert(0, 'backend/src'); from hunter1 import __version__; print(__version__)")"
 TAG="${TAG:-v$VERSION}"
 
+# tag 必须与包版本一致。
+#
+# 清单里的 `version` 取自**源码**（`hunter1.__version__`），而下载地址是
+# `.../releases/download/<tag>/<zip>` —— 两个字段由**不同来源**决定。给一个自定义 tag
+# 就能产出「版本号 ≠ 下载 URL」的清单，而脚本一路全绿：更新链去另一个 tag 下取产物
+# （不存在，或还停在上一次构建），失败发生在**用户端**的自动更新里，本地毫无征兆。
+# 这与上面第 1) 步「工作区必须干净」同源：产物与 tag 必须对得上。要换 tag，先改
+# `hunter1.__version__`，再走同一套流程。
+if [[ "$TAG" != "v$VERSION" ]]; then
+  echo "tag 与包版本不一致：tag=$TAG，而 hunter1.__version__=$VERSION（应为 v$VERSION）。" >&2
+  echo "  清单的 version 来自源码、下载地址来自 tag —— 不一致会产出一份「版本号 ≠ 下载" >&2
+  echo "  URL」的清单，自动更新会静默取到错误的产物（本地全绿，故障在用户端）。" >&2
+  exit 2
+fi
 
 echo "== 版本：$VERSION（tag $TAG）=="
 
