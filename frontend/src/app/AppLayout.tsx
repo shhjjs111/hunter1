@@ -30,12 +30,20 @@ export function AppLayout() {
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="shrink-0 border-b border-line bg-surface md:w-48 md:border-r md:border-b-0">
         <div className="px-4 pt-3 pb-1 md:py-5">
-          <h1 className="text-lg font-semibold tracking-tight">Hunter1</h1>
+          {/* 品牌名用 `<div>` 而不是 `<h1>`：每个页面自己还有一个 `<h1>`（PageHeader），
+              两处都写 h1 会让同页出现两个一级标题，标题层级失去意义（屏幕阅读器
+              的标题列表里出现两条并列的「一级」）。品牌是**外壳**的文字，不是页面标题。 */}
+          <div className="text-lg font-semibold tracking-tight">Hunter1</div>
           <p className="text-xs text-muted">求职工作台</p>
         </div>
         {/* 窄屏：横向可滚动的导航条（5 项在 390px 下也放不下，允许横滑）；
-            宽屏：恢复成竖向列表。 */}
-        <nav className="flex gap-0.5 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-visible md:pb-4">
+            宽屏：恢复成竖向列表。
+            `aria-label` 必须给：页内还有别的 `<nav>`（如岗位表的分页），没有可访问名
+            时地标列表里会出现两个无法区分的「navigation」。 */}
+        <nav
+          aria-label="主导航"
+          className="flex gap-0.5 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-visible md:pb-4"
+        >
           {NAV.map((item) => (
             <NavLink
               key={item.to}
