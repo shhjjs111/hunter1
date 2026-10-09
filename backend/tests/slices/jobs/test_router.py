@@ -111,6 +111,19 @@ class TestListEndpoint:
     def test_out_of_range_params_rejected(self, client: TestClient) -> None:
         assert client.get("/api/jobs", params={"page_size": 101}).status_code == 422
 
+    def test_page_upper_bound_is_rejected_not_silently_clamped(self, client: TestClient) -> None:
+        """页码同样要有上界，且越界由 **422** 拒绝 —— 不静默改成第 10000 页。
+
+        原先 `page` 只有 `ge=1`、没有 `le`，而服务层 `min(max(1, page), MAX_PAGE)`
+        会悄悄钳制：传 999999 得 200 且响应里 `page=10000`，调用方从契约与响应都
+        看不出自己的入参被改过。同端点的 `page_size` 早就有 `le` —— 两个分页参数
+        必须对称。
+        """
+        assert client.get("/api/jobs", params={"page": 10_001}).status_code == 422
+        assert client.get("/api/jobs", params={"page": 0}).status_code == 422
+        # 边界值本身仍然可用
+        assert client.get("/api/jobs", params={"page": 10_000}).status_code == 200
+
 
 class TestDetailEndpoint:
     def test_full_id(self, client: TestClient) -> None:

@@ -33,8 +33,12 @@ applications 切片，记录投递的端点随之归它（`POST /api/application
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/jobs?q=&page=&page_size=` | 列表/搜索（页码与页大小有界） |
+| GET | `/api/jobs?q=&page=&page_size=` | 列表/搜索（`page` ≤ `MAX_PAGE=10000`、`page_size` ≤ `MAX_PAGE_SIZE=100`，**越界由 422 拒绝**） |
 | GET | `/api/jobs/{job_id}` | 详情（全 id 或唯一前缀；前缀歧义 → 409） |
+
+**分页上界在边界处拒绝，不静默钳制**：`page` 与服务层 `min(max(1, page), MAX_PAGE)`
+两道口径一致 —— 传入 999999 会得到 422（而不是「200 但悄悄返回第 10000 页」）。
+前缀歧义的 409 文案说「**至少** N 条匹配」：N 是带上限的计数，不是精确总数。
 
 ## 独立验证命令
 

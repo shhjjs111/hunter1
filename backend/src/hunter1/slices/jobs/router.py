@@ -22,7 +22,11 @@ def build_router(*, store: JobStore) -> APIRouter:
     @router.get("/jobs", response_model=schemas.JobListResponse, summary="岗位列表（搜索+分页）")
     def list_jobs(
         q: str = Query("", description="关键词（标题归一化匹配；空 = 列最近）"),
-        page: int = Query(1, ge=1, description="页码（1 起，上限 10000）"),
+        # `le=service.MAX_PAGE` 与 `page_size` 的 `le` 对称：服务层虽有 `min(max(...))`
+        # 兜底，但那会让 page=999999 静默变成第 10000 页、响应里 `page` 却是 10000，
+        # 而调用方从契约（OpenAPI 的 description 只是字符串）读不到任何上限。边界处
+        # 拒绝比悄悄改语义好 —— 与 `page_size` 一致。
+        page: int = Query(1, ge=1, le=service.MAX_PAGE, description="页码（1 起）"),
         page_size: int = Query(20, ge=1, le=service.MAX_PAGE_SIZE),
     ) -> schemas.JobListResponse:
         result = service.list_jobs(store, keyword=q, page=page, page_size=page_size)
@@ -42,7 +46,7 @@ def build_router(*, store: JobStore) -> APIRouter:
         if ambiguous:
             raise HTTPException(
                 status_code=409,
-                detail=f"id 前缀 {job_id} 有 {ambiguous} 条匹配，请给更长的 id",
+                detail=f"id 前缀 {job_id} 至少有 {ambiguous} 条匹配，请给更长的 id",
             )
         if job is None:
             raise HTTPException(status_code=404, detail=f"岗位不存在：{job_id}")
