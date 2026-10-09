@@ -449,14 +449,39 @@ def verify(dist_dir: Path) -> list[str]:
 
 
 def _make_zip(dist_dir: Path) -> Path:
-    """打 zip：解压出一个 `hunter1/` 目录，即所谓的「解压即用」。"""
+    """打 zip 到**暂存名**（`<产物名>.tmp`）：解压出一个 `hunter1/` 目录，即「解压即用」。
+
+    刻意不直接写正式名 —— 由 `produce_zip` 校验通过后再改名。理由见 `produce_zip`。
+    """
     archive = DIST / artifact_name()
+    staging = archive.with_name(archive.name + ".tmp")
+    staging.unlink(missing_ok=True)
     print(f"== 打包 {archive.name} ==")
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+    with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as bundle:
         for item in sorted(dist_dir.rglob("*")):
             if item.is_file():
                 bundle.write(item, item.relative_to(dist_dir.parent))
-    return archive
+    return staging
+
+
+def produce_zip(dist_dir: Path) -> tuple[Path | None, list[str]]:
+    """打 zip 并校验：合格返回 `(正式产物路径, [])`，不合格返回 `(None, 问题列表)`。
+
+    **官方产物路径上只可能出现校验通过的包。** 此前 `main` 直接写正式名再校验，失败时
+    只 `return 1` 不删文件 —— 一份被门禁判不合格的包就留在 `dist/` 里，而 `release.sh`
+    与 `gh_publish.py` 对该路径只查「文件在不在」，下一个人跳过重建直接发版就会把它
+    发出去。更糟的是：manifest 的 sha256 正是这份坏包的哈希，用户端 checksum 校验
+    **必然通过**，没有任何一层能发现。这里用「暂存 → 校验 → 改名」，不合格则删暂存。
+    """
+    final_archive = DIST / artifact_name()
+    final_archive.unlink(missing_ok=True)  # 旧包不该顶替这一次的结论
+    staging = _make_zip(dist_dir)
+    problems = zip_problems(staging, dist_dir)
+    if problems:
+        staging.unlink(missing_ok=True)
+        return None, problems
+    staging.replace(final_archive)
+    return final_archive, []
 
 
 def write_version_file(dist_dir: Path) -> Path:
@@ -625,16 +650,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.zip:
-        archive = _make_zip(dist_dir)
-        print(f"  zip：{archive}（{archive.stat().st_size / 1024 / 1024:.1f}MB）")
         # 压缩包**自己**也要过一遍：目录合格不代表包合格（少了文件、裹成两级目录、
         # 写进绝对路径，目录里都看不出来）。这是 zip 第一次被门禁真的打开。
-        zip_problems_found = zip_problems(archive, dist_dir)
-        if zip_problems_found:
+        # `produce_zip` 只在**校验通过**时才把包落到正式名 —— 不合格则 `dist/`
+        # 里不存在该 zip（见它的 docstring）。
+        archive, zip_problems_found = produce_zip(dist_dir)
+        if archive is None:
             print("\n压缩包不合格：")
             for problem in zip_problems_found:
                 print(f"  - {problem}")
             return 1
+        print(f"  zip：{archive}（{archive.stat().st_size / 1024 / 1024:.1f}MB）")
         print(f"  zip 校验：通过（{len(zipfile.ZipFile(archive).namelist())} 个条目）")
 
     print("\n通过。分发前建议手动验一遍（见 docs/DEVELOPMENT.md 的打包小节）。")

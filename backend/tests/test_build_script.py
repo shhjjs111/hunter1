@@ -722,3 +722,57 @@ class TestZipProblems:
         (dist / EXE_NAME).write_bytes(b"0123456789")
         problems = build.zip_problems(archive, dist)
         assert any("CRC" in p for p in problems)
+
+
+class TestProduceZipKeepsBadArchivesOut:
+    """`produce_zip` 是「不合格的包进不了官方路径」的闸。
+
+    这个缺陷的形态：`main` 曾直接写正式名再校验，失败时只 `return 1` 不删文件 —— 一份
+    被门禁判不合格的包留在 `dist/`，而 `release.sh` / `gh_publish.py` 只查「文件在不在」。
+    """
+
+    def _prep(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        monkeypatch.setattr(build, "DIST", tmp_path / "dist")
+        (tmp_path / "dist").mkdir()
+        dist = _make_dist(tmp_path)
+        build.write_version_file(dist)
+        return dist
+
+    def test_a_passing_zip_lands_at_the_official_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dist = self._prep(tmp_path, monkeypatch)
+        archive, problems = build.produce_zip(dist)
+
+        assert problems == []
+        assert archive == build.DIST / build.artifact_name()
+        assert archive is not None and archive.is_file()
+        assert not list(build.DIST.glob("*.tmp")), "暂存文件必须已被改名，不该残留"
+
+    def test_a_failing_zip_leaves_nothing_at_the_official_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dist = self._prep(tmp_path, monkeypatch)
+        # 直接替换判据，模拟「条目越界 / 版本不一致」等任何一类不合格。
+        monkeypatch.setattr(build, "zip_problems", lambda _a, _d: ["伪造的问题"])
+
+        archive, problems = build.produce_zip(dist)
+
+        assert archive is None
+        assert problems == ["伪造的问题"]
+        assert not (build.DIST / build.artifact_name()).exists(), "不合格的包不该留在官方产物路径"
+        assert not list(build.DIST.glob("*.tmp")), "暂存文件也该被清掉"
+
+    def test_a_stale_archive_disappears_even_when_the_new_build_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """上一次的包必须先消失：否则失败的构建会让旧包看起来是「这次的成果」。"""
+        dist = self._prep(tmp_path, monkeypatch)
+        stale = build.DIST / build.artifact_name()
+        stale.write_bytes(b"stale-from-a-previous-build")
+        monkeypatch.setattr(build, "zip_problems", lambda _a, _d: ["伪造的问题"])
+
+        archive, _ = build.produce_zip(dist)
+
+        assert archive is None
+        assert not stale.exists(), "构建失败后旧包不该继续留在官方路径"
