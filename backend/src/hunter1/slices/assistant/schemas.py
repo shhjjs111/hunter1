@@ -51,7 +51,22 @@ class ConversationMessageView(BaseModel):
     content: str
 
 
+class ConversationListResponse(BaseModel):
+    """会话列表页。
+
+    `total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），
+    没有它们时第 51 个起的会话永久不可见、且界面看起来「这就是全部」。与
+    `applications/schemas.py` 的 `ApplicationListResponse` 同一课 —— 原先这里是
+    裸数组，连放截断信号的位置都没有。
+    """
+
+    items: list[ConversationSummary]
+    total: int
+    has_more: bool
+
+
 __all__ = [
+    "ConversationListResponse",
     "ConversationMessageView",
     "ConversationSummary",
     "StreamRequest",

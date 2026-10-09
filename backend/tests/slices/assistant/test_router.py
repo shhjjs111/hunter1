@@ -44,9 +44,12 @@ class ScriptedLLM:
     只能从**送进模型的东西**上验证，光看回复是看不出来的。
     """
 
-    def __init__(self, *, reply: str = "共 1 条岗位。", boom: bool = False) -> None:
+    def __init__(
+        self, *, reply: str = "共 1 条岗位。", boom: bool = False, finish_reason: str | None = None
+    ) -> None:
         self.reply = reply
         self.boom = boom
+        self.finish_reason = finish_reason
         self.round = 0
         self.closed = False
         self.calls: list[list[Message]] = []
@@ -84,7 +87,7 @@ class ScriptedLLM:
             return
         for chunk in ("共 ", "1 条", "岗位。"):
             yield TextDelta(chunk)
-        yield StreamComplete(content=self.reply, model="fake")
+        yield StreamComplete(content=self.reply, model="fake", finish_reason=self.finish_reason)
 
 
 class MidStreamFailureLLM:
@@ -143,14 +146,36 @@ def _client(
 class TestConversationsEndpoints:
     def test_empty_list(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
-            assert client.get("/api/assistant/conversations").json() == []
+            payload = client.get("/api/assistant/conversations").json()
+            assert payload["items"] == []
+            assert payload["total"] == 0
+            assert payload["has_more"] is False
 
     def test_list_after_turn(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
             client.post("/api/assistant/turn", json={"message": "有哪些产品岗？"})
-            items = client.get("/api/assistant/conversations").json()
+            payload = client.get("/api/assistant/conversations").json()
+            items = payload["items"]
             assert len(items) == 1
             assert "有哪些产品岗" in items[0]["title"]
+            assert payload["total"] == 1 and payload["has_more"] is False
+
+    def test_truncation_signal_when_over_the_limit(self, db: Database, monkeypatch) -> None:
+        """列表有上限就必须给截断信号 —— 否则更旧的会话永久不可见且看起来「这就是全部」。
+
+        与 `applications` 的 `total` / `has_more` 同一课：原先这里是裸数组，连放
+        截断信号的位置都没有。
+        """
+        import hunter1.slices.assistant.router as router_module
+
+        monkeypatch.setattr(router_module, "LIST_LIMIT", 2)
+        for client in _client(db, ScriptedLLM()):
+            for index in range(3):
+                client.post("/api/assistant/turn", json={"message": f"第 {index} 问"})
+            payload = client.get("/api/assistant/conversations").json()
+            assert len(payload["items"]) == 2, "取回条数受 LIST_LIMIT 约束"
+            assert payload["total"] == 3, "总数要如实报出"
+            assert payload["has_more"] is True, "被截断必须有信号"
 
     def test_messages_of_unknown_conversation_is_404(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
@@ -159,7 +184,7 @@ class TestConversationsEndpoints:
     def test_messages_after_turn(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
             client.post("/api/assistant/turn", json={"message": "有哪些产品岗？"})
-            conversation_id = client.get("/api/assistant/conversations").json()[0]["id"]
+            conversation_id = client.get("/api/assistant/conversations").json()["items"][0]["id"]
             messages = client.get(f"/api/assistant/conversations/{conversation_id}").json()
             assert [item["role"] for item in messages] == ["user", "assistant"]
             assert messages[0]["content"] == "有哪些产品岗？"
@@ -399,3 +424,89 @@ class TestPartialAnswerIsNotPersisted:
         # 半截回答与失败那句都不落库
         assert db.conversations().list() == []
         assert llm.closed is True
+
+
+class TestUnknownConversationOnWritePaths:
+    """写端点对「传了 conversation_id 却查不到」必须 404，与读端点同一语义。
+
+    原先两个写端点静默新建会话（history 为空），而读端点对同一资源返回 404 ——
+    同一资源「不存在」在读写两面语义相反。后果：拼错或已删除的 id 永不暴露，
+    用户以为在续一段对话，实际上下文已丢且无从察觉。
+    """
+
+    def test_turn_rejects_unknown_conversation(self, db: Database) -> None:
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            response = client.post(
+                "/api/assistant/turn", json={"message": "接着聊", "conversation_id": "nope"}
+            )
+            assert response.status_code == 404
+            assert "会话不存在" in response.json()["detail"]
+        # 拒绝请求不该落任何库、也不该白花一次模型调用
+        assert db.conversations().list() == []
+
+    def test_stream_rejects_unknown_conversation_before_opening_the_stream(
+        self, db: Database
+    ) -> None:
+        """开流**之前**就该 404 —— 前端拿到的是一条标准 404 JSON，不是 SSE error 事件。
+
+        这是「一次性端点与流式端点对同一契约给同一状态码」的前提：放进 generator
+        里就晚了（响应已开始，只能作为 error 事件发出），前端得写两套判断。
+        """
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            response = client.post(
+                "/api/assistant/stream", json={"message": "接着聊", "conversation_id": "nope"}
+            )
+            assert response.status_code == 404
+            assert response.headers["content-type"].startswith("application/json")
+            assert "会话不存在" in response.json()["detail"]
+
+    def test_turn_still_works_with_a_known_conversation(self, db: Database) -> None:
+        """回归护栏：合法 id 必须照常续接，别把正常路径一起挡掉。"""
+        for client in _client(db, ScriptedLLM()):
+            first = client.post("/api/assistant/turn", json={"message": "第一句"})
+            conversation_id = first.json()["conversation_id"]
+            second = client.post(
+                "/api/assistant/turn",
+                json={"message": "第二句", "conversation_id": conversation_id},
+            )
+            assert second.status_code == 200
+            assert second.json()["conversation_id"] == conversation_id
+
+
+class TestLengthTruncatedAnswerIsAnnounced:
+    """被 token 上限截断的回答必须显式告知用户。
+
+    `finish_reason == "length"` 说明回答是**半截的**，而它在外观上与完整回答无异 ——
+    不说出来就是「静默截断」（用户以为助手说完了）。
+
+    注：流式路径的回复取 `spoken or completion.content`，即**增量拼起来的文本**
+    （ScriptedLLM 固定吐「共 」「1 条」「岗位。」），所以断言用拼好的串而不是 `reply`。
+    """
+
+    STREAMED = "共 1 条岗位。"
+
+    def test_stream_appends_a_notice_when_truncated_by_length(self, db: Database) -> None:
+        llm = ScriptedLLM(finish_reason="length")
+        for client in _client(db, llm):
+            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
+        done = next(event for event in events if event["type"] == "done")
+        assert self.STREAMED in done["reply"]
+        assert "长度上限" in done["reply"]
+
+    def test_stream_stays_quiet_when_finish_reason_is_stop(self, db: Database) -> None:
+        llm = ScriptedLLM(finish_reason="stop")
+        for client in _client(db, llm):
+            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
+        done = next(event for event in events if event["type"] == "done")
+        assert done["reply"] == self.STREAMED
+
+    def test_missing_finish_reason_does_not_fake_a_notice(self, db: Database) -> None:
+        """厂商没给结束原因时不能瞎提示（大量兼容网关就是不回这一项）。"""
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
+        done = next(event for event in events if event["type"] == "done")
+        assert done["reply"] == self.STREAMED
+        assert "长度上限" not in done["reply"]

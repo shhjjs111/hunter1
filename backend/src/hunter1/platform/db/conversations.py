@@ -97,6 +97,12 @@ class SqliteConversationRepository:
             )
             return [_to_conversation(row) for row in session.scalars(statement)]
 
+    def count(self) -> int:
+        """会话总数 —— 列表有上限，没它就无从知道「被截断了没有」。"""
+        with self._db.session() as session:
+            total = session.scalar(select(func.count()).select_from(ConversationRow))
+            return int(total or 0)
+
     def delete(self, conversation_id: str) -> None:
         with self._db.session() as session:
             session.execute(

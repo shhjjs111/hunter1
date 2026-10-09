@@ -35,6 +35,7 @@ from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
 from hunter1.domain.assistant import Message, Role
 from hunter1.domain.llm import LLMError, TextDelta
 from hunter1.slices.assistant.schemas import (
+    ConversationListResponse,
     ConversationMessageView,
     ConversationSummary,
     StreamRequest,
@@ -60,6 +61,10 @@ TOOL_PREVIEW_LIMIT = 1000
 
 # 历史上下文的默认截断条数（对话越长越该保留近期）。
 DEFAULT_HISTORY_LIMIT = 20
+
+#: 会话列表的固定上限。列表有上限就必须给截断信号（`total` / `has_more`）——
+#: 见 `ConversationListResponse`。与 applications 的 `LIST_LIMIT` 同一课。
+LIST_LIMIT = 50
 
 FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
 
@@ -105,6 +110,24 @@ def _static_stream(events: list[dict[str, object]]) -> StreamingResponse:
     return StreamingResponse(generate(), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
+def _history_for(
+    store: ConversationStore, conversation_id: str, history_limit: int
+) -> list[Message]:
+    """取会话历史；**传了 conversation_id 却查不到**时 404。
+
+    原先两个**写**端点对未知 id 静默新建会话（history 为空），而同切片的**读**端点
+    对同一资源返回 404 —— 同一资源「不存在」在读写两个面上语义相反。后果：拼错或
+    已删除的 id 永不暴露，用户以为在续一段对话，实际上下文已丢且无从察觉。
+    这里与读端点对齐（`conversation_messages` 的 404 是同一语义）。
+    """
+    if not conversation_id:
+        return []
+    conversation = store.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
+    return store.messages(conversation.id, limit=history_limit)
+
+
 def build_router(
     *,
     store: ConversationStore,
@@ -116,13 +139,18 @@ def build_router(
     router = APIRouter()
 
     @router.get(
-        "/assistant/conversations", response_model=list[ConversationSummary], summary="会话列表"
+        "/assistant/conversations",
+        response_model=ConversationListResponse,
+        summary="会话列表",
     )
-    def list_conversations() -> list[ConversationSummary]:
-        return [
+    def list_conversations() -> ConversationListResponse:
+        items = [
             ConversationSummary(id=item.id, title=item.title, updated_at=item.updated_at)
-            for item in store.list(limit=50)
+            for item in store.list(limit=LIST_LIMIT)
         ]
+        # `total` 让「被上限截断」不再静默：界面据此提示「只显示最近 N 条」。
+        total = store.count()
+        return ConversationListResponse(items=items, total=total, has_more=total > len(items))
 
     @router.get(
         "/assistant/conversations/{conversation_id}",
@@ -145,6 +173,9 @@ def build_router(
         if not text:
             raise HTTPException(status_code=422, detail="请输入内容后再发送。")
         conversation = store.get(body.conversation_id) if body.conversation_id else None
+        if body.conversation_id and conversation is None:
+            # 与读端点同一语义（见 `_history_for` 的说明）。
+            raise HTTPException(status_code=404, detail=f"会话不存在：{body.conversation_id}")
         history = store.messages(conversation.id, limit=history_limit) if conversation else []
         user_message = Message(role=Role.USER, content=text)
         llm = llm_factory()
@@ -191,6 +222,12 @@ def build_router(
         text = body.message.strip()
         if not text:
             return _static_stream([{"type": "error", "message": "请输入内容后再发送。"}])
+        # 未知会话在**开流之前**就 404：此刻响应尚未开始，raise 会走 FastAPI 的
+        # 异常处理器，前端拿到的是一条标准的 404 JSON（与一次性端点、读端点一致）。
+        # 放到 generator 里就晚了 —— 那时响应已开始，只能作为一条 SSE error 事件发出，
+        # 前端得为同一契约写两套判断。
+        if body.conversation_id:
+            _history_for(store, body.conversation_id, history_limit)
         llm = llm_factory()
         # 所有权交给 generator：真正的消费发生在响应体被读取时（端点这时早已返回），
         # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette

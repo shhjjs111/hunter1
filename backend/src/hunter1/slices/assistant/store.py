@@ -27,6 +27,10 @@ class ConversationStore:
     def list(self, *, limit: int = 50) -> list[Conversation]:
         return self._db.conversations().list(limit=limit)
 
+    def count(self) -> int:
+        """会话总数 —— 列表有固定上限，用它算截断信号。"""
+        return self._db.conversations().count()
+
     def delete(self, conversation_id: str) -> None:
         self._db.conversations().delete(conversation_id)
 

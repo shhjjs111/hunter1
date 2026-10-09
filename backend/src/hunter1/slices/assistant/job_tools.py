@@ -68,7 +68,7 @@ def build_tools(
             if len(candidates) == 1:
                 job = candidates[0]
             elif len(candidates) > 1:
-                return f"id 前缀 {job_id} 有 {len(candidates)} 条匹配，请给更长的 id。"
+                return f"id 前缀 {job_id} 至少有 {len(candidates)} 条匹配，请给更长的 id。"
             else:
                 return f"找不到岗位 {job_id}。"
         parts = [
