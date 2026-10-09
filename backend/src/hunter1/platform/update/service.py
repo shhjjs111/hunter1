@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,11 +87,13 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     - `ValueError`：没有可更新的版本、产物声明体积超限、包里有越界路径 / 解压后
       体积超限 / 条目数超限（包可疑，不「修正」）；
     - `DownloadError`：下载失败、**不是合法 zip**、压缩方法不受支持、成员被加密、
-      磁盘写入失败。
+      **压缩数据损坏**、磁盘写入失败。
 
-    后两类原先裸穿（`zipfile.BadZipFile` 与 `OSError` 都不是 `ValueError`），
-    于是 CLI 的 `except (DownloadError, ValueError)` 兜不住，用户看到的是一段
-    traceback 而不是「下载失败：…」。
+    这些形状原先全会裸穿 —— `BadZipFile` / `OSError` / `NotImplementedError` /
+    `RuntimeError` / `zlib.error` 一个都不是 `ValueError`，于是 CLI 的
+    `except (DownloadError, ValueError)` 兜不住，用户看到的是一段 traceback
+    而不是「下载失败：…」。注意这是**开放集合**（`zlib.error` 的 MRO 直系
+    `Exception`），所以解压阶段除了逐条认形状，还有一个 catch-all 兜底。
     """
     if not status.available or status.asset is None or status.latest is None:
         raise ValueError("没有可用的更新")
@@ -106,8 +109,16 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
         dest_dir.mkdir(parents=True, exist_ok=True)
         archive = dest_dir / f"hunter1-{status.latest}.zip"
         source.download_asset(status.asset, archive)
+    except (DownloadError, ValueError):
+        raise
+    except OSError as exc:
+        raise DownloadError("write_failed", str(exc)) from exc
 
-        extracted = dest_dir / status.latest
+    extracted = dest_dir / status.latest
+    # 解压单独一个 try 块：这里的异常形状是**开放集合**（见下面的 catch-all），
+    # 而上面下载/建目录的异常另有语义（写盘失败）—— 混在一起会让一个下载期的
+    # TypeError 被说成「包坏了」。
+    try:
         _extract_within(archive, extracted)
     except (DownloadError, ValueError):
         raise
@@ -122,8 +133,22 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
         # 加密成员 / 需要密码的 zip 抛 `RuntimeError("File ... is encrypted, password
         # required")`（同样是 `BadZipFile` 之外的形状）。归到「包不对劲」这一档。
         raise DownloadError("archive_encrypted", str(exc)) from exc
+    except zlib.error as exc:
+        # 中央目录**合法**、但压缩数据在解压中损坏（转存 / 重排 / 中间截断）。
+        # `zlib.error` 的 MRO 是 `error → Exception`：ValueError / OSError /
+        # RuntimeError / BadZipFile 一个都不是（实测），靶向 handler 全部捕不到。
+        raise DownloadError("archive_corrupt", str(exc)) from exc
     except OSError as exc:
         raise DownloadError("write_failed", str(exc)) from exc
+    except Exception as exc:
+        # **catch-all 是有意的**：解压期能抛出的异常形状随 Python 版本与压缩后端
+        # 变化（本文件已实测到四种：BadZipFile / NotImplementedError / RuntimeError
+        # / zlib.error，其中后两种的 MRO 都与前一种无关）。逐个列举是打地鼠 ——
+        # 漏掉一个就是裸穿 traceback，用户看到的不再是「下载失败：…」。
+        # 这里只做「读 zip + 写文件」，任何未归类异常都只能来自这个包或解压后端，
+        # 归到「包不对劲」是唯一有行动意义的结论；上面那些更精确的 handler 先接住
+        # 常见形状，保持各自的错误码不变。
+        raise DownloadError("archive_corrupt", str(exc)) from exc
     return extracted
 
 

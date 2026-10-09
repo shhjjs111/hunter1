@@ -137,6 +137,27 @@ def _encrypted_zip_bytes() -> bytes:
     return bytes(raw)
 
 
+def _corrupt_deflate_bytes() -> bytes:
+    """中央目录**合法**、压缩数据**损坏**的包。
+
+    与 `_deflate64_bytes` / `_encrypted_zip_bytes` 同一做法：先造一个合法的包，再改字节。
+    这里破坏第一个成员的压缩数据 —— 解压时 zlib 报
+    `Error -3 while decompressing data: …`，抛的是 `zlib.error`。
+    """
+    import io
+    import struct
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("hunter1/hunter1.exe", b"binary" * 200)
+    raw = bytearray(buffer.getvalue())
+    name_len, extra_len = struct.unpack("<HH", raw[26:30])
+    data_offset = 30 + name_len + extra_len
+    for index in range(data_offset, data_offset + 8):
+        raw[index] ^= 0xFF
+    return bytes(raw)
+
+
 class TestCheckForUpdate:
     def test_reports_newer_version(self) -> None:
         source = FakeSource(manifest=_manifest("0.2.0", notes="修了几个 bug"))
@@ -329,6 +350,30 @@ class TestPrepareUpdate:
                 source=source, status=self._status(source), dest_dir=tmp_path / "updates"
             )
         assert excinfo.value.code == "archive_encrypted"
+
+    def test_corrupt_deflate_data_becomes_download_error(self, tmp_path: Path) -> None:
+        """压缩数据在解压中损坏 → DownloadError，不是裸 `zlib.error`。
+
+        `zlib.error` 的 MRO 是 `error → Exception`：`ValueError` / `OSError` /
+        `RuntimeError` / `BadZipFile` 一个都不是（下面那条断言就是这条前提本身）。
+        靶向 handler 穷举不到它 —— 用户看到的就是一段 traceback，而
+        `prepare_update` 的 docstring 声称「裸穿」已经修好。
+        """
+        import zlib
+
+        assert not issubclass(
+            zlib.error, (ValueError, OSError, RuntimeError, zipfile.BadZipFile)
+        ), "zlib.error 若不在此列，下面的用例就不再覆盖那个缺口"
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=_corrupt_deflate_bytes())
+
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+
+        assert excinfo.value.code == "archive_corrupt"
+        # 归的是**这个**原因，不是 catch-all 顺手吞了别的什么
+        assert isinstance(excinfo.value.__cause__, zlib.error)
 
 
 def test_status_is_a_plain_dataclass() -> None:
