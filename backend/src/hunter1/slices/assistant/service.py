@@ -44,6 +44,9 @@ DEFAULT_MAX_ITERATIONS = 6
 
 _TRUNCATED_REPLY = "（助手在多次工具调用后仍未给出结论，已停止。请把问题拆小一点再问。）"
 
+#: 流式回答被 token 上限截断时补的提示（`finish_reason == "length"`）。
+_LENGTH_TRUNCATED_NOTICE = "（回答因长度上限被截断，可让它接着说。）"
+
 
 @dataclass
 class AssistantResult:
@@ -209,8 +212,13 @@ def run_turn_stream(
         degraded = degraded or completion.degraded
 
         if not completion.has_tool_calls:
+            reply = spoken or completion.content
+            if completion.finish_reason == "length":
+                # 被 token 上限截断：回答是**半截的**，外观却与完整回答无异。
+                # 不说出来的话用户会以为助手就此说完 —— 属于「静默截断」。
+                reply = f"{reply}\n\n{_LENGTH_TRUNCATED_NOTICE}"
             yield TurnDone(
-                reply=spoken or completion.content,
+                reply=reply,
                 tool_results=tool_results,
                 model=model,
                 degraded=degraded,

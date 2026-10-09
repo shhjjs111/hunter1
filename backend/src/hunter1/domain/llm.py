@@ -63,6 +63,11 @@ class StreamComplete:
     input_tokens: int | None = None
     output_tokens: int | None = None
     degraded: bool = False
+    #: 厂商给的结束原因（`stop` / `length` / `tool_calls` / …），没给则 `None`。
+    #: 存在的意义是区分「正常说完」与「被 token 上限截断」—— `length` 时回答是
+    #: **半截的**，而它在外观上与完整回答无异（这正是要显式化的原因）。
+    #: 不把「没收到 [DONE]」当失败：大量兼容网关就这么收尾，属既有容忍设计。
+    finish_reason: str | None = None
 
     @property
     def has_tool_calls(self) -> bool:

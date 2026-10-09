@@ -62,10 +62,11 @@ def parse_sse_lines(
     model = default_model
     input_tokens: int | None = None
     output_tokens: int | None = None
+    finish_reason: str | None = None
 
     def handle(pieces: list[str]) -> Iterator[TextDelta]:
         """解析一个完整事件（data 行已按协议拼好）。"""
-        nonlocal current_index, input_tokens, model, output_tokens
+        nonlocal current_index, input_tokens, model, output_tokens, finish_reason
         for payload_text in _event_payloads(pieces):
             try:
                 payload = json.loads(payload_text)
@@ -95,6 +96,11 @@ def parse_sse_lines(
             for choice in choices:
                 if not isinstance(choice, dict):
                     continue
+                reason = choice.get("finish_reason")
+                if isinstance(reason, str) and reason.strip():
+                    # 记下厂商给的结束原因（`length` = 被 token 上限截断）。留一个
+                    # 非空判定：有的网关每个 chunk 都带 `finish_reason: null`。
+                    finish_reason = reason.strip()
                 delta = choice.get("delta")
                 if not isinstance(delta, dict):
                     continue
@@ -143,6 +149,7 @@ def parse_sse_lines(
         tool_calls=_finalize(slots),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        finish_reason=finish_reason,
     )
 
 

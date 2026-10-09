@@ -278,6 +278,32 @@ class TestParseSseLines:
         lines = _wire(json.dumps({"model": "real-model", "choices": [{"delta": {"content": "x"}}]}))
         assert _done(self._run(lines, model="fallback")).model == "real-model"
 
+    def test_finish_reason_is_captured(self) -> None:
+        """结束原因要如实带出来 —— `length` 是「被 token 上限截断」的唯一信号。
+
+        原先完全没读 `finish_reason`：半截回答与完整回答在外观上无法区分。
+        """
+        lines = _wire(
+            _delta("半截"),
+            json.dumps({"choices": [{"delta": {}, "finish_reason": "length"}]}),
+        )
+        done = _done(self._run(lines))
+        assert done.finish_reason == "length"
+        assert done.content == "半截"
+
+    def test_finish_reason_absent_is_none(self) -> None:
+        """没有任何结束原因时保持 `None`，不要瞎编一个。"""
+        assert _done(self._run(_wire(_delta("x")))).finish_reason is None
+
+    def test_null_finish_reason_is_ignored(self) -> None:
+        """有的网关每个 chunk 都带 `finish_reason: null` —— 不能被它覆盖成 None 之后再无值。"""
+        lines = _wire(
+            _delta("x"),
+            json.dumps({"choices": [{"delta": {}, "finish_reason": "length"}]}),
+            json.dumps({"choices": [{"delta": {}, "finish_reason": None}]}),
+        )
+        assert _done(self._run(lines)).finish_reason == "length"
+
     def test_model_falls_back_when_absent(self) -> None:
         assert _done(self._run(_wire(_delta("x")), model="fallback")).model == "fallback"
 
