@@ -61,7 +61,8 @@ echo "读到 ${#TOKEN} 个字符，正在向 GitHub 校验…"
 # 「GitHub 拒绝了该令牌」，**有效令牌永远存不下来**，还引导用户去重建令牌。
 # 同因问题见 check.sh:50-58。有 cygpath 才转（Linux/CI 本就是宿主形式）。
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+# `|| true`：EXIT trap 的最后一条命令失败会覆盖脚本退出码 —— 清理失败不该改变结论。
+trap 'command rm -rf "$TMP_DIR" 2>/dev/null || true' EXIT
 TMP_AUTH="$TMP_DIR/auth"
 TMP_WHO="$TMP_DIR/who.json"
 

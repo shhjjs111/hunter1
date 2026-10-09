@@ -49,10 +49,12 @@ GENERATED="$ROOT/contracts/.openapi.generated.json"
 #
 # `TMP_TS` 只在前端分支里赋值（见文件末尾），而 trap 在脚本退出时必然执行 ——
 # `set -u` 下引用未赋值变量会直接报错，所以只能用 `${TMP_TS:-}`。
+# 每条清理都带 `|| true`：bash 会用 EXIT trap 里最后一条命令的状态覆盖脚本自身的
+# 退出码 —— 清理失败会把一次成功的 `--check` 判成「契约漂移」，指错方向。
 _cleanup() {
-  rm -f "$GENERATED"
+  rm -f "$GENERATED" || true
   if [[ -n "${TMP_TS:-}" ]]; then
-    rm -f "$TMP_TS"
+    rm -f "$TMP_TS" || true
   fi
 }
 trap _cleanup EXIT

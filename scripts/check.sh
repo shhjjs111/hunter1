@@ -169,7 +169,12 @@ done
 if [[ -n "$SHELLCHECK" ]]; then
   # 归一化到临时目录（而不是 stdin），让报错里的文件名仍可读、可点击。
   SHELLCHECK_TMP="$(mktemp -d)"
-  trap 'rm -rf "$SHELLCHECK_TMP"' EXIT
+  # `|| true` 不是装饰：bash 会用 EXIT trap 里**最后一条命令**的状态覆盖脚本自身的退出码。
+  # 清理一失败，一份「全部通过」的门禁就以 1 退出 —— 而它恰恰是 AGENTS.md 定的唯一
+  # 提交门禁，判错方向比不判更坏。（触发条件与 `rm` 的具体实现有关：本机 `rm` 是
+  # 普通二进制就没事，换成会拒绝某种路径形态的包装就会中招。）
+  # `command` 用来绕过同名 shell 函数；`2>/dev/null` 是因为失败原因不值得污染输出。
+  trap 'command rm -rf "$SHELLCHECK_TMP" 2>/dev/null || true' EXIT
   for script in "$ROOT"/scripts/*.sh; do
     name="$(basename "$script")"
     tr -d '\r' < "$script" > "$SHELLCHECK_TMP/$name"

@@ -44,6 +44,7 @@ fi
 VERSION="$("$PY" -c "import sys; sys.path.insert(0, 'backend/src'); from hunter1 import __version__; print(__version__)")"
 TAG="${TAG:-v$VERSION}"
 
+
 echo "== 版本：$VERSION（tag $TAG）=="
 
 # 1) 工作区必须干净：带着未提交改动发版，产物就与 tag 对不上。
@@ -97,7 +98,8 @@ echo "  ✓ tag 指向 HEAD（${HEAD_COMMIT:0:7}）"
 # 检查通过再 mv；异常路径由 trap 清理。
 URL_BASE="https://github.com/$OWNER_REPO/releases/download/$TAG"
 TMP_MANIFEST="dist/.manifest.tmp.json"
-trap 'rm -f "$TMP_MANIFEST"' EXIT
+# `|| true`：EXIT trap 的最后一条命令失败会覆盖脚本退出码 —— 清理失败不该改变结论。
+trap 'rm -f "$TMP_MANIFEST" 2>/dev/null || true' EXIT
 
 "$PY" scripts/make_manifest.py \
   --asset "$PLATFORM_KEY=$ZIP" \
