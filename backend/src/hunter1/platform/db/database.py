@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, inspect, text
+from sqlalchemy import URL, Engine, create_engine, event, inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
@@ -65,7 +65,15 @@ class Database:
             # 裸的 PermissionError / FileExistsError 对用户毫无意义 ——
             # 他不知道是哪个路径、也不知道该改什么。
             raise DatabaseLocationError(self.path, exc) from exc
-        self.engine: Engine = create_engine(f"sqlite:///{self.path}", future=True)
+        # 用 `URL.create` 而不是 f-string 拼 `sqlite:///{path}`：字符串 URL 会让
+        # SQLAlchemy 对 database 分量做 percent-decode —— 路径里的 `%20` 会被解成
+        # 空格、`%2F` 解成 `/`（实测：`D:/bak%20up/hunter1.db` → `D:/bak up/hunter1.db`）。
+        # 于是上面 mkdir 字面路径、下面却打开另一个文件：可能开到一个不相干的库，
+        # 也可能因父目录不存在而把「URL 解码」这层真实原因掩盖成 DatabaseLocationError。
+        # `URL.create` 不做解码，字面路径与打开的文件始终是同一个。
+        self.engine: Engine = create_engine(
+            URL.create("sqlite", database=str(self.path)), future=True
+        )
         _enable_sqlite_pragmas(self.engine)
 
     def initialize(self) -> None:

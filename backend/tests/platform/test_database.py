@@ -114,6 +114,29 @@ class TestUnusableLocation:
         db.initialize()
         assert db.path.parent.is_dir()
 
+    def test_percent_escapes_in_path_are_not_decoded(self, tmp_path: Path) -> None:
+        """含 `%xx` 的路径必须打开**同一个**文件，不能被 SQLAlchemy 解成别的路径。
+
+        用 f-string 拼 `sqlite:///{path}` 时，SQLAlchemy 会对 database 分量做
+        percent-decode（实测：`D:/bak%20up/hunter1.db` → `D:/bak up/hunter1.db`）。
+        于是 mkdir 作用于字面路径、SQLite 却打开另一个文件。改用 `URL.create` 后
+        两者一致 —— 这里钉住它。
+        """
+        target = tmp_path / "bak%20up" / "hunter1.db"
+        db = Database(target)
+        db.initialize()
+        assert target.is_file(), "数据库应落在字面路径上"
+        # 对照：被解码后的那个路径不该出现
+        assert not (tmp_path / "bak up" / "hunter1.db").exists()
+
+    def test_slash_escape_in_path_is_not_decoded(self, tmp_path: Path) -> None:
+        """`%2F` 若被解码会变成路径分隔符，落到另一层目录里。"""
+        target = tmp_path / "x%2Fy" / "hunter1.db"
+        db = Database(target)
+        db.initialize()
+        assert target.is_file()
+        assert not (tmp_path / "x" / "y" / "hunter1.db").exists()
+
     def test_path_pointing_at_a_directory_is_rejected_readably(self, tmp_path: Path) -> None:
         """`--db` 指到一个目录时给可读失败，而不是连库时才炸出一段 traceback。
 
