@@ -267,3 +267,41 @@ class TestStart:
         runner = _runner(db, [FakeCrawler("甲")])
         runner.run()
         assert runner.start() is True
+
+    def test_thread_start_failure_does_not_leave_it_running(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """线程起不来也必须收敛 —— 这条路径在 `_guarded_run` **之前**，它兜不住。
+
+        `Thread.start()` 抛 `RuntimeError: can't start new thread`（线程/句柄耗尽）时
+        `running=True` 已经置位，而 `_guarded_run` 从未执行：没有任何人会把它置回来。
+        后果是进度页永远显示「正在抓取」、`start()` 从此恒返回 False，只能重启进程 ——
+        正是模块开头「任何异常都要收敛」那条约定要防的情形。
+        """
+        import types
+
+        import hunter1.slices.crawl.runner as runner_module
+
+        class UnstartableThread:
+            """替身：构造得出来，`start()` 必炸（真实场景是线程/句柄耗尽）。"""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            def start(self) -> None:
+                raise RuntimeError("can't start new thread")
+
+        runner = _runner(db, [FakeCrawler("甲")])
+        # 只换 runner 模块眼里的 threading，不去 patch 真的 Thread.start ——
+        # 那会波及 pytest 自己的线程。
+        monkeypatch.setattr(
+            runner_module, "threading", types.SimpleNamespace(Thread=UnstartableThread)
+        )
+
+        with pytest.raises(RuntimeError, match="can't start new thread"):
+            runner.start()
+
+        snapshot = runner.snapshot()
+        assert snapshot.running is False, "线程没起来却留着 running=True → 永久卡在「正在抓取」"
+        assert snapshot.error is not None
+        assert "线程启动失败" in snapshot.error
