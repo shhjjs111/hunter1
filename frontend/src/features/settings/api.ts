@@ -8,9 +8,10 @@ export type SettingsView = components["schemas"]["SettingsView"];
 export type SettingsForm = components["schemas"]["SettingsForm"];
 
 async function fetchSettings(): Promise<SettingsView | null> {
-  const { data, error } = await api.GET("/api/settings");
+  const { data, error, response } = await api.GET("/api/settings");
   if (error) {
-    throw new Error("加载配置失败");
+    // 走共享漏斗取可读原因（后端 detail 是写给用户看的），别手写固定文案吞掉它。
+    throw new Error(apiErrorMessage(error, "加载配置失败", response));
   }
   return data ?? null;
 }
@@ -41,9 +42,12 @@ export function useSaveSettings() {
 export function useTestConnection() {
   return useMutation({
     mutationFn: async () => {
-      const { data, error } = await api.POST("/api/settings/test");
+      const { data, error, response } = await api.POST("/api/settings/test");
       if (error || !data) {
-        throw new Error("探测失败");
+        // 探测失败的原因（连不上 / 401 / 模型名不对）后端写在 detail 里 ——
+        // 手写「探测失败」会把它整段吞掉。注意端点本身对「探测不通过」是
+        // 200 + ok:false（不是错误），走到这里的都是**请求层**的失败。
+        throw new Error(apiErrorMessage(error, "探测失败", response));
       }
       return data;
     },
