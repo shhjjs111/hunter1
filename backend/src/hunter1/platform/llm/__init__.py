@@ -181,6 +181,7 @@ class OpenAICompatibleClient:
         data = self._post(payload)
         return LLMResponse(
             content=_extract_content(data),
+            finish_reason=_finish_reason(data),
             model=str(data.get("model") or self.model),
             tool_calls=_extract_tool_calls(data),
             input_tokens=_usage(data, "prompt_tokens"),
@@ -211,6 +212,7 @@ class OpenAICompatibleClient:
         data = self._post(payload)
         return LLMResponse(
             content=_extract_content_lenient(data),
+            finish_reason=_finish_reason(data),
             model=str(data.get("model") or self.model),
             tool_calls=_extract_tool_calls(data),
             input_tokens=_usage(data, "prompt_tokens"),
@@ -332,6 +334,9 @@ class OpenAICompatibleClient:
             tool_calls=_extract_tool_calls(data),
             input_tokens=_usage(data, "prompt_tokens"),
             output_tokens=_usage(data, "completion_tokens"),
+            # 网关把流式请求当一次性处理：这里的 finish_reason 同样是截断信号
+            # （降级网关正是常见的那一类）。
+            finish_reason=_finish_reason(data),
             degraded=True,
         )
 
@@ -352,6 +357,10 @@ class OpenAICompatibleClient:
             tool_calls=response.tool_calls,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
+            # 降级＝这家厂商没能真正流式输出；它往往是把流式请求转成了非流式
+            # max_tokens 调用 —— 那里的 finish_reason 是**唯一**的截断信号，
+            # 丢掉它，降级路径的截断提示就永久失效。
+            finish_reason=response.finish_reason,
             degraded=True,
         )
 
@@ -416,6 +425,7 @@ class OpenAICompatibleClient:
 
             return LLMResponse(
                 content=json.dumps(parsed, ensure_ascii=False),
+                finish_reason=_finish_reason(data),
                 model=str(data.get("model") or self.model),
                 input_tokens=_usage(data, "prompt_tokens"),
                 output_tokens=_usage(data, "completion_tokens"),
@@ -605,6 +615,25 @@ def _usage(data: dict[str, Any], key: str) -> int | None:
     usage = data.get("usage")
     value = usage.get(key) if isinstance(usage, dict) else None
     return value if isinstance(value, int) and value >= 0 else None
+
+
+def _finish_reason(data: dict[str, Any]) -> str | None:
+    """取**非流式**响应体里的结束原因（`length` = 被 token 上限截断）。
+
+    与 `streaming.parse_sse_lines` 同一语义：取第一个非空的原因。有的网关不返回
+    这一项 —— 那就如实返回 `None`（「不知道」），不要猜成 `stop`：把「不知道」说成
+    「正常说完」正是截断被静默吞掉的那条路。
+    """
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return None
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        reason = choice.get("finish_reason")
+        if isinstance(reason, str) and reason.strip():
+            return reason.strip()
+    return None
 
 
 def _short(text: str, limit: int = 200) -> str:

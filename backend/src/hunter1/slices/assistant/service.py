@@ -129,8 +129,15 @@ def run_turn(
         output_tokens += response.output_tokens or 0
 
         if not response.has_tool_calls:
+            reply = response.content
+            if response.finish_reason == "length":
+                # 与 `run_turn_stream` 同一取舍、同一文案。这两个端点是**同一资源**的
+                # 两个面（见 router 的注释），只提示一边 = 另一个面把半截回答当完整
+                # 答案落库：`/assistant/turn` 的调用方（脚本 / 无 JS 的回退路径）
+                # 看不出区别，而回答已经是半截的。
+                reply = f"{reply}\n\n{_LENGTH_TRUNCATED_NOTICE}"
             return AssistantResult(
-                reply=response.content,
+                reply=reply,
                 tool_results=tool_results,
                 iterations=iteration,
                 model=model,

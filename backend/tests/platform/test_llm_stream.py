@@ -644,6 +644,64 @@ class TestStreamWithTools:
         assert done.tool_calls[0].name == "search_jobs"
         assert done.tool_calls[0].arguments == {"keyword": "产品"}
 
+    def test_degraded_fallback_keeps_the_finish_reason(self) -> None:
+        """降级路径也必须把 finish_reason 带出来。
+
+        降级的定义是「这家厂商没能真正流式输出」，而**降级网关往往正是**把流式请求
+        转成非流式 `max_tokens` 调用 —— 那里的 `finish_reason: "length"` 是唯一的
+        截断信号。丢掉它，降级时的截断提示就永久失效（回答已是半截，外观却与说完
+        无异）。构造 `StreamComplete` 的两处降级分支都要带上。
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            if body.get("stream"):
+                return httpx.Response(400, json={"error": "stream not supported"})
+            return httpx.Response(
+                200,
+                json={
+                    "model": "m",
+                    "choices": [{"message": {"content": "半截回答"}, "finish_reason": "length"}],
+                },
+            )
+
+        done = _done(list(_client(handler).stream_with_tools(messages=[], tools=[])))
+        assert done.degraded is True
+        assert done.content == "半截回答"
+        assert done.finish_reason == "length"
+
+    def test_gateway_json_response_keeps_the_finish_reason(self) -> None:
+        """网关忽略 `stream: true` 直接回 JSON 时，同样要带出 finish_reason。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "model": "m",
+                    "choices": [{"message": {"content": "网关直给"}, "finish_reason": "length"}],
+                },
+                headers={"content-type": "application/json"},
+            )
+
+        done = _done(list(_client(handler).stream_with_tools(messages=[], tools=[])))
+        assert done.degraded is True
+        assert done.finish_reason == "length"
+
+    def test_degraded_without_finish_reason_is_not_guessed(self) -> None:
+        """厂商不回这一项 → `None`（「不知道」），不能猜成 `stop`。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            if body.get("stream"):
+                return httpx.Response(400, json={"error": "no stream"})
+            return httpx.Response(
+                200, json={"model": "m", "choices": [{"message": {"content": "整段"}}]}
+            )
+
+        done = _done(list(_client(handler).stream_with_tools(messages=[], tools=[])))
+        assert done.degraded is True
+        assert done.finish_reason is None
+
     def test_auth_error_is_not_swallowed_by_degradation(self) -> None:
         """401 降级也救不了 —— 必须原样抛出去，让用户看到真正的原因。"""
 

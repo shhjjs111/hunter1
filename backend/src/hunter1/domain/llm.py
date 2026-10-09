@@ -34,6 +34,12 @@ class LLMResponse:
     input_tokens: int | None = None
     output_tokens: int | None = None
     structured_mode: str | None = None
+    #: 厂商给的结束原因（`stop` / `length` / `tool_calls` / …），没给则 `None`。
+    #: 与 `StreamComplete.finish_reason` 同义：`length` 表示回答被 token 上限**截断**，
+    #: 是半截的。一次性的 `/assistant/turn` 与流式的 `/assistant/stream` 是同一资源的
+    #: 两个面（见 router 的注释），截断必须两边都认得出 —— 只认流式的话，非流式那条路
+    #: 会把半截回答当完整答案落库，而两者在外观上无从分辨。
+    finish_reason: str | None = None
 
     @property
     def has_tool_calls(self) -> bool:

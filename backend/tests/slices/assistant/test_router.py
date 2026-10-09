@@ -70,7 +70,7 @@ class ScriptedLLM:
                 model="fake",
                 tool_calls=[ToolCall(id="c1", name="search_jobs", arguments={"keyword": "产品"})],
             )
-        return LLMResponse(content=self.reply, model="fake")
+        return LLMResponse(content=self.reply, model="fake", finish_reason=self.finish_reason)
 
     # 流式路径（端口契约：以 StreamComplete 收尾）
     def stream_with_tools(self, *, messages: list[Message], **_kw: Any) -> Iterator[Any]:
@@ -510,3 +510,34 @@ class TestLengthTruncatedAnswerIsAnnounced:
         done = next(event for event in events if event["type"] == "done")
         assert done["reply"] == self.STREAMED
         assert "长度上限" not in done["reply"]
+
+    # ---- 同一条规矩的另一面：一次性端点 ----
+    #
+    # `/assistant/turn` 与 `/assistant/stream` 是**同一资源**的两个面（见 router 的
+    # 注释）。只提示流式那一边，非流式的调用方（脚本 / 无 JS 的回退路径）就会把
+    # 半截回答当完整答案落库 —— 而两者在外观上无从分辨。
+
+    def test_one_shot_turn_appends_the_same_notice(self, db: Database) -> None:
+        llm = ScriptedLLM(finish_reason="length")
+        for client in _client(db, llm):
+            reply = client.post("/api/assistant/turn", json={"message": "讲讲"}).json()["reply"]
+            assert self.STREAMED in reply
+            assert "长度上限" in reply
+            # 两个面给的是同一段文字，不是各写一套
+            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
+            done = next(event for event in events if event["type"] == "done")
+            assert reply == done["reply"]
+
+    def test_one_shot_turn_stays_quiet_when_finish_reason_is_stop(self, db: Database) -> None:
+        llm = ScriptedLLM(finish_reason="stop")
+        for client in _client(db, llm):
+            reply = client.post("/api/assistant/turn", json={"message": "讲讲"}).json()["reply"]
+            assert reply == self.STREAMED
+
+    def test_one_shot_turn_stays_quiet_when_finish_reason_is_missing(self, db: Database) -> None:
+        """厂商不回这一项时不能瞎提示（与流式那条配对）。"""
+        llm = ScriptedLLM()
+        for client in _client(db, llm):
+            reply = client.post("/api/assistant/turn", json={"message": "讲讲"}).json()["reply"]
+            assert reply == self.STREAMED
+            assert "长度上限" not in reply
