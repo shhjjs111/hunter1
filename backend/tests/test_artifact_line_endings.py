@@ -84,6 +84,10 @@ def test_exporter_is_runnable_as_a_script(tmp_path: Path) -> None:
         [sys.executable, str(ROOT / "scripts" / "export_openapi.py"), "--out", str(out)],
         capture_output=True,
         text=True,
+        # 同 test_gate_guards：显式 utf-8，避免宿主 locale（Windows cp936）解码
+        # 子进程输出时把 stdout 变 None。
+        encoding="utf-8",
+        errors="replace",
         check=False,
         cwd=ROOT,
     )

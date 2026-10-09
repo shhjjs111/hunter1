@@ -167,6 +167,14 @@ def _id_from_fresh_process() -> str:
         "print(synthetic_call_id())"
     )
     completed = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        # 显式 utf-8：text=True 不给 encoding 时按宿主 locale（Windows cp936）解码，
+        # 遇到非 ASCII 字节即让 reader 线程崩、stdout 变 None。此处输出是 ASCII，
+        # 但同族一并修，避免将来脚本内容变化后本机红、CI 绿。
+        encoding="utf-8",
+        errors="replace",
+        check=True,
     )
     return completed.stdout.strip()

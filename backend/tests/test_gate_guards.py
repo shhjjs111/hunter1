@@ -47,6 +47,12 @@ def test_contracts_sh_refuses_bad_arguments(argv: list[str]) -> None:
         ["bash", str(CONTRACTS_SH), *argv],
         capture_output=True,
         text=True,
+        # 显式 utf-8：`text=True` 不给 encoding 时按**宿主 locale** 解码，Windows
+        # 简中是 cp936，而 contracts.sh 的拒绝文案含 UTF-8 的 `✗`（E2 9C 97）——
+        # reader 线程解码失败 → stdout/stderr 变 None → 下一行 `+` 抛 TypeError。
+        # 本机红、CI（utf-8）绿，正是本文件开头说「两边结论不同源」的同类缺口。
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
         cwd=ROOT,
     )

@@ -44,6 +44,11 @@ def _ruff_exit_code(cwd: Path, target: Path) -> int:
         cwd=cwd,
         capture_output=True,
         text=True,
+        # 与 test_gate_guards 同因：text=True 不给 encoding 会按宿主 locale（Windows
+        # = cp936）解码子进程输出，遇到非 ASCII 字节即让 reader 线程崩、stdout 变 None。
+        # 这里只读 returncode，暂不炸，但同族一起修，免得将来断言文案含中文时复现。
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     return completed.returncode
