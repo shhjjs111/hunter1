@@ -18,5 +18,28 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    coverage: {
+      provider: "v8",
+      // 显式 `include`（而不是默认的「测试期被 import 过的文件」）是**刻意的**：
+      // 默认口径下，新加的文件只要没被任何测试 import 就根本不进分母 ——
+      // 于是「新文件没有测试」这件事永远不会触发闸门，恰是覆盖率最容易漏掉的那类下滑。
+      include: ["src/**/*.{ts,tsx}"],
+      // 测试自身、类型声明与引导入口不算产品代码（`main.tsx` 只负责挂载）。
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.d.ts",
+        "src/test-setup.ts",
+        "src/main.tsx",
+      ],
+      // 覆盖率闸门（此前没有，覆盖率只是个存量事实）。阈值是**下限**，取自当前
+      // 存量再留约 1 个点的边距：挡住真正的下滑，又不至于一次无关重构就假红。
+      // 当前实测：语句 87.2 / 分支 80.7 / 函数 85.6 / 行 88.1。
+      thresholds: {
+        statements: 86,
+        branches: 79,
+        functions: 84,
+        lines: 87,
+      },
+    },
   },
 });

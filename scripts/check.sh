@@ -195,7 +195,11 @@ echo "== 打包规格：语法检查 (compile) =="
 (cd "$ROOT" && "$PY" -c "import sys; compile(open(sys.argv[1], encoding='utf-8').read(), 'hunter1.spec', 'exec')" backend/hunter1.spec)
 
 echo "== 后端：测试 (pytest) =="
-(cd "$ROOT/backend" && "$PY" -m pytest)
+# `--cov` 让覆盖率成为**闸门**而不只是存量事实：阈值定义在
+# `backend/pyproject.toml` 的 `[tool.coverage.report] fail_under`（只此一处），
+# 低于它就非零退出。刻意**不**写进 `addopts` —— 那会让每次 `pytest` 都多花
+# 40 秒，日常开发循环不该付这个钱。
+(cd "$ROOT/backend" && "$PY" -m pytest --cov)
 
 # 同理：判据是前端工程目录在不在，不是 package.json 在不在 —— 后者被删时
 # 前端检查会静默消失（整段 npm 命令不执行），门禁假绿。目录在而工程文件缺失，

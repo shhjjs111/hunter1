@@ -40,6 +40,13 @@ build/
 .vscode/
 .idea/
 
+# 覆盖率产物 —— `check.sh` 现在跑覆盖率闸门（后端 `--cov`、前端 `--coverage`），
+# 每次都会生成：后端 `.coverage` 数据文件、前端 `coverage/` 报告目录。
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+
 # 契约流水线的临时产物（contracts.sh 生成，正常路径会自己删，脚本里也有 trap）。
 # 这里再兜一层：被 `kill -9` 打断时 trap 不执行，留下的小文件会让
 # `git status --porcelain` 变脏 —— 而发布脚本以「工作区干净」为硬门禁，
