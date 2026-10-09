@@ -164,8 +164,11 @@ def parse_list_page(
 def _item_href(item: Tag, link_selector: str | None) -> str:
     """取条目里的链接。
 
-    顺序：显式 `link_selector` → 条目自身的 href → 条目内第一个 `<a>`。
-    中间那步是为「卡片本身就是 `<a>`」的站点（如猎聘）准备的 ——
+    实际优先级：**要么**显式 `link_selector`，**要么**条目自身的 href（二选一 ——
+    配置了 `link_selector` 就不再回头看自身 href）；选中的那个取不到时，统一退到
+    条目内第一个 `<a>`。
+
+    「条目自身的 href」这步是为「卡片本身就是 `<a>`」的站点（如猎聘）准备的 ——
     这类站点用 `item.find("a")` 找不到东西，因为链接就是它自己。
     """
     node: Tag | None = None
