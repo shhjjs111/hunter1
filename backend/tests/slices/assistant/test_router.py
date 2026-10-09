@@ -149,7 +149,7 @@ class TestConversationsEndpoints:
             payload = client.get("/api/assistant/conversations").json()
             assert payload["items"] == []
             assert payload["total"] == 0
-            assert payload["has_more"] is False
+            assert payload["has_next"] is False
 
     def test_list_after_turn(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
@@ -158,24 +158,66 @@ class TestConversationsEndpoints:
             items = payload["items"]
             assert len(items) == 1
             assert "有哪些产品岗" in items[0]["title"]
-            assert payload["total"] == 1 and payload["has_more"] is False
+            assert payload["total"] == 1 and payload["has_next"] is False
 
-    def test_truncation_signal_when_over_the_limit(self, db: Database, monkeypatch) -> None:
-        """列表有上限就必须给截断信号 —— 否则更旧的会话永久不可见且看起来「这就是全部」。
-
-        与 `applications` 的 `total` / `has_more` 同一课：原先这里是裸数组，连放
-        截断信号的位置都没有。
-        """
+    def test_default_page_keeps_the_previous_behaviour(self, db: Database) -> None:
+        """默认页大小 = 原来的固定上限 —— ≤50 个会话时首页与改动前**逐条一致**。"""
         import hunter1.slices.assistant.router as router_module
 
-        monkeypatch.setattr(router_module, "LIST_LIMIT", 2)
+        for client in _client(db, ScriptedLLM()):
+            payload = client.get("/api/assistant/conversations").json()
+            assert payload["page_size"] == router_module.MAX_PAGE_SIZE == 50
+
+    def test_pagination_reaches_the_older_conversations(self, db: Database) -> None:
+        """会话**可以翻页**：第 N 页够得着更旧的会话。
+
+        这条是原先缺的功能。之前只有截断信号（`total` / `has_more`）而没有翻页入口
+        —— 第 51 个起的会话不只是「不可见」，而是**完全无法触达**：界面能说「还有
+        更多」，却没有任何办法把它取出来。
+        """
         for client in _client(db, ScriptedLLM()):
             for index in range(3):
                 client.post("/api/assistant/turn", json={"message": f"第 {index} 问"})
-            payload = client.get("/api/assistant/conversations").json()
-            assert len(payload["items"]) == 2, "取回条数受 LIST_LIMIT 约束"
-            assert payload["total"] == 3, "总数要如实报出"
-            assert payload["has_more"] is True, "被截断必须有信号"
+
+            first = client.get("/api/assistant/conversations", params={"page_size": 2}).json()
+            assert (first["page"], first["page_size"]) == (1, 2)
+            assert len(first["items"]) == 2
+            assert first["total"] == 3
+            assert first["has_next"] is True, "还有更旧的，必须说「有下一页」"
+
+            second = client.get(
+                "/api/assistant/conversations", params={"page_size": 2, "page": 2}
+            ).json()
+            assert len(second["items"]) == 1
+            assert second["has_next"] is False, "末页不该再说有下一页"
+            # 第二页给的是**另外**的会话（不是第一页的重复），两页合起来才是全部
+            assert {item["id"] for item in second["items"]}.isdisjoint(
+                {item["id"] for item in first["items"]}
+            )
+            assert len(first["items"]) + len(second["items"]) == first["total"]
+
+    def test_page_size_upper_bound_is_enforced(self, db: Database) -> None:
+        """`page_size` 有上界（没有「一次取全部」的口子），越界由 **422** 拒绝。"""
+        import hunter1.slices.assistant.router as router_module
+
+        for client in _client(db, ScriptedLLM()):
+            over = router_module.MAX_PAGE_SIZE + 1
+            assert (
+                client.get("/api/assistant/conversations", params={"page_size": over}).status_code
+                == 422
+            )
+            assert client.get("/api/assistant/conversations", params={"page": 0}).status_code == 422
+
+    def test_page_beyond_the_end_is_empty_not_an_error(self, db: Database) -> None:
+        """翻过头不是错误：空页 + `has_next=False`（界面据此禁用「下一页」）。"""
+        for client in _client(db, ScriptedLLM()):
+            client.post("/api/assistant/turn", json={"message": "只有一条"})
+            payload = client.get(
+                "/api/assistant/conversations", params={"page": 5, "page_size": 2}
+            ).json()
+            assert payload["items"] == []
+            assert payload["total"] == 1
+            assert payload["has_next"] is False
 
     def test_messages_of_unknown_conversation_is_404(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):

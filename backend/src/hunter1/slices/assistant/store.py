@@ -24,11 +24,11 @@ class ConversationStore:
     def get(self, conversation_id: str) -> Conversation | None:
         return self._db.conversations().get(conversation_id)
 
-    def list(self, *, limit: int = 50) -> list[Conversation]:
-        return self._db.conversations().list(limit=limit)
+    def list(self, *, limit: int = 50, offset: int = 0) -> list[Conversation]:
+        return self._db.conversations().list(limit=limit, offset=offset)
 
     def count(self) -> int:
-        """会话总数 —— 列表有固定上限，用它算截断信号。"""
+        """会话总数 —— 分页要用它算 `has_next`（以及「还有更旧的」）。"""
         return self._db.conversations().count()
 
     def delete(self, conversation_id: str) -> None:

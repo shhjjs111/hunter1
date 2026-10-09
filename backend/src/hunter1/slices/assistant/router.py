@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
@@ -62,9 +62,16 @@ TOOL_PREVIEW_LIMIT = 1000
 # 历史上下文的默认截断条数（对话越长越该保留近期）。
 DEFAULT_HISTORY_LIMIT = 20
 
-#: 会话列表的固定上限。列表有上限就必须给截断信号（`total` / `has_more`）——
-#: 见 `ConversationListResponse`。与 applications 的 `LIST_LIMIT` 同一课。
-LIST_LIMIT = 50
+#: 一页最多给多少个会话 —— 也就是原 `LIST_LIMIT` 的角色，且**就是默认页大小**：
+#: 首页与改动前逐条一致（≤50 个会话时体验零变化），第 51 个起则从「无法触达」
+#: 变成「翻一页就到」。没有「一次取全部」的口子，上限就是它。
+MAX_PAGE_SIZE = 50
+DEFAULT_PAGE_SIZE = MAX_PAGE_SIZE
+#: 页码上界，与 jobs 的 `MAX_PAGE` 同一把尺（值也一样）：只设下界时 page=999999
+#: 会变成天量 OFFSET —— SQLite 得扫描并丢弃前面所有行才能定位。越界由 422 拒绝，
+#: **不静默钳制**（悄悄改成第 10000 页会让调用方从响应里看不出入参被改过，而
+#: OpenAPI 的 description 给不了这个保证）。
+MAX_PAGE = 10_000
 
 FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
 
@@ -141,16 +148,27 @@ def build_router(
     @router.get(
         "/assistant/conversations",
         response_model=ConversationListResponse,
-        summary="会话列表",
+        summary="会话列表（分页）",
     )
-    def list_conversations() -> ConversationListResponse:
+    def list_conversations(
+        page: int = Query(1, ge=1, le=MAX_PAGE, description="页码（1 起）"),
+        page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    ) -> ConversationListResponse:
+        total = store.count()
+        offset = (page - 1) * page_size
         items = [
             ConversationSummary(id=item.id, title=item.title, updated_at=item.updated_at)
-            for item in store.list(limit=LIST_LIMIT)
+            for item in store.list(limit=page_size, offset=offset)
         ]
-        # `total` 让「被上限截断」不再静默：界面据此提示「只显示最近 N 条」。
-        total = store.count()
-        return ConversationListResponse(items=items, total=total, has_more=total > len(items))
+        # `has_next` 用**实际取回条数**判（与 jobs 同一判据）：比 `page*page_size < total`
+        # 稳 —— 末页恰好取满、或 total 在两次查询之间变了，都不会算错。
+        return ConversationListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            has_next=offset + len(items) < total,
+        )
 
     @router.get(
         "/assistant/conversations/{conversation_id}",

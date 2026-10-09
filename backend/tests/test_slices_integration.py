@@ -158,7 +158,7 @@ class TestSliceApisAreMounted:
         test_client, _db = client
         payload = test_client.get("/api/assistant/conversations").json()
         assert payload["items"] == []
-        assert payload["total"] == 0 and payload["has_more"] is False
+        assert payload["total"] == 0 and payload["has_next"] is False
 
 
 class TestRealCrawlThroughApi:

@@ -86,14 +86,17 @@ class SqliteConversationRepository:
             row = session.get(ConversationRow, conversation_id)
             return _to_conversation(row) if row is not None else None
 
-    def list(self, *, limit: int = 50) -> list[Conversation]:
+    def list(self, *, limit: int = 50, offset: int = 0) -> list[Conversation]:
         # 第二键 id：多个会话可能同 updated_at（时钟注入、批量创建），同值行顺序
         # SQL 不作保证。理由见 repository.py 的 _JOB_ORDER。
+        #
+        # `offset` 必须配一个**确定的** ORDER BY（上面就是）—— 否则分页会漏行/重行。
         with self._db.session() as session:
             statement = (
                 select(ConversationRow)
                 .order_by(ConversationRow.updated_at.desc(), ConversationRow.id.asc())
                 .limit(limit)
+                .offset(offset)
             )
             return [_to_conversation(row) for row in session.scalars(statement)]
 

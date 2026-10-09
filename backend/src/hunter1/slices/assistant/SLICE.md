@@ -27,7 +27,7 @@
 | 文件 | 职责 |
 |---|---|
 | `router.py` | HTTP 端点（会话列表/消息、`POST /assistant/turn`、`POST /assistant/stream`） |
-| `schemas.py` | API 模型（契约唯一事实来源；含列表截断信号 `ConversationListResponse`） |
+| `schemas.py` | API 模型（契约唯一事实来源；含分页的 `ConversationListResponse`） |
 | `service.py` | agent 循环（含刹车 `max_iterations`、工具失败不中断对话） |
 | `tools.py` | 工具注册表（类型注解 → JSON Schema，异常转 `ToolResult(error=...)`） |
 | `job_tools.py` | 助手可调用的只读工具（查岗位/投递） |
@@ -37,7 +37,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/assistant/conversations` | 会话列表（`{items, total, has_more}`；上限 `LIST_LIMIT=50`） |
+| GET | `/api/assistant/conversations` | 会话列表（**分页**：`?page=&page_size=` → `{items, total, page, page_size, has_next}`；`page_size` ≤ `MAX_PAGE_SIZE=50`，越界 422） |
 | GET | `/api/assistant/conversations/{id}` | 会话消息（404 不存在） |
 | POST | `/api/assistant/turn` | 一次性对话（422 上游模型失败，且不落库；非契约异常 → 500；**404 会话不存在**） |
 | POST | `/api/assistant/stream` | SSE 流式对话（失败走 `error` 事件；**404 会话不存在，在开流之前**） |
