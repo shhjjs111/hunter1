@@ -16,12 +16,14 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from hunter1.domain.assistant import Message, Role, ToolCall
 from hunter1.domain.llm import LLMError, LLMResponse, StreamComplete, TextDelta
 from hunter1.platform.db import Database
 from hunter1.slices.assistant.job_tools import build_tools
-from hunter1.slices.assistant.router import build_router
+from hunter1.slices.assistant.router import FALLBACK_REPLY, build_router
+from hunter1.slices.assistant.schemas import MAX_MESSAGE_CHARS, StreamRequest
 from hunter1.slices.assistant.store import ConversationStore
 
 
@@ -45,11 +47,19 @@ class ScriptedLLM:
     """
 
     def __init__(
-        self, *, reply: str = "共 1 条岗位。", boom: bool = False, finish_reason: str | None = None
+        self,
+        *,
+        reply: str = "共 1 条岗位。",
+        boom: bool = False,
+        finish_reason: str | None = None,
+        deltas: tuple[str, ...] = ("共 ", "1 条", "岗位。"),
     ) -> None:
         self.reply = reply
         self.boom = boom
         self.finish_reason = finish_reason
+        #: 流式路径吐出的增量。默认与 `reply` 一致；给空元组就能造出
+        #: 「一个增量都没有」的空回复（`done` 事件的 reply 与落库必须仍然一致）。
+        self.deltas = deltas
         self.round = 0
         self.closed = False
         self.calls: list[list[Message]] = []
@@ -85,7 +95,7 @@ class ScriptedLLM:
                 tool_calls=[ToolCall(id="c1", name="search_jobs", arguments={"keyword": "产品"})],
             )
             return
-        for chunk in ("共 ", "1 条", "岗位。"):
+        for chunk in self.deltas:
             yield TextDelta(chunk)
         yield StreamComplete(content=self.reply, model="fake", finish_reason=self.finish_reason)
 
@@ -273,6 +283,28 @@ class TestTurnEndpoint:
     def test_blank_message_is_rejected(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
             assert client.post("/api/assistant/turn", json={"message": "   "}).status_code == 422
+
+    def test_overlong_message_is_rejected(self, db: Database) -> None:
+        """`message` 有长度上限。
+
+        它送往 LLM，且原先**只有** `min_length=1` —— 全仓别的大输入都设了闸门，
+        唯独这个直通模型的入口没有：请求体、提示词长度和上游费用一起被放大。
+        """
+        too_long = "字" * (MAX_MESSAGE_CHARS + 1)
+        for client in _client(db, ScriptedLLM()):
+            assert client.post("/api/assistant/turn", json={"message": too_long}).status_code == 422
+            assert (
+                client.post("/api/assistant/stream", json={"message": too_long}).status_code == 422
+            )
+
+    def test_message_length_boundary(self) -> None:
+        """边界本身要放行：恰好上限可以，多一个字符不行。
+
+        直接在模型层测，不经过路由 —— 免得为了一次边界断言去消耗假 LLM 的脚本。
+        """
+        assert StreamRequest(message="字" * MAX_MESSAGE_CHARS).message == "字" * MAX_MESSAGE_CHARS
+        with pytest.raises(ValidationError):
+            StreamRequest(message="字" * (MAX_MESSAGE_CHARS + 1))
 
 
 class TestStreamEndpoint:
@@ -569,6 +601,24 @@ class TestLengthTruncatedAnswerIsAnnounced:
             events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
             done = next(event for event in events if event["type"] == "done")
             assert reply == done["reply"]
+
+    def test_blank_reply_is_identical_in_the_event_and_in_the_store(self, db: Database) -> None:
+        """空回复时，`done` 事件与落库必须是**同一段文字**。
+
+        兜底文案原先只在 `_persist` 里加：库里存 `FALLBACK_REPLY`，事件里报原始空串。
+        界面于是显示这条回答缺了，重新打开这条会话却又看得见内容 —— 两个面各自都
+        「对」，合起来是矛盾。上面那条用例只覆盖了非空回复（默认脚本会吐增量），
+        所以漏掉了它。这里用 `deltas=()` 造「一个增量都没有」的空回复。
+        """
+        llm = ScriptedLLM(reply="", deltas=())
+        for client in _client(db, llm):
+            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
+            done = next(event for event in events if event["type"] == "done")
+            stored = client.get(f"/api/assistant/conversations/{done['conversation_id']}").json()
+            assert stored[-1]["content"] == FALLBACK_REPLY, "落库这一侧应当走兜底文案"
+            assert done["reply"] == stored[-1]["content"], (
+                "done 事件报的回复与落库内容不一致：空回复时事件给的是原始空串"
+            )
 
     def test_one_shot_turn_stays_quiet_when_finish_reason_is_stop(self, db: Database) -> None:
         llm = ScriptedLLM(finish_reason="stop")

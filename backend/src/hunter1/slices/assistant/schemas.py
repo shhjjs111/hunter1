@@ -15,11 +15,20 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+# 单条对话消息的字符上限。
+#
+# `/assistant/turn` 与 `/assistant/stream` 都把 `message` 直接送进 LLM —— 这是全仓
+# **唯一没有闸门就直通模型**的大输入：请求体、提示词长度和费用一起放大，而且
+# `min_length=1` 只挡空串。一次手滑（把整个文件粘进输入框）或一个失控的脚本就够。
+# 8000 是「够贴一段 JD / 一份简历摘要」的量级（对比 `JD_PREVIEW_LIMIT = 1500`）；
+# 超过它的基本不是「对话」而是「上传」，那该走别的入口。
+MAX_MESSAGE_CHARS = 8000
+
 
 class StreamRequest(BaseModel):
     """对话请求体（流式与一次性共用）。"""
 
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
     conversation_id: str = ""
 
 

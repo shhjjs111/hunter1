@@ -81,6 +81,16 @@ def _sse(event: dict[str, object]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _stored_reply(reply: str) -> str:
+    """助手回复的**规范形式**：空白一律换成兜底文案。
+
+    落库与 `done` 事件必须走**同一个**入口。分头各写一遍就会出现「库里存了兜底、
+    事件里报的是空字符串」—— 界面显示这条回答缺了，重新打开会话却又看得见内容，
+    两个面各自都「对」，合起来是矛盾。
+    """
+    return reply.strip() or FALLBACK_REPLY
+
+
 def _persist(
     store: ConversationStore,
     *,
@@ -101,7 +111,7 @@ def _persist(
         conversation.id,
         [
             user_message,
-            Message(role=Role.ASSISTANT, content=reply.strip() or FALLBACK_REPLY),
+            Message(role=Role.ASSISTANT, content=_stored_reply(reply)),
         ],
     )
     return conversation.id
@@ -314,7 +324,7 @@ def _stream_turn(
             {
                 "type": "done",
                 "conversation_id": conversation_id_out,
-                "reply": final.reply if final is not None else "",
+                "reply": _stored_reply(final.reply if final is not None else ""),
                 "truncated": bool(final and final.truncated),
                 "degraded": bool(final and final.degraded),
             }
