@@ -163,10 +163,10 @@
         "type": "object"
       },
       "ConversationListResponse": {
-        "description": "会话列表页。\n\n`total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），\n没有它们时第 51 个起的会话永久不可见、且界面看起来「这就是全部」。与\n`applications/schemas.py` 的 `ApplicationListResponse` 同一课 —— 原先这里是\n裸数组，连放截断信号的位置都没有。",
+        "description": "会话列表页。\n\n会话数量没有天然上限，所以这里是**真分页**：`page` / `page_size` / `has_next`\n让第 N 页起的会话都够得着。之前只有 `total` / `has_more`（截断信号）而没有翻页\n入口 —— 那时第 51 个起的会话不只是不可见，而是**完全无法触达**：界面能说\n「还有更多」，却没有任何办法把它取出来。\n\n与 `jobs` 的 `JobListResponse` 同一形状。`has_next` 比 `has_more` 少一层歧义：\n停在第 3 页时，「more」指「这一页之后还有」还是「比这一页更多」是含糊的。",
         "properties": {
-          "has_more": {
-            "title": "Has More",
+          "has_next": {
+            "title": "Has Next",
             "type": "boolean"
           },
           "items": {
@@ -176,6 +176,14 @@
             "title": "Items",
             "type": "array"
           },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
           "total": {
             "title": "Total",
             "type": "integer"
@@ -184,7 +192,9 @@
         "required": [
           "items",
           "total",
-          "has_more"
+          "page",
+          "page_size",
+          "has_next"
         ],
         "title": "ConversationListResponse",
         "type": "object"
@@ -1042,6 +1052,34 @@
     "/api/assistant/conversations": {
       "get": {
         "operationId": "list_conversations_api_assistant_conversations_get",
+        "parameters": [
+          {
+            "description": "页码（1 起）",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "页码（1 起）",
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1052,9 +1090,19 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
-        "summary": "会话列表"
+        "summary": "会话列表（分页）"
       }
     },
     "/api/assistant/conversations/{conversation_id}": {

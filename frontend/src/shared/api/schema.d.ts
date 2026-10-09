@@ -63,7 +63,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 会话列表 */
+        /** 会话列表（分页） */
         get: operations["list_conversations_api_assistant_conversations_get"];
         put?: never;
         post?: never;
@@ -358,16 +358,23 @@ export interface components {
          * ConversationListResponse
          * @description 会话列表页。
          *
-         *     `total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），
-         *     没有它们时第 51 个起的会话永久不可见、且界面看起来「这就是全部」。与
-         *     `applications/schemas.py` 的 `ApplicationListResponse` 同一课 —— 原先这里是
-         *     裸数组，连放截断信号的位置都没有。
+         *     会话数量没有天然上限，所以这里是**真分页**：`page` / `page_size` / `has_next`
+         *     让第 N 页起的会话都够得着。之前只有 `total` / `has_more`（截断信号）而没有翻页
+         *     入口 —— 那时第 51 个起的会话不只是不可见，而是**完全无法触达**：界面能说
+         *     「还有更多」，却没有任何办法把它取出来。
+         *
+         *     与 `jobs` 的 `JobListResponse` 同一形状。`has_next` 比 `has_more` 少一层歧义：
+         *     停在第 3 页时，「more」指「这一页之后还有」还是「比这一页更多」是含糊的。
          */
         ConversationListResponse: {
-            /** Has More */
-            has_more: boolean;
+            /** Has Next */
+            has_next: boolean;
             /** Items */
             items: components["schemas"]["ConversationSummary"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
             /** Total */
             total: number;
         };
@@ -822,7 +829,11 @@ export interface operations {
     };
     list_conversations_api_assistant_conversations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 页码（1 起） */
+                page?: number;
+                page_size?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -836,6 +847,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
