@@ -723,3 +723,48 @@ describe("AssistantPage 中止提示的判据不依赖渲染时序", () => {
     expect(screen.getByText(/没有保存/)).toBeDefined();
   });
 });
+
+describe("AssistantPage 会话列表的截断信号", () => {
+  /**
+   * 回归护栏：后端给了 `total` / `has_more`（会话列表有 `LIST_LIMIT=50` 的上限），
+   * 界面必须读它。不读的话第 51 个起的会话不只是不可见 —— 用户连「还有更多」都
+   * 无从知道，界面看起来「这就是全部」。投递页早已这么做（「共 N 条，只显示最近
+   * M 条」），这里与它对齐。
+   */
+  function stubConversations(list: unknown): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse(list);
+        }
+        return jsonResponse({});
+      }),
+    );
+  }
+
+  it("会话被上限截断时说出来，而不是看起来「这就是全部」", async () => {
+    stubConversations({
+      items: [{ id: "c1", title: "最近的会话" }],
+      total: 80,
+      has_more: true,
+    });
+
+    renderPage();
+    expect(await screen.findByText(/共 80 个会话/)).toBeDefined();
+    expect(screen.getByText(/只显示最近 1 个/)).toBeDefined();
+  });
+
+  it("没被截断时不显示那条提示（不制造假警报）", async () => {
+    stubConversations({
+      items: [{ id: "c1", title: "唯一的会话" }],
+      total: 1,
+      has_more: false,
+    });
+
+    renderPage();
+    await screen.findByText("唯一的会话");
+    expect(screen.queryByText(/只显示最近/)).toBeNull();
+  });
+});

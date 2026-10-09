@@ -284,6 +284,16 @@ export function AssistantPage() {
             </li>
           ))}
         </ul>
+
+        {/* 列表有固定上限（后端 `LIST_LIMIT`），`total` / `has_more` 是它给的**截断
+            信号**。不读的话第 51 个起的会话不只是不可见，连「还有更多」这件事都无从
+            知道 —— 界面看起来「这就是全部」。与投递页同一课（那里显示「共 N 条，
+            只显示最近 M 条」）。 */}
+        {conversations.data?.has_more && (
+          <p className="mt-2 px-2 text-xs text-muted">
+            共 {conversations.data.total} 个会话，只显示最近 {conversations.data.items.length} 个
+          </p>
+        )}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
