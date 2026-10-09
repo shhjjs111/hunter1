@@ -35,12 +35,15 @@ export function AssistantPage() {
   const [turn, setTurn] = useState<{ text: string; seen: number } | null>(null);
   // 本轮流是否已结束（收到 done，或用户中止）。落库判断必须在它之后。
   const [turnSettled, setTurnSettled] = useState(false);
-  // live 的镜像，给异步回调读（`send` 闭包里的 live 是提交那一刻的旧值）。
-  const liveRef = useRef<ChatItem[]>([]);
-
-  useEffect(() => {
-    liveRef.current = live;
-  }, [live]);
+  // 本轮是否**已经收到过**助手正文（非空白）。中止时用它判断屏幕上有没有半截回答。
+  //
+  // 为什么是同步置位的 ref，而不是「镜像 live 的 effect」：镜像要等 React 提交之后
+  // 才更新，而中止检查就发生在流结束的那段异步流程里 —— 若第一个分片与中止落在同一个
+  // 任务内（分片已处理、还没提交），镜像读到的还是空数组，于是「屏幕上有半截回答却
+  // 不提示」。实测：让出一个宏任务后再中止，行为是对的；差别只在提交时序。
+  // 窗口小于一个宏任务、人手点不到，但**正确性不该依赖调度时序** —— 这里改为在
+  // appendAssistantText 里同步置位，与渲染无关。
+  const sawAssistantText = useRef(false);
 
   // 卸载时中止在飞的流：否则回调会继续对已卸载的组件 setState
   // （切走路由后流还在跑，白耗流量也白改状态）。
@@ -87,6 +90,7 @@ export function AssistantPage() {
     setError(null);
     setNotice(null);
     setLive([{ role: "user", content: text }]);
+    sawAssistantText.current = false; // 新一轮：清掉上一轮的判断依据
     // 记下「发问那一刻」历史里已有的同文本条数：以后比它多一条 = 本轮落库了。
     // 历史还没加载时这里是 0 —— 没关系，`turnSettled` 会挡住「历史随后到达」的误判。
     setTurn({ text, seen: countUserMessages(history, text) });
@@ -98,6 +102,13 @@ export function AssistantPage() {
 
     // 「收到 done」= 整轮正常结束（含截断/降级，那两种也走 done）
     let finished = false;
+    // 是否已经明确报过失败（error 事件或异常）—— 用来区分「安静地断掉」与「已报错」，
+    // 避免对同一次失败给两条提示。
+    let failed = false;
+    // 是否有 SSE 块没能解析（内容丢了）。事件被跳过时记下来，流结束再据实告知用户 ——
+    // 不记的话：丢一条 text 事件 = 回答缺段，而界面把它当完整结果呈现
+    // （后端其实按完整回答落库了，缺的只是这一轮屏幕上的显示）。
+    let dropped = false;
 
     try {
       await streamSse(
@@ -149,10 +160,15 @@ export function AssistantPage() {
             // 现在由 `turnPersisted` 判断退场时机：历史确实长出本轮才丢 live。
             refresh();
           } else if (event.type === "error") {
+            failed = true;
             setError(String(event.message ?? "未知错误"));
           }
         },
         controller.signal,
+        // 丢块回调：不写控制台就完了 —— 见下面 dropped 分支的提示。
+        () => {
+          dropped = true;
+        },
       );
     } catch (exc) {
       // 用户主动「中止」不是错误 —— 别把 AbortError 当失败弹给用户。
@@ -162,6 +178,7 @@ export function AssistantPage() {
         controller.signal.aborted ||
         (exc instanceof DOMException && exc.name === "AbortError");
       if (!aborted) {
+        failed = true;
         setError(exc instanceof Error ? exc.message : String(exc));
       }
     } finally {
@@ -173,12 +190,20 @@ export function AssistantPage() {
     // 但必须说清它**不会被保存** —— 后端对中止的轮次不落库（见 router 的
     // 「整轮跑完才落库」），切走或刷新后内容就没了，不说清楚就像丢数据。
     if (controller.signal.aborted && !finished) {
-      const hasHalfAnswer = liveRef.current.some(
-        (item) => item.role === "assistant" && item.content.trim() !== "",
-      );
-      if (hasHalfAnswer) {
+      if (sawAssistantText.current) {
         setNotice("已中止：这段回答没有保存，刷新或切换会话后不会保留。");
       }
+    } else if (!finished && !failed) {
+      // 流**安静地**结束了（既没 done 也没 error）：上游/代理把连接正常收尾。
+      // 不提示的话，半截回答会被当成本轮正常结果 —— 用户以为助手说完了，
+      // 而后端其实没落库（落库发生在 yield done 之前）。这属于「静默截断」。
+      setNotice("连接中断：回答可能不完整，且本轮没有保存。");
+    } else if (dropped) {
+      // 整轮正常结束（收到 done），但中途有 SSE 块没能解析出来 —— 屏幕上的回答
+      // 少了那一段，却被当成本轮完整结果呈现。必须点破，否则与上面刚立的
+      // 「不许静默截断」规矩自相矛盾。后端已按完整回答落库，所以只提示、
+      // **不**把原文还回输入框（还回去反而像「这句没发出去」）。
+      setNotice("连接异常：有内容未能解析，这段回答可能不完整。");
     }
 
     // 发言没被保存（失败 / 中止 / 流异常结束）→ 把原文还回输入框。
@@ -193,9 +218,16 @@ export function AssistantPage() {
   }
 
   function appendAssistantText(chunk: string) {
+    // 同步置位（不经过渲染）—— 中止检查读的就是它，见 sawAssistantText 的注释。
+    if (chunk.trim() !== "") {
+      sawAssistantText.current = true;
+    }
     setLive((prev) => {
       const last = prev[prev.length - 1];
-      if (last && last.role === "assistant" && !last.sealed) {
+      // 末尾已是助手气泡就继续追加；否则新开一个。原先这里还判了 `!last.sealed`，
+      // 而 `sealed` 全仓没有任何写入点（恒为 undefined）—— 死字段，
+      // 留着会让人以为存在「封口后另起气泡」的行为。已删。
+      if (last && last.role === "assistant") {
         return [...prev.slice(0, -1), { ...last, content: last.content + chunk }];
       }
       return [...prev, { role: "assistant", content: chunk }];
@@ -229,7 +261,7 @@ export function AssistantPage() {
           </Button>
         </div>
         <ul className="space-y-1">
-          {(conversations.data ?? []).map((item) => (
+          {(conversations.data?.items ?? []).map((item) => (
             <li key={item.id}>
               {/* 流式进行中禁止切换：切走会把本轮流内容追加到另一个会话上，
                   且 done 后 currentId 被覆盖回去 —— 用户的选择被静默撤销。 */}

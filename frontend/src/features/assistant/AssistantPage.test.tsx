@@ -75,7 +75,7 @@ function stubApi(): void {
         ]);
       }
       if (url.includes("/api/assistant/conversations")) {
-        return jsonResponse([{ id: "c1", title: "你好" }]);
+        return jsonResponse({ items: [{ id: "c1", title: "你好" }], total: 1, has_more: false });
       }
       return jsonResponse({});
     }),
@@ -146,7 +146,7 @@ describe("AssistantPage", () => {
           );
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
         }
         return jsonResponse({});
       }),
@@ -199,7 +199,7 @@ describe("AssistantPage", () => {
           return jsonResponse({ detail: "boom" }, 500);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
         }
         return jsonResponse({});
       }),
@@ -261,7 +261,7 @@ describe("AssistantPage", () => {
           );
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
         }
         return jsonResponse({});
       }),
@@ -307,7 +307,7 @@ describe("AssistantPage", () => {
             { status: 200, headers: { "Content-Type": "text/event-stream" } },
           );
         }
-        return jsonResponse([{ id: "c1", title: "旧会话" }]);
+        return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
       }),
     );
 
@@ -337,7 +337,7 @@ describe("AssistantPage", () => {
             headers: { "Content-Type": "text/event-stream" },
           });
         }
-        return jsonResponse([{ id: "c1", title: "旧会话" }]);
+        return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
       }),
     );
 
@@ -399,7 +399,7 @@ describe("AssistantPage", () => {
           return jsonResponse({ detail: "boom" }, 500);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
         }
         return jsonResponse({});
       }),
@@ -462,7 +462,7 @@ describe("AssistantPage", () => {
           ]);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
         }
         return jsonResponse({});
       }),
@@ -534,7 +534,7 @@ describe("AssistantPage", () => {
           ]);
         }
         if (url.includes("/api/assistant/conversations")) {
-          return jsonResponse([{ id: "c1", title: "旧会话" }]);
+          return jsonResponse({ items: [{ id: "c1", title: "旧会话" }], total: 1, has_more: false });
         }
         return jsonResponse({});
       }),
@@ -564,5 +564,162 @@ describe("AssistantPage", () => {
     // 本轮还没结束：在飞内容必须留着（两道提问都可见 —— 一条来自历史、一条是本轮）
     expect(screen.getAllByText("同一句提问")).toHaveLength(2);
     expect(screen.getByText("这一轮的回答")).toBeDefined();
+  });
+});
+
+describe("AssistantPage 流安静地结束（既没 done 也没 error）", () => {
+  /**
+   * 回归护栏：上游/代理把连接正常收尾却**从不发 done** 时，半截回答会被当成本轮
+   * 正常结果 —— 用户以为助手说完了，而后端其实没落库（落库发生在 yield done 之前）。
+   * 这就是「静默截断」：半截内容 + 无任何提示。
+   */
+  it("给出「连接中断」提示，而不是静默把半截回答当结果", async () => {
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : (input as Request).url;
+        if (url.includes("/api/assistant/stream")) {
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                // 只发一段文本，然后**直接关闭** —— 没有 done、没有 error。
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ type: "text", text: "半截回答" })}\n\n`),
+                );
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ items: [], total: 0, has_more: false });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), {
+      target: { value: "你还在吗" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    expect(await screen.findByText(/连接中断/)).toBeTruthy();
+    // 半截回答仍然显示（用户要能看到它），但必须伴随提示。
+    expect(screen.getByText(/半截回答/)).toBeTruthy();
+  });
+});
+
+describe("AssistantPage SSE 块解析失败", () => {
+  /**
+   * 回归护栏：中途有 SSE 块解析不出来（内容丢了）时，屏幕上的回答缺一段，
+   * 却会被当成本轮完整结果呈现 —— 与上面「不许静默截断」的规矩自相矛盾。
+   * 必须给出提示，让用户知道这段回答可能不完整。
+   */
+  it("有内容未能解析时给出提示，而不是把缺段的回答当完整结果", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          const chunks = [
+            `data: ${JSON.stringify({ type: "text", text: REPLY })}\n\n`,
+            "data: {坏掉的\n\n", // 这一段没能解析 —— 回答因此缺了一段
+            `data: ${JSON.stringify({ type: "done", conversation_id: "c1" })}\n\n`,
+          ];
+          let i = 0;
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                if (i >= chunks.length) {
+                  controller.close();
+                  return;
+                }
+                controller.enqueue(encoder.encode(chunks[i++]));
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        if (url.includes("/api/assistant/conversations/c1")) {
+          return jsonResponse([]);
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ items: [], total: 0, has_more: false });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "你好" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    expect(await screen.findByText(/有内容未能解析/)).toBeTruthy();
+    // 已经收到的部分照常显示（用户要能看见它），但必须伴随提示。
+    expect(screen.getByText(REPLY)).toBeTruthy();
+    warn.mockRestore();
+  });
+});
+
+describe("AssistantPage 中止提示的判据不依赖渲染时序", () => {
+  /**
+   * 回归护栏：中止时「屏幕上有没有半截回答」必须由「本轮是否收到过助手正文」决定，
+   * **不是**由「React 有没有已经把它提交到 DOM」决定。
+   *
+   * 原先读的是 `live` 的 effect 镜像，而镜像要等提交之后才更新。于是当第一个分片与
+   * 中止落在同一个任务内（分片已处理、还没提交）时，镜像读到的还是空数组 ——
+   * 屏幕随后显示出半截回答，却没有「没有保存」的提示。实测：让出一个宏任务后再中止，
+   * 行为就是对的，差别只在提交时序。这个窗口小于一个宏任务、人手点不到，
+   * 但正确性不该依赖调度时序（判据改成了 appendAssistantText 里的同步置位）。
+   */
+  it("分片已处理但尚未提交就中止，仍要说清「没有保存」", async () => {
+    let push!: (chunk: string) => void;
+    let close!: () => void;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+        close = () => controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          return new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ items: [], total: 0, has_more: false });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "在吗" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await screen.findByRole("button", { name: "中止" });
+
+    // 推一个分片后只抽干微任务：分片已被处理，但 React 还没提交它。
+    push(`data: ${JSON.stringify({ type: "text", text: "半截回答" })}\n\n`);
+    for (let i = 0; i < 20; i += 1) {
+      await Promise.resolve();
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "中止" }));
+    // 测试里的假流不理会 abort 信号：手动收尾，让 send() 走到判断那一步。
+    close();
+    await act(async () => {});
+
+    expect(screen.getByText(/没有保存/)).toBeDefined();
   });
 });

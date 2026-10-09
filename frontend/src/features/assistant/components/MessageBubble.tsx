@@ -1,8 +1,6 @@
 export type ChatItem = {
   role: string;
   content: string;
-  /** 流式追加用的标记：同一段回答尚未封口时继续往里追加。 */
-  sealed?: boolean;
 };
 
 const ROLE_STYLE: Record<string, string> = {
