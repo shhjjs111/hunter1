@@ -105,11 +105,20 @@ def _decode_bytes(content: bytes, *, declared: str | None) -> str:
     match = _META_CHARSET.search(content[:4096])
     if match:
         candidates.append(match.group(1).decode("ascii", "ignore"))
-    if declared_norm:
-        # 不可信的声明排在 utf-8 与 meta 之后：utf-8 都解不出时它才可能有价值。
-        candidates.append(declared_norm)
-    # gb18030 是 gbk/gb2312 的超集，big5 覆盖繁体站。仅在 utf-8 严格解码失败后用。
+    # **先** 中文回退，**再** 不可信的声明。顺序反了会让 gb18030/big5 变成死代码：
+    # latin-1 家族能解码任意字节序列、永不抛 UnicodeDecodeError，排在前面就必然
+    # 在那里 return —— 响应头声明 `charset=iso-8859-1`（Apache 等对 text/* 的常见
+    # 默认）而正文其实是 GBK 时，得到的是 mojibake 而不是正确文本，且无异常无日志，
+    # 与「错误一律 FetchError、不静默失败」的承诺冲突。
+    #
+    # 取舍（诚实记录）：gb18030 覆盖面很广，对某些 latin-1/cp1252 页面也可能「解得出
+    # 但解错」。本工具面向中文招聘站，`charset=iso-8859-1 但正文是 GBK` 是实测常见
+    # 形态，而真用 latin-1 的页面极少 —— 因此把中文回退排前。若将来出现 latin-1 站点
+    # 被解错的具体案例，应改为「按正文字节里的语言特征择档」，而不是简单调换顺序。
     candidates += ["gb18030", "big5"]
+    if declared_norm:
+        # 不可信的声明排在 utf-8、meta 与中文回退之后：只有前面都解不出时它才有价值。
+        candidates.append(declared_norm)
     for encoding in candidates:
         try:
             return content.decode(encoding)

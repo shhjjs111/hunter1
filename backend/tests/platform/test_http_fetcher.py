@@ -259,6 +259,26 @@ class TestEncodingFallback:
 
         assert _fetcher(clock, handler).get_text("https://a.com/x") == "café au lait"
 
+    def test_lying_latin1_header_with_gbk_body_decodes_correctly(self, clock: FakeClock) -> None:
+        """站点谎报 `ISO-8859-1`、实际发 GBK —— 中文回退不能被「不可信的声明」挡死。
+
+        原先的候选顺序是 `[声明的不可信编码, gb18030, big5]`：latin-1 能解码任意字节
+        序列、永不抛异常，于是**必然**在第一档 return —— gb18030/big5 成了死代码，
+        页面静默变 mojibake（无异常、无日志），与本模块「不静默失败」的承诺冲突。
+        """
+        payload = "<html><title>中文岗位</title></html>".encode("gbk")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=payload,
+                headers={"Content-Type": "text/html; charset=iso-8859-1"},
+            )
+
+        text = _fetcher(clock, handler).get_text("https://a.com/x")
+        assert "中文岗位" in text
+        assert "\ufffd" not in text
+
 
 class TestMalformedUrl:
     def test_malformed_url_fails_fast_with_stable_code(self, clock: FakeClock) -> None:
