@@ -10,6 +10,7 @@ import pytest
 
 from hunter1.platform.fetch.http import FetchError, HttpFetcher
 from hunter1.platform.fetch.limits import HostLimiter, ResourceLimitTimeoutError
+from hunter1.platform.fetch.robots import ROBOTS_MAX_BYTES
 from tests.conftest import FakeClock
 
 
@@ -402,6 +403,39 @@ class TestRobots:
         fetcher = self._fetcher_with_robots(clock, handler)
         assert fetcher.get_text("https://a.com/jobs") == "<html>ok</html>"
         assert "robots.txt" in capsys.readouterr().err
+
+    def test_oversized_robots_is_capped_and_not_truncated(self, clock: FakeClock) -> None:
+        """超大的 /robots.txt：上限必须在**读的时候**生效，且不静默截断。
+
+        旧实现用 `self._client.get(url)` —— 它把整个响应体先缓冲进内存，随后的
+        `content[:ROBOTS_MAX_BYTES]` 只是切片，挡不住一个几百 MB 的 /robots.txt
+        （生产装配开了 `respect_robots`，每遇到一个新主机都会打这个文件）。
+
+        第二个取舍也钉在这里：超限按「拿不到 robots」处理（与 404 同类），
+        **不**拿前半截去解析 —— 半截 robots 可能正好丢掉那条 `Disallow`，
+        于是我们照爬不误，而界面一切正常（同 `_read_capped` 对 HTML 的取舍）。
+        """
+        # 头部是**有效规则**，后面塞满足够撑过上限的填充：截断与不截断的差别
+        # 正好落在「那条 Disallow 还算不算数」上。
+        filler = b"# filler\n" * (ROBOTS_MAX_BYTES // 9 + 100)
+        robots = b"User-agent: *\nDisallow: /blocked\n" + filler
+        assert len(robots) > ROBOTS_MAX_BYTES
+
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            if request.url.path == "/robots.txt":
+                return httpx.Response(200, content=robots)
+            return httpx.Response(200, text="<html>ok</html>")
+
+        fetcher = self._fetcher_with_robots(clock, handler)
+        assert fetcher.get_text("https://a.com/blocked") == "<html>ok</html>"
+
+        assert "https://a.com/blocked" in calls, (
+            "超限的 robots.txt 被当成有效规则解析了（前半截里那条 Disallow 生效）"
+            "—— 应当按「拿不到 robots」处理，而不是拿半截去当真规则"
+        )
 
     def test_robots_is_off_by_default(self, clock: FakeClock) -> None:
         """默认不发 robots.txt 请求 —— 免得给每个用例多打一次网络。"""

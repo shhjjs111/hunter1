@@ -200,13 +200,23 @@ class HttpFetcher:
         也会重试三次 —— 而「站点没写 robots.txt」是完全正常的情况。
         """
         try:
-            response = self._client.get(url)
+            with self._client.stream("GET", url) as stream:
+                if stream.status_code >= 400:
+                    return None
+                try:
+                    # 与正常抓取走同一条**流式**读取。原先这里用 `self._client.get(url)`，
+                    # 它会把整个响应体先缓冲进内存，后面的 `content[:ROBOTS_MAX_BYTES]`
+                    # 只是切片 —— 挡不住一个几百 MB 的 /robots.txt。生产装配开了
+                    # `respect_robots`，每遇到一个新主机都会打这个文件。
+                    body = _read_capped(stream, ROBOTS_MAX_BYTES, url)
+                except FetchError:
+                    # 超限按「拿不到 robots」处理（返回 None），与 4xx 同类：
+                    # 宁可退回「没有 robots 约束」，也不要为一份异常大的文件炸内存。
+                    return None
+                declared = stream.charset_encoding
         except httpx.HTTPError:
             return None
-        if response.status_code >= 400:
-            return None
-        body = response.content[:ROBOTS_MAX_BYTES]
-        return _decode_bytes(body, declared=response.charset_encoding)
+        return _decode_bytes(body, declared=declared)
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
         request_headers = {
