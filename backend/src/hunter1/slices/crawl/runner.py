@@ -37,16 +37,6 @@ class SiteProgress:
     updated: int = 0
     error: str | None = None
 
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "label": self.label,
-            "status": self.status,
-            "fetched": self.fetched,
-            "created": self.created,
-            "updated": self.updated,
-            "error": self.error,
-        }
-
 
 @dataclass
 class CrawlSnapshot:
@@ -69,17 +59,6 @@ class CrawlSnapshot:
     @property
     def failed(self) -> list[SiteProgress]:
         return [site for site in self.sites if site.status == "failed"]
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "running": self.running,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
-            "error": self.error,
-            "sites": [site.as_dict() for site in self.sites],
-            "total_fetched": self.total_fetched,
-            "total_created": self.total_created,
-        }
 
 
 class CrawlRunner:

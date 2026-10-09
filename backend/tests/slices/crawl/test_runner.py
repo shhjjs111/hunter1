@@ -18,6 +18,7 @@ from hunter1.domain.crawl import RawJob
 from hunter1.domain.models import CaptureStatus
 from hunter1.platform.db import Database
 from hunter1.slices.crawl.runner import CrawlRunner
+from hunter1.slices.crawl.schemas import CrawlStatusResponse
 from hunter1.slices.crawl.service import CrawlResult
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
@@ -207,13 +208,23 @@ class TestRun:
         leftover = next(site for site in snapshot.sites if site.key == "甲")
         assert leftover.error is not None and "未收到" in leftover.error
 
-    def test_as_dict_is_json_friendly(self, db: Database) -> None:
+    def test_snapshot_round_trips_through_the_response_model(self, db: Database) -> None:
+        """快照只经**一个**序列化器（生产用的 `CrawlStatusResponse`）交给外界。
+
+        原先 `SiteProgress` / `CrawlSnapshot` 各另有一个 `as_dict`，只有测试消费 ——
+        同一份形状两处定义，改一处忘另一处时测试仍绿、生产与测试缓慢漂移（本仓库
+        删 application 层五个拷贝时记下的同一条教训）。这里钉住唯一路径，并顺带
+        验证它对 JSON 友好（时间字段能被 pydantic 序列化）。
+        """
         runner = _runner(db, [FakeCrawler("甲")])
         runner.run()
-        payload = runner.snapshot().as_dict()
+        response = CrawlStatusResponse.from_snapshot(runner.snapshot())
+        payload = response.model_dump(mode="json")
+
         assert payload["running"] is False
-        assert payload["sites"][0]["label"] == "甲"  # type: ignore[index]
-        assert isinstance(payload["sites"][0]["fetched"], int)  # type: ignore[index]
+        assert payload["sites"][0]["label"] == "甲"
+        assert isinstance(payload["sites"][0]["fetched"], int)
+        assert payload["total_fetched"] == 1
 
 
 class TestStart:
