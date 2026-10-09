@@ -9,12 +9,15 @@
  */
 
 export type SseHandler = (event: Record<string, unknown>) => void;
+/** 有 `data:` 行却没能解析成事件的块（内容丢了，调用方该告诉用户）。 */
+export type SseMalformedHandler = (raw: string) => void;
 
 export async function streamSse(
   url: string,
   body: unknown,
   onEvent: SseHandler,
   signal?: AbortSignal,
+  onMalformed?: SseMalformedHandler,
 ): Promise<void> {
   const response = await fetch(url, {
     method: "POST",
@@ -50,20 +53,14 @@ export async function streamSse(
     const blocks = buffer.split("\n\n");
     buffer = blocks.pop() ?? "";
     for (const block of blocks) {
-      const payload = parseBlock(block);
-      if (payload !== null) {
-        onEvent(payload);
-      }
+      dispatch(parseBlock(block), onEvent, onMalformed);
     }
   }
 
   // 收尾：流结束时 buffer 里可能还有最后一条（某些实现末尾不带空行），
   // 并且解码器里可能还扣着半个 UTF-8 序列 —— `decode()` 不收尾就**静默丢**。
   buffer += decoder.decode();
-  const tail = parseBlock(buffer);
-  if (tail !== null) {
-    onEvent(tail);
-  }
+  dispatch(parseBlock(buffer), onEvent, onMalformed);
 }
 
 /**
@@ -91,27 +88,49 @@ function readableDetail(text: string): string {
   return `：${text.slice(0, 300)}`;
 }
 
-function parseBlock(block: string): Record<string, unknown> | null {
+/** 一个 SSE 块的解析结果：`skip` = 本就不是事件（心跳/注释），`dropped` = 有 data 行却丢了内容。 */
+type ParsedBlock =
+  | { kind: "event"; event: Record<string, unknown> }
+  | { kind: "skip" }
+  | { kind: "dropped"; raw: string };
+
+/** 把解析结果派发给调用方：事件走 onEvent，丢内容走 onMalformed（本就不是事件则什么都不做）。 */
+function dispatch(
+  parsed: ParsedBlock,
+  onEvent: SseHandler,
+  onMalformed?: SseMalformedHandler,
+): void {
+  if (parsed.kind === "event") {
+    onEvent(parsed.event);
+  } else if (parsed.kind === "dropped") {
+    onMalformed?.(parsed.raw);
+  }
+}
+
+function parseBlock(block: string): ParsedBlock {
   const dataLines = block
     .split("\n")
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice("data:".length).trim());
 
   if (dataLines.length === 0) {
-    return null;
+    // 没有 data 行 —— 心跳/注释块，不是事件，谈不上「丢内容」
+    return { kind: "skip" };
   }
   const raw = dataLines.join("\n");
   if (!raw) {
-    return null;
+    return { kind: "dropped", raw };
   }
   try {
     const parsed: unknown = JSON.parse(raw);
     return typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)
-      : null;
+      ? { kind: "event", event: parsed as Record<string, unknown> }
+      : { kind: "dropped", raw };
   } catch {
-    // 非法 JSON 不该让整条流崩掉：跳过这一条，后面的还能收
+    // 非法 JSON 不该让整条流崩掉：跳过这一条，后面的还能收。
+    // 但**不能只写控制台** —— 静默丢一条 text 事件 = 回答缺段，
+    // 界面却把它当完整结果呈现（与 AssistantPage 对「静默截断」的警惕矛盾）。
     console.warn("收到无法解析的 SSE 事件：", raw.slice(0, 200));
-    return null;
+    return { kind: "dropped", raw };
   }
 }

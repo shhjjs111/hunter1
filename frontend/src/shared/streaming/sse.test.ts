@@ -90,6 +90,57 @@ describe("streamSse", () => {
     expect(events).toEqual([{ type: "done" }]);
   });
 
+  it("丢内容的块通过 onMalformed 报给调用方（不能只写控制台）", async () => {
+    // 只 console.warn 的话，调用方无从知道「有一条事件没解析出来」——
+    // 丢一条 text 事件 = 回答缺段，界面却把它当完整结果呈现。
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubFetch(['data: {坏掉的\n\n', 'data: {"type":"done"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    const dropped: string[] = [];
+    await streamSse(
+      "/x",
+      {},
+      (event) => events.push(event),
+      undefined,
+      (raw) => dropped.push(raw),
+    );
+    expect(events).toEqual([{ type: "done" }]);
+    expect(dropped).toEqual(["{坏掉的"]);
+    warn.mockRestore();
+  });
+
+  it("合法 JSON 但不是对象也算丢内容（后端只发对象）", async () => {
+    stubFetch(['data: 123\n\n', 'data: {"type":"done"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    const dropped: string[] = [];
+    await streamSse(
+      "/x",
+      {},
+      (event) => events.push(event),
+      undefined,
+      (raw) => dropped.push(raw),
+    );
+    expect(events).toEqual([{ type: "done" }]);
+    expect(dropped).toEqual(["123"]);
+  });
+
+  it("心跳/注释块不是「丢内容」（不该惊动调用方）", async () => {
+    // SSE 允许以 `:` 开头的注释行（心跳）。它没有 data 行 —— 跳过它是正常行为，
+    // 报给用户会变成满屏假警报。
+    stubFetch([': keep-alive\n\n', 'data: {"type":"done"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    const dropped: string[] = [];
+    await streamSse(
+      "/x",
+      {},
+      (event) => events.push(event),
+      undefined,
+      (raw) => dropped.push(raw),
+    );
+    expect(events).toEqual([{ type: "done" }]);
+    expect(dropped).toEqual([]);
+  });
+
   it("末尾无空行的事件也能收到", async () => {
     stubFetch(['data: {"type":"done"}']);
     const events: Record<string, unknown>[] = [];
