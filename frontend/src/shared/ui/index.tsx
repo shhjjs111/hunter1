@@ -133,6 +133,10 @@ export function PageHeader({
  * `ariaLabel` 是**必填**：页内可能同时存在多个 `<nav>`，没有可访问名时
  * 屏幕阅读器的地标列表里会出现两个无法区分的「navigation」。
  * `className` 供调用方补布局（如窄侧栏里 `flex-wrap`），视觉词汇仍由这里定。
+ *
+ * `busy`：调用方正在取「当前页」的数据（react-query 的 `isPlaceholderData`）。
+ * 这时屏幕上的 `hasNext` 还是**上一页**的 —— 不置忙的话「下一页」照旧可点，
+ * 连点两下就跳过一整页、直接落到末页之后（看到一页空白）。
  */
 export function Pager({
   page,
@@ -140,12 +144,14 @@ export function Pager({
   onPageChange,
   ariaLabel,
   className = "",
+  busy = false,
 }: {
   page: number;
   hasNext: boolean;
   onPageChange: (page: number) => void;
   ariaLabel: string;
   className?: string;
+  busy?: boolean;
 }) {
   if (page <= 1 && !hasNext) {
     return null;
@@ -155,11 +161,11 @@ export function Pager({
       aria-label={ariaLabel}
       className={`mt-4 flex items-center gap-3 text-sm ${className}`}
     >
-      <Button disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+      <Button disabled={busy || page <= 1} onClick={() => onPageChange(page - 1)}>
         ← 上一页
       </Button>
       <span className="text-muted">第 {page} 页</span>
-      <Button disabled={!hasNext} onClick={() => onPageChange(page + 1)}>
+      <Button disabled={busy || !hasNext} onClick={() => onPageChange(page + 1)}>
         下一页 →
       </Button>
     </nav>

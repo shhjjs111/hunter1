@@ -304,6 +304,7 @@ export function AssistantPage() {
               className="mt-1 flex-wrap"
               page={page}
               hasNext={conversations.data.has_next}
+              busy={conversations.isPlaceholderData}
               onPageChange={setPage}
             />
           </div>

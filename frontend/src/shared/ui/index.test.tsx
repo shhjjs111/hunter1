@@ -34,4 +34,16 @@ describe("Pager", () => {
     expect(screen.getByRole("navigation", { name: "会话分页" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "岗位分页" })).toBeNull();
   });
+
+  it("busy 时两个按钮都不可点 —— 否则连点会翻过末页", () => {
+    // 调用方在用 placeholderData 保留上一页时，屏幕上的 `hasNext` 还是上一页的：
+    // 不置忙就能连点「下一页」，跳过一整页直接落到末页之后（一页空白）。
+    const onPageChange = vi.fn();
+    render(<Pager page={2} hasNext busy onPageChange={onPageChange} ariaLabel="岗位分页" />);
+    expect(screen.getByRole("button", { name: "下一页 →" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "← 上一页" }).hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "下一页 →" }));
+    expect(onPageChange).not.toHaveBeenCalled();
+  });
 });

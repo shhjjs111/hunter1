@@ -66,6 +66,7 @@ export function JobsPage() {
         ariaLabel="岗位分页"
         page={page}
         hasNext={jobs.data?.has_next ?? false}
+        busy={jobs.isPlaceholderData}
         onPageChange={setPage}
       />
 
