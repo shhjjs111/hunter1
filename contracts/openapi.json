@@ -73,8 +73,7 @@
             "title": "Note"
           },
           "stage": {
-            "title": "Stage",
-            "type": "string"
+            "$ref": "#/components/schemas/ApplicationStage"
           },
           "title": {
             "title": "Title",
@@ -161,6 +160,33 @@
           "message"
         ],
         "title": "ConnectionTestResponse",
+        "type": "object"
+      },
+      "ConversationListResponse": {
+        "description": "会话列表页。\n\n`total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），\n没有它们时第 51 个起的会话永久不可见、且界面看起来「这就是全部」。与\n`applications/schemas.py` 的 `ApplicationListResponse` 同一课 —— 原先这里是\n裸数组，连放截断信号的位置都没有。",
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "has_more"
+        ],
+        "title": "ConversationListResponse",
         "type": "object"
       },
       "ConversationMessageView": {
@@ -746,8 +772,7 @@
             "type": "string"
           },
           "stage": {
-            "title": "Stage",
-            "type": "string"
+            "$ref": "#/components/schemas/ApplicationStage"
           }
         },
         "required": [
@@ -1022,11 +1047,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ConversationSummary"
-                  },
-                  "title": "Response List Conversations Api Assistant Conversations Get",
-                  "type": "array"
+                  "$ref": "#/components/schemas/ConversationListResponse"
                 }
               }
             },
@@ -1206,13 +1227,14 @@
             }
           },
           {
-            "description": "页码（1 起，上限 10000）",
+            "description": "页码（1 起）",
             "in": "query",
             "name": "page",
             "required": false,
             "schema": {
               "default": 1,
-              "description": "页码（1 起，上限 10000）",
+              "description": "页码（1 起）",
+              "maximum": 10000,
               "minimum": 1,
               "title": "Page",
               "type": "integer"

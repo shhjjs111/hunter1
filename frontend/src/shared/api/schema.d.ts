@@ -305,8 +305,7 @@ export interface components {
             job_id: string;
             /** Note */
             note?: string | null;
-            /** Stage */
-            stage: string;
+            stage: components["schemas"]["ApplicationStage"];
             /** Title */
             title: string;
             /**
@@ -354,6 +353,23 @@ export interface components {
             message: string;
             /** Ok */
             ok: boolean;
+        };
+        /**
+         * ConversationListResponse
+         * @description 会话列表页。
+         *
+         *     `total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），
+         *     没有它们时第 51 个起的会话永久不可见、且界面看起来「这就是全部」。与
+         *     `applications/schemas.py` 的 `ApplicationListResponse` 同一课 —— 原先这里是
+         *     裸数组，连放截断信号的位置都没有。
+         */
+        ConversationListResponse: {
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["ConversationSummary"][];
+            /** Total */
+            total: number;
         };
         /**
          * ConversationMessageView
@@ -619,8 +635,7 @@ export interface components {
         StageUpdateResponse: {
             /** Application Id */
             application_id: string;
-            /** Stage */
-            stage: string;
+            stage: components["schemas"]["ApplicationStage"];
         };
         /**
          * StartCrawlResponse
@@ -820,7 +835,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConversationSummary"][];
+                    "application/json": components["schemas"]["ConversationListResponse"];
                 };
             };
         };
@@ -967,7 +982,7 @@ export interface operations {
             query?: {
                 /** @description 关键词（标题归一化匹配；空 = 列最近） */
                 q?: string;
-                /** @description 页码（1 起，上限 10000） */
+                /** @description 页码（1 起） */
                 page?: number;
                 page_size?: number;
             };
