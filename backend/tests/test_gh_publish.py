@@ -782,7 +782,7 @@ class TestEnsureReleaseUsesStatus:
             return {"id": 7}
 
         monkeypatch.setattr(gh, "api_request", fake_api)
-        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 7
+        assert gh.ensure_release("a", "b", "t", "v1", "notes").id == 7
 
     def test_500_is_reraised(self, monkeypatch) -> None:
         def fake_api(method, path, token, **kw):
@@ -809,7 +809,7 @@ class TestReleaseDraftFlow:
             return {"id": 5}
 
         monkeypatch.setattr(gh, "api_request", fake_api)
-        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 5
+        assert gh.ensure_release("a", "b", "t", "v1", "notes").id == 5
         assert seen[0]["draft"] is True, "新建的 Release 必须是草稿，附件传完才公开"
 
     def test_existing_published_release_is_pulled_back_to_draft(self, monkeypatch) -> None:
@@ -828,7 +828,9 @@ class TestReleaseDraftFlow:
             return {}
 
         monkeypatch.setattr(gh, "api_request", fake_api)
-        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 5
+        handle = gh.ensure_release("a", "b", "t", "v1", "notes")
+        assert handle.id == 5
+        assert handle.reopened_from_published is True, "收回过已发布版本，失败路径要能据此还原"
         assert patches == [{"draft": True}]
 
     def test_already_draft_is_not_patched_again(self, monkeypatch) -> None:
@@ -843,7 +845,8 @@ class TestReleaseDraftFlow:
             return {}
 
         monkeypatch.setattr(gh, "api_request", fake_api)
-        assert gh.ensure_release("a", "b", "t", "v1", "notes") == 5
+        handle = gh.ensure_release("a", "b", "t", "v1", "notes")
+        assert handle.id == 5 and handle.reopened_from_published is False
         assert patches == []
 
     def test_publish_release_flips_draft_off(self, monkeypatch) -> None:
@@ -964,12 +967,12 @@ class TestReuploadCheckOrdering:
         monkeypatch.setattr(gh, "check_reupload_is_same_artifact", fake_check)
         for name in (
             "ensure_repo",
-            "ensure_release",
             "regenerate_manifest",
             "upload_asset",
             "publish_release",
         ):
             monkeypatch.setattr(gh, name, lambda *a, **k: None)
+        monkeypatch.setattr(gh, "ensure_release", lambda *a, **k: gh.ReleaseHandle(7))
         return calls
 
     def test_check_sees_the_resolved_owner(
@@ -1020,7 +1023,11 @@ class TestPublishIsTheLastStep:
         )
 
         order: list[str] = []
-        monkeypatch.setattr(gh, "ensure_release", lambda *a, **k: order.append("create-draft") or 7)
+        monkeypatch.setattr(
+            gh,
+            "ensure_release",
+            lambda *a, **k: order.append("create-draft") or gh.ReleaseHandle(7),
+        )
         monkeypatch.setattr(
             gh,
             "upload_asset",
@@ -1037,3 +1044,65 @@ class TestPublishIsTheLastStep:
             "upload:manifest.json",
             "publish",
         ], steps
+
+
+class TestFailedPublishRestoresAReopenedRelease:
+    """中途失败时，被「暂时收回为草稿」的**已发布** Release 必须放回去。
+
+    没有这一步：该版本永久滞留草稿（匿名下载地址断供），而脚本只打印错误就退出 ——
+    用户唯一能做的是「完整重跑一次并全部成功」，失败信息里没有任何提示。
+    """
+
+    def _run(
+        self, monkeypatch, tmp_path: Path, *, reopened: bool
+    ) -> tuple[int, list[tuple[str, object]]]:
+        root = tmp_path / "repo"
+        (root / "dist").mkdir(parents=True)
+        (root / "dist" / gh.artifact_name()).write_bytes(b"zip")
+        exe = root / "dist" / gh.exe_relative_path()
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"exe")
+        monkeypatch.setattr(gh, "ROOT", root)
+
+        def fake_run(cmd, **kwargs):
+            out = "" if "status" in cmd else "cafebabe1234\n"
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        monkeypatch.setattr(gh, "read_token", lambda: "fake-token")
+        monkeypatch.setattr(gh, "api_request", lambda *a, **k: {"login": "acme", "id": 7})
+        monkeypatch.setattr(gh, "ensure_repo", lambda *a, **k: None)
+        monkeypatch.setattr(gh, "push", lambda *a, **k: None)
+        monkeypatch.setattr(
+            gh, "regenerate_manifest", lambda *a, **k: root / "dist" / "manifest.json"
+        )
+        monkeypatch.setattr(
+            gh,
+            "ensure_release",
+            lambda *a, **k: gh.ReleaseHandle(7, reopened_from_published=reopened),
+        )
+
+        def boom(*a: object, **k: object) -> None:
+            raise gh.PublishError("上传失败（网络中断）")
+
+        monkeypatch.setattr(gh, "upload_asset", boom)
+
+        seen: list[tuple[str, object]] = []
+        monkeypatch.setattr(
+            gh, "set_draft", lambda _o, _r, _t, _rid, *, draft: seen.append(("draft", draft))
+        )
+        monkeypatch.setattr(gh, "publish_release", lambda *a, **k: seen.append(("publish", None)))
+        return gh.main(["--owner", "acme"]), seen
+
+    def test_restores_a_released_version_that_was_pulled_back(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        code, seen = self._run(monkeypatch, tmp_path, reopened=True)
+        assert code == 1
+        assert ("draft", False) in seen, "失败路径必须把收回的 Release 还原为已发布"
+        assert ("publish", None) not in seen, "失败时不该走正常发布路径"
+
+    def test_leaves_a_fresh_draft_alone(self, monkeypatch, tmp_path: Path) -> None:
+        code, seen = self._run(monkeypatch, tmp_path, reopened=False)
+        assert code == 1
+        assert seen == [], "新建的草稿不该被公开 —— 半成品留在草稿态即可"

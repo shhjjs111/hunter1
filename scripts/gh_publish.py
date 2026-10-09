@@ -42,6 +42,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -499,6 +500,13 @@ def git(*args: str, token: str, cwd: Path = ROOT) -> str:
             env=env,
             capture_output=True,
             text=True,
+            # 显式 utf-8：`text=True` 不给 encoding 时按宿主 locale（Windows 简中
+            # = cp936）解码 git 的 UTF-8 输出；一旦输出含非 ASCII（core.quotepath=false
+            # 的中文路径、本地化的 git 消息），reader 线程抛 UnicodeDecodeError、
+            # stdout/stderr 变 None —— 而这个异常不是 PublishError，会逃出 main 的兜底
+            # except，把脚本精心写的「exit code + stderr 尾部」换成原始 traceback。
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -540,6 +548,8 @@ def push(owner: str, repo: str, token: str) -> None:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # 与 git() 同因：别让宿主 locale 决定子进程解码
+        errors="replace",
         check=False,
     )
     if existing.returncode == 0:
@@ -559,8 +569,22 @@ def push(owner: str, repo: str, token: str) -> None:
     print(f"  ✓ 已推送 tag {tag}")
 
 
-def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> int:
-    """建（或复用）一个**草稿** Release，返回 release id。
+@dataclass(frozen=True)
+class ReleaseHandle:
+    """一个 Release 的句柄。
+
+    `reopened_from_published` 记「本次是否把**已发布**的 Release 收回成了草稿」
+    （重发 / `--reupload` 时会）。这条信息是失败路径还原的依据 —— 见 `main` 里的
+    `_restore_if_reopened`：没有它，一次中途失败会让该版本**永久滞留草稿**，匿名
+    下载地址在「完整重跑一次并全部成功」之前一直断供，而脚本只打印错误就退出。
+    """
+
+    id: int
+    reopened_from_published: bool = False
+
+
+def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> ReleaseHandle:
+    """建（或复用）一个**草稿** Release，返回句柄。
 
     刻意建草稿：正式发布由 `publish_release` 在**两个附件都传完之后**显式执行。
     原先这里直接 `draft: False` —— Release 一建就公开，而附件的上传顺序是
@@ -576,7 +600,7 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> i
             payload={"tag_name": tag, "name": tag, "body": notes, "draft": True},
         )
         print(f"  ✓ 已创建 Release {tag}（草稿）")
-        return int(release["id"])
+        return ReleaseHandle(int(release["id"]))
     except ApiError as exc:
         if exc.status != 422:  # 422 = tag 已存在 Release
             raise
@@ -584,15 +608,23 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> i
     release_id = int(found["id"])
     if found.get("draft"):
         print(f"  ✓ Release {tag} 已存在，复用（草稿）")
-    else:
-        # 已发布的同名 Release（重发 / --reupload）：先收回成草稿再动附件。
-        # 收回后 `releases/latest` 自动回落到上一版 —— 比「先 DELETE 旧附件、
-        # 再 POST 新附件」那个窗口安全得多（后者让下载入口在一段时间内 404）。
-        api_request(
-            "PATCH", f"/repos/{owner}/{repo}/releases/{release_id}", token, payload={"draft": True}
-        )
-        print(f"  ✓ Release {tag} 已存在（已发布）→ 暂时收回为草稿，附件传完再发布")
-    return release_id
+        return ReleaseHandle(release_id)
+    # 已发布的同名 Release（重发 / --reupload）：先收回成草稿再动附件。
+    # 收回后 `releases/latest` 自动回落到上一版 —— 比「先 DELETE 旧附件、
+    # 再 POST 新附件」那个窗口安全得多（后者让下载入口在一段时间内 404）。
+    #
+    # ⚠ 这一步是**有代价**的（把一个已发布版本暂时藏起来），调用方必须在后续
+    #    失败时还原 —— 见 ReleaseHandle.reopened_from_published 与 main 的失败分支。
+    set_draft(owner, repo, token, release_id, draft=True)
+    print(f"  ✓ Release {tag} 已存在（已发布）→ 暂时收回为草稿，附件传完再发布")
+    return ReleaseHandle(release_id, reopened_from_published=True)
+
+
+def set_draft(owner: str, repo: str, token: str, release_id: int, *, draft: bool) -> None:
+    """把 Release 置为草稿 / 发布态（还原路径与发布路径共用同一条 PATCH）。"""
+    api_request(
+        "PATCH", f"/repos/{owner}/{repo}/releases/{release_id}", token, payload={"draft": draft}
+    )
 
 
 def publish_release(owner: str, repo: str, token: str, release_id: int, tag: str) -> None:
@@ -601,9 +633,7 @@ def publish_release(owner: str, repo: str, token: str, release_id: int, tag: str
     这是发布链的原子性边界：在此之前任何失败，用户看到的仍是上一版（`latest`
     跳过草稿），而不是「清单 404 但 zip 是新的」这种半成品状态。
     """
-    api_request(
-        "PATCH", f"/repos/{owner}/{repo}/releases/{release_id}", token, payload={"draft": False}
-    )
+    set_draft(owner, repo, token, release_id, draft=False)
     print(f"  ✓ Release {tag} 已正式发布")
 
 
@@ -729,6 +759,29 @@ def check_reupload_is_same_artifact(
     return local_hash
 
 
+def _restore_if_reopened(
+    owner: str, repo: str, token: str, handle: ReleaseHandle, tag: str
+) -> None:
+    """本次若把「已发布」的 Release 收回成了草稿，就把它放回去。
+
+    没有这一步：一次中途失败会让该版本**永久滞留草稿** —— `releases/latest` 与
+    脚本自己打印的验收 URL 都取不到它，而用户唯一能做的是「完整重跑一次并全部成功」
+    （失败信息里没有任何提示）。草稿态只是「暂时」，失败路径必须让它回到原状。
+    """
+    if not handle.reopened_from_published:
+        return
+    try:
+        set_draft(owner, repo, token, handle.id, draft=False)
+        print(f"  ↩ 已把 {tag} 恢复为已发布（回滚本次的「暂时收回为草稿」）", file=sys.stderr)
+    except PublishError as exc:
+        print(
+            f"⚠ 还原 Release 状态失败：{exc}\n"
+            f"  {tag} 仍是草稿、下载入口暂时取不到它。手动恢复：\n"
+            f"    gh release edit {tag} --draft=false   # 或用网页把该 Release 取消草稿",
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     _enable_utf8_output()
     parser = argparse.ArgumentParser(prog="gh_publish.py", description="推送并建 Release")
@@ -779,6 +832,8 @@ def main(argv: list[str] | None = None) -> int:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # 与 git() 同因
+        errors="replace",
         check=False,
     ).stdout.strip()
     if dirty:
@@ -790,6 +845,8 @@ def main(argv: list[str] | None = None) -> int:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # 与 git() 同因
+        errors="replace",
         check=False,
     )
     if tag_commit.returncode != 0:
@@ -802,6 +859,8 @@ def main(argv: list[str] | None = None) -> int:
             cwd=ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",  # 与 git() 同因
+            errors="replace",
             check=False,
         )
         if tag_commit.stdout.strip() != head.stdout.strip():
@@ -867,16 +926,24 @@ def main(argv: list[str] | None = None) -> int:
             print("  ✓ 重传模式：跳过 git push")
         else:
             push(owner, repo, token)
-        release_id = ensure_release(
+        handle = ensure_release(
             owner, repo, token, tag, notes=f"hunter1 {tag}\n\n见仓库 README 与 docs/。"
         )
-        manifest_path = regenerate_manifest(owner, repo, tag)
-        upload_asset(owner, repo, token, release_id, zip_path)
-        upload_asset(owner, repo, token, release_id, manifest_path)
-        # 两个附件都在草稿上了才公开 —— 这一步之前任何失败，用户的更新入口
-        # 仍指向上一版（`releases/latest` 跳过草稿），不会出现「zip 是新的、
-        # manifest 404」这种把所有人的更新链一起打断的半成品。
-        publish_release(owner, repo, token, release_id, tag)
+        try:
+            manifest_path = regenerate_manifest(owner, repo, tag)
+            upload_asset(owner, repo, token, handle.id, zip_path)
+            upload_asset(owner, repo, token, handle.id, manifest_path)
+            # 两个附件都在草稿上了才公开 —— 这一步之前任何失败，用户的更新入口
+            # 仍指向上一版（`releases/latest` 跳过草稿），不会出现「zip 是新的、
+            # manifest 404」这种把所有人的更新链一起打断的半成品。
+            publish_release(owner, repo, token, handle.id, tag)
+        except BaseException:
+            # 中途失败（含 Ctrl-C）：若本次把**已发布**的 Release 收回成了草稿，
+            # 必须放回去 —— 否则该版本会永久滞留草稿，匿名下载地址在「完整重跑
+            # 一次并全部成功」之前一直断供，而脚本只打印错误。新建的草稿**不动**：
+            # 一个没传完附件的草稿不该被公开，留在草稿态即可。
+            _restore_if_reopened(owner, repo, token, handle, tag)
+            raise
     except PublishError as exc:
         print(f"\n✗ {exc}", file=sys.stderr)
         return 1
