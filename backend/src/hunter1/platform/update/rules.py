@@ -53,6 +53,10 @@ MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
 #: 膨胀比上限：解压后总体积不得超过压缩包的这么多倍（挡住「绝对体积不大但
 #: 比例极夸张」的包，例如 5KB → 5MB）。
 MAX_EXPANSION_RATIO = 100
+#: 压缩包**条目数**上限。体积两道闸门对「海量 0 字节成员」都不生效（声明总量≈0、
+#: 膨胀比也低），但每个成员都会创建文件系统条目 —— 数百万个足以耗尽 inode/目录项。
+#: 正常产物是单个程序目录，几千个条目已很宽松。
+MAX_ENTRIES = 100_000
 
 
 class _Model(BaseModel):
@@ -171,6 +175,7 @@ def is_newer(candidate: str, current: str) -> bool:
 
 __all__ = [
     "MAX_DOWNLOAD_BYTES",
+    "MAX_ENTRIES",
     "MAX_EXPANSION_RATIO",
     "MAX_EXTRACTED_BYTES",
     "ReleaseAsset",

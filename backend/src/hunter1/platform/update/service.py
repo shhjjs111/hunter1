@@ -19,6 +19,7 @@ from hunter1.platform.update.client import DownloadError
 from hunter1.platform.update.ports import ReleaseSource
 from hunter1.platform.update.rules import (
     MAX_DOWNLOAD_BYTES,
+    MAX_ENTRIES,
     MAX_EXPANSION_RATIO,
     MAX_EXTRACTED_BYTES,
     ReleaseAsset,
@@ -82,9 +83,10 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     并且对压缩包做**越界路径检查** —— 宁可拒绝一个可疑包，也不要它写到目录外。
 
     失败词汇只有两种，且都是调用方（CLI）已经认识的：
-    - `ValueError`：没有可更新的版本、产物声明体积超限、包里有越界路径或解压后
-      体积超限（包可疑，不「修正」）；
-    - `DownloadError`：下载失败、**不是合法 zip**、磁盘写入失败。
+    - `ValueError`：没有可更新的版本、产物声明体积超限、包里有越界路径 / 解压后
+      体积超限 / 条目数超限（包可疑，不「修正」）；
+    - `DownloadError`：下载失败、**不是合法 zip**、压缩方法不受支持、成员被加密、
+      磁盘写入失败。
 
     后两类原先裸穿（`zipfile.BadZipFile` 与 `OSError` 都不是 `ValueError`），
     于是 CLI 的 `except (DownloadError, ValueError)` 兜不住，用户看到的是一段
@@ -112,6 +114,14 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     except zipfile.BadZipFile as exc:
         # 拿到的不是 zip（镜像返了一段 HTML / 传输被截断）—— FAIL 而不是 traceback
         raise DownloadError("archive_invalid", str(exc)) from exc
+    except NotImplementedError as exc:
+        # `zipfile` 对**不支持的压缩方法**（如 Deflate64=9）抛 NotImplementedError
+        # （实测确认），它不是 `BadZipFile` 的子类 —— 原先裸穿成 traceback。
+        raise DownloadError("archive_unsupported", str(exc)) from exc
+    except RuntimeError as exc:
+        # 加密成员 / 需要密码的 zip 抛 `RuntimeError("File ... is encrypted, password
+        # required")`（同样是 `BadZipFile` 之外的形状）。归到「包不对劲」这一档。
+        raise DownloadError("archive_encrypted", str(exc)) from exc
     except OSError as exc:
         raise DownloadError("write_failed", str(exc)) from exc
     return extracted
@@ -137,11 +147,20 @@ def _extract_within(archive: Path, dest: Path) -> None:
 
 
 def _guard_expansion(archive: Path, infos: list[zipfile.ZipInfo]) -> None:
-    """拒绝体积超限 / 膨胀比异常的压缩包。
+    """拒绝体积超限 / 膨胀比异常 / 条目数异常的压缩包。
 
     用成员**声明**的解压尺寸求和：`zipfile` 按声明尺寸读取该成员（声明小了会被
     截断、不会多写），所以这个和就是解压写盘量的上界。声明得大 → 在这里就被挡。
+
+    条目数也要单独挡 —— 两道体积闸门对它**都不生效**：每个成员都会引入文件系统
+    条目（文件 + 目录项，本地头部几十到上百字节），于是一个体积远小于下载上限的包
+    可以塞进数百万个 **0 字节**成员：`declared ≈ 0`（总量闸门不触发）、
+    `declared/compressed` 比值也极低（膨胀比闸门不触发），但 `extractall` 会创建
+    数百万个文件/目录，把磁盘 inode 与目录项耗尽。这与「几 KB 压成几 GB」是同类的
+    写爆磁盘，只是换了维度。
     """
+    if len(infos) > MAX_ENTRIES:
+        raise ValueError(f"压缩包条目数超限，已拒绝：{len(infos)} > 上限 {MAX_ENTRIES}")
     declared = sum(info.file_size for info in infos)
     if declared > MAX_EXTRACTED_BYTES:
         raise ValueError(

@@ -100,6 +100,43 @@ def _bomb_bytes(*, size: int = 5_000_000) -> bytes:
     return buffer.getvalue()
 
 
+def _deflate64_bytes() -> bytes:
+    """method=9（Deflate64）的包：`zipfile` 读它会抛 NotImplementedError。
+
+    构造法：先写 stored，再把局部头与中央目录的 method 字段改成 9。
+    """
+    import io
+    import struct
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as bundle:
+        bundle.writestr("hunter1/hunter1.exe", b"binary")
+    raw = bytearray(buffer.getvalue())
+    raw[8:10] = struct.pack("<H", 9)
+    central = raw.find(b"PK\x01\x02")
+    raw[central + 10 : central + 12] = struct.pack("<H", 9)
+    return bytes(raw)
+
+
+def _encrypted_zip_bytes() -> bytes:
+    """把某个成员的**加密标志位**（general purpose bit 0）置上。
+
+    `zipfile` 读加密成员时抛 `RuntimeError("File ... is encrypted, password required")`。
+    """
+    import io
+    import struct
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as bundle:
+        bundle.writestr("hunter1/hunter1.exe", b"binary")
+    raw = bytearray(buffer.getvalue())
+    # 局部头 flags 在 offset 6；中央目录 flags 在 PK\x01\x02 之后 +8
+    raw[6:8] = struct.pack("<H", 0x0001)
+    central = raw.find(b"PK\x01\x02")
+    raw[central + 8 : central + 10] = struct.pack("<H", 0x0001)
+    return bytes(raw)
+
+
 class TestCheckForUpdate:
     def test_reports_newer_version(self) -> None:
         source = FakeSource(manifest=_manifest("0.2.0", notes="修了几个 bug"))
@@ -250,6 +287,48 @@ class TestPrepareUpdate:
             )
         assert "体积超限" in str(excinfo.value)
         assert source.downloaded_to == []  # 一次下载都没发生
+
+    def test_rejects_too_many_entries(self, tmp_path: Path, monkeypatch) -> None:
+        """体积两道闸门对「海量 0 字节成员」都不生效，条目数必须单独挡。
+
+        每个成员都创建文件系统条目（本地头部几十字节），故一个体积远小于下载上限的
+        包能塞进数百万个 0 字节成员：声明总量≈0、膨胀比也低，但 extractall 会耗尽
+        inode/目录项。这里把上限压到 3 以免真造十万条目。
+        """
+        import hunter1.platform.update.service as service
+
+        monkeypatch.setattr(service, "MAX_ENTRIES", 3)
+        payload = _zip_bytes("hunter1/a", "hunter1/b", "hunter1/c", "hunter1/d")
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=payload)
+        with pytest.raises(ValueError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+        assert "条目数" in str(excinfo.value)
+        assert not (tmp_path / "updates" / "0.2.0").exists()
+
+    def test_unsupported_compression_becomes_download_error(self, tmp_path: Path) -> None:
+        """不受支持的压缩方法（Deflate64=9）→ DownloadError，不是裸 NotImplementedError。
+
+        实测确认 `zipfile` 对 method=9 抛 `NotImplementedError`，而它不是
+        `BadZipFile` 的子类，原先会穿过 `except (DownloadError, ValueError)` 变成
+        traceback。
+        """
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=_deflate64_bytes())
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+        assert excinfo.value.code == "archive_unsupported"
+
+    def test_encrypted_zip_becomes_download_error(self, tmp_path: Path) -> None:
+        """加密成员 → DownloadError，不是裸 RuntimeError（`zipfile` 的实测行为）。"""
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=_encrypted_zip_bytes())
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+        assert excinfo.value.code == "archive_encrypted"
 
 
 def test_status_is_a_plain_dataclass() -> None:
