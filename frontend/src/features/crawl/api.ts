@@ -8,6 +8,8 @@ import type { components } from "../../shared/api/schema";
 export type CrawlStatus = components["schemas"]["CrawlStatusResponse"];
 
 const POLL_MS = 1000;
+/** 轮询间隔上限（后端不可达时指数退避的封顶值）。 */
+export const CRAWL_POLL_MAX_MS = 30_000;
 
 /**
  * 轮询间隔的**策略**（纯函数，单独可测）。
@@ -23,12 +25,25 @@ const POLL_MS = 1000;
  * —— 而后端 runner 还在跑（它不依赖这个页面）。界面的后果是：停在旧快照、按钮被
  * `running` 永久禁用、页面没有任何刷新入口，用户只能重启进程。这正是
  * `slices/crawl/runner.py` 立意要消灭的那种「静默失败」。
+ *
+ * `failures` = **连续**失败的次数（react-query 的 `fetchFailureCount`，一旦成功就归零）。
+ * 拿不到明确结论时按指数退避、封顶在 `CRAWL_POLL_MAX_MS`：既保留「后端回来界面自己
+ * 恢复」，又不会在后端长时间不可达时**每秒**硬打一遍（原实现没有上限，一个开着的
+ * 页面会一直给已经倒下的后端施压）。
  */
-export function crawlPollInterval(snapshot: { running: boolean } | undefined): number | false {
-  if (snapshot === undefined) {
-    return POLL_MS;
+export function crawlPollInterval(
+  snapshot: { running: boolean } | undefined,
+  failures = 0,
+): number | false {
+  if (snapshot !== undefined && !snapshot.running) {
+    return false;
   }
-  return snapshot.running ? POLL_MS : false;
+  return backoff(POLL_MS, failures);
+}
+
+/** 指数退避：0 次失败 = 基础间隔；之后翻倍，封顶。 */
+function backoff(base: number, failures: number): number {
+  return failures <= 0 ? base : Math.min(base * 2 ** failures, CRAWL_POLL_MAX_MS);
 }
 
 async function fetchStatus(): Promise<CrawlStatus> {
@@ -50,10 +65,27 @@ async function fetchStatus(): Promise<CrawlStatus> {
 export function useCrawlStatus() {
   const queryClient = useQueryClient();
   const wasRunning = useRef(false);
+  // 连续失败次数：后端不可达时据此退避（见 crawlPollInterval）。
+  //
+  // 为什么自己数而不用 react-query 的计数器：v5 里 `fetchFailureCount` 在**每次
+  // fetch 开始**时就被 `fetchState()` 归零、失败时只加回 1（源码 query.js 的
+  // `"fetch"` / `"error"` reducer），所以每轮失败后它恒为 1 —— 拿它算退避只会得到
+  // 一个**恒定**的 2 秒（实测：0/2/4/6/8… 秒，不是指数）。`errorUpdateCount` 只增
+  // 不减（成功也不清零），同样不能用。计数器放在 queryFn 里维护：每次尝试恰好更新一次。
+  const failures = useRef(0);
   const query = useQuery({
     queryKey: ["crawl", "status"],
-    queryFn: fetchStatus,
-    refetchInterval: (query) => crawlPollInterval(query.state.data),
+    queryFn: async () => {
+      try {
+        const snapshot = await fetchStatus();
+        failures.current = 0;
+        return snapshot;
+      } catch (error) {
+        failures.current += 1;
+        throw error;
+      }
+    },
+    refetchInterval: (query) => crawlPollInterval(query.state.data, failures.current),
   });
 
   // 一轮抓取从「进行中」变成「结束」时失效岗位库。
@@ -76,9 +108,10 @@ export function useStartCrawl() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const { data, error } = await api.POST("/api/crawl");
+      const { data, error, response } = await api.POST("/api/crawl");
       if (error || !data) {
-        throw new Error("启动抓取失败");
+        // 「上一轮还在跑」这类原因后端写在 detail 里，走漏斗取出来。
+        throw new Error(apiErrorMessage(error, "启动抓取失败", response));
       }
       return data;
     },

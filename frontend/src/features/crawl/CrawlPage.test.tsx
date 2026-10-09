@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CrawlPage } from "./CrawlPage";
@@ -149,5 +149,75 @@ describe("CrawlPage", () => {
       },
       { timeout: 5000 },
     );
+  });
+});
+
+describe("CrawlPage 读取失败", () => {
+  /**
+   * 回归护栏：状态读取失败时，原先会**同屏**显示「错误提示」与一张永久挂着的
+   * 「正在读取抓取进度…」卡片（轮询在失败期间一直重试，snapshot 恒为 undefined），
+   * 两条信息自相矛盾。此前该页面没有 status 失败用例，所以测不出来。
+   */
+  it("失败时不再显示「正在读取抓取进度…」卡片", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ detail: "后端暂时不可用" }, 503)),
+    );
+    renderPage();
+    await screen.findByText(/后端暂时不可用|读取抓取进度失败/);
+    expect(screen.queryByText("正在读取抓取进度…")).toBeNull();
+  });
+
+  it("失败时页头不停在「正在读取状态…」", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ detail: "后端暂时不可用" }, 503)),
+    );
+    renderPage();
+    await screen.findByText(/后端暂时不可用|读取抓取进度失败/);
+    expect(screen.queryByText("正在读取状态…")).toBeNull();
+  });
+});
+
+describe("CrawlPage 后端不可达时的轮询退避", () => {
+  /**
+   * 回归护栏：后端倒下后，一个开着的页面会一直重试 —— 没有退避时是**每秒**一次，
+   * 无限期地给已经起不来的后端施压。这里用假时钟量「10 秒内到底打了几次」：
+   * 固定 1 秒间隔会产生约 10 次，指数退避（1→2→4→8…）应只有 2 次。
+   */
+  it("退避后不再每秒重试（10 秒内的请求次数远少于固定间隔）", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        return jsonResponse({ detail: "后端暂时不可用" }, 503);
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+    });
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <CrawlPage />
+        </QueryClientProvider>,
+      );
+      // 挂载即发首次请求
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(calls).toBeGreaterThan(0);
+      const afterFirst = calls;
+
+      // 之后 10 秒：固定 1 秒 = 约 10 次；退避应 ≤ 3 次
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(calls - afterFirst).toBeLessThanOrEqual(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
