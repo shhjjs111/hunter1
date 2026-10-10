@@ -65,8 +65,14 @@ export function apiErrorMessage(
   return fallback;
 }
 
-/** detail → 一句人能读的话；取不出可读内容时返回 null（调用方退回 fallback）。 */
-function detailText(detail: unknown): string | null {
+/**
+ * detail → 一句人能读的话；取不出可读内容时返回 null（调用方退回 fallback）。
+ *
+ * 导出而不是留私有：SSE 原语（`shared/streaming/sse.ts`）也要从错误体里取出同一层
+ * 「可读原因」，它原先自己写了一份只认字符串 detail 的重复实现（数组 detail 直接漏掉）。
+ * 让两处共用一个取法，避免措辞/形状规则分叉。
+ */
+export function detailText(detail: unknown): string | null {
   if (typeof detail === "string") {
     return detail.trim() === "" ? null : detail;
   }

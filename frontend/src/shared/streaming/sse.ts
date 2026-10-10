@@ -8,6 +8,8 @@
  * 这里只关心 `data:`（本项目不使用 event/id/retry 字段）。
  */
 
+import { detailText } from "../api/errors";
+
 export type SseHandler = (event: Record<string, unknown>) => void;
 /** 有 `data:` 行却没能解析成事件的块（内容丢了，调用方该告诉用户）。 */
 export type SseMalformedHandler = (raw: string) => void;
@@ -68,7 +70,9 @@ export async function streamSse(
  *
  * 后端失败给的是 `{"detail":"模型未配置：…"}`（可读原因）；直接把整段 JSON
  * slice 出去会连花括号一起甩给用户（`请求失败（HTTP 409）：{"detail":"…"}`）。
- * 与 `shared/api/errors.ts` 的 apiErrorMessage 同一取舍：有 detail 就取它。
+ * detail 的取法**复用** `shared/api/errors.ts` 的 `detailText`（那里与
+ * `apiErrorMessage` 共用同一份规则：字符串、FastAPI 的 `[{loc,msg,type}]` 数组都认），
+ * 本文件不再自己写一份只认字符串 detail 的重复实现。
  */
 function readableDetail(text: string): string {
   if (!text) {
@@ -77,9 +81,9 @@ function readableDetail(text: string): string {
   try {
     const parsed: unknown = JSON.parse(text);
     if (parsed !== null && typeof parsed === "object" && "detail" in parsed) {
-      const detail = (parsed as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim() !== "") {
-        return `：${detail}`;
+      const readable = detailText((parsed as { detail?: unknown }).detail);
+      if (readable !== null) {
+        return `：${readable}`;
       }
     }
   } catch {
@@ -119,7 +123,9 @@ function parseBlock(block: string): ParsedBlock {
   }
   const raw = dataLines.join("\n");
   if (!raw) {
-    return { kind: "dropped", raw };
+    // 空的 `data:`（冒号后什么都没有）没有内容可丢 —— 协议允许的「空数据」，
+    // 不是解析失败。原先归进 dropped，调用方据此报「有内容未能解析」纯属误报。
+    return { kind: "skip" };
   }
   try {
     const parsed: unknown = JSON.parse(raw);

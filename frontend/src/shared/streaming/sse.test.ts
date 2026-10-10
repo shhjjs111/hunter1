@@ -65,8 +65,10 @@ describe("streamSse", () => {
   });
 
   it("CRLF 跨 chunk 切断也能拼回，且不误切", async () => {
-    // \r 与 \n 分属两个 chunk：提前把裸 \r 转成 \n 会与下一段拼出假空行
-    stubFetch(['data: {"type":"a"}\r\n\r\n', 'data: {"type":"b"}\r\n\r\n']);
+    // 两个 chunk 之间把一个 CRLF **切开**（\r 收尾、\n 起头）：提前把裸 \r 转成
+    // \n 会与下一 chunk 的 \n 拼出假空行、把一条事件切成两条。实现只在累积后的
+    // buffer 上替换成对的 \r\n，所以跨边界的 CRLF 仍能还原。
+    stubFetch(['data: {"type":"a"}\r', '\n\r\ndata: {"type":"b"}\r\n\r\n']);
     const events: Record<string, unknown>[] = [];
     await streamSse("/x", {}, (event) => events.push(event));
     expect(events).toEqual([{ type: "a" }, { type: "b" }]);
@@ -122,6 +124,24 @@ describe("streamSse", () => {
     );
     expect(events).toEqual([{ type: "done" }]);
     expect(dropped).toEqual(["123"]);
+  });
+
+  it("空 data: 行不算「丢内容」（空数据是协议允许的 skip，不是丢弃）", async () => {
+    // `data:` 冒号后什么都没有 —— SSE 协议允许的空数据，没有内容可丢。
+    // 原先归进 dropped，调用方（AssistantPage）会据此报「有内容未能解析」，
+    // 对一条正常的空行误报。
+    stubFetch(["data:\n\n", 'data: {"type":"done"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    const dropped: string[] = [];
+    await streamSse(
+      "/x",
+      {},
+      (event) => events.push(event),
+      undefined,
+      (raw) => dropped.push(raw),
+    );
+    expect(events).toEqual([{ type: "done" }]);
+    expect(dropped).toEqual([]);
   });
 
   it("心跳/注释块不是「丢内容」（不该惊动调用方）", async () => {
