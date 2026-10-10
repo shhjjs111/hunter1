@@ -206,4 +206,34 @@ describe("SettingsPage", () => {
     expect(probeBodies[0]).toContain("https://typed.example.com/v1");
     expect(probeBodies[0]).toContain("deepseek-reasoner");
   });
+
+  it("开始一次操作时清掉上一次**另一类**操作的提示（不许两条同屏）", async () => {
+    // 实测（修复前）：① 点「测试连接」失败 → 出现探测错误；② 改个非法地址点「保存」
+    // → 保存错误出现，而**旧那条探测错误还留在屏幕上**（mutation 的状态不会自己消失）。
+    // 两条红条并排，用户分不出哪条对应当下这次，而旧那条说的还是上一轮的输入。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const req = input as Request;
+        if (req.method === "POST") {
+          return jsonResponse({ ok: false, message: "探测失败：连不上端点" });
+        }
+        if (req.method === "PUT") {
+          return jsonResponse({ detail: "base_url 必须是 http(s) 地址" }, 422);
+        }
+        return jsonResponse(SETTINGS);
+      }),
+    );
+
+    renderPage();
+    await screen.findByLabelText(/Base URL/);
+
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText(/探测失败/);
+
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/http\(s\)/);
+
+    expect(screen.queryByText(/探测失败/)).toBeNull();
+  });
 });

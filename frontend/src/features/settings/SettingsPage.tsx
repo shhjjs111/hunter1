@@ -61,6 +61,11 @@ export function SettingsPage() {
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
+            // 新的操作开始前，把**另一类**的提示清掉：探测与保存是两次独立操作，
+            // 各自的成功/失败状态会一直留在 mutation 上 —— 先前是「两条红条同屏并排」，
+            // 用户分不出哪条对应当下这次（实测：先失败一次探测、再失败一次保存，
+            // 旧那条探测错误还在，而它说的是几个小时前的输入）。
+            probe.reset();
             // 密钥输入框只在**保存成功**后才清空。
             // 原先是在 mutate 之后同步执行 setApiKey("") —— 请求失败时密钥已被清掉，
             // 用户得把 key 重新敲一遍，而他刚被告知「模型名不合法」这种无关错误。
@@ -114,7 +119,11 @@ export function SettingsPage() {
               {save.isPending ? "保存中…" : "保存"}
             </Button>
             <Button
-              onClick={() => probe.mutate({ base_url: baseUrl, model, api_key: apiKey })}
+              onClick={() => {
+                // 与「保存」对称：开始探测前清掉上一次保存的提示，避免两条同屏。
+                save.reset();
+                probe.mutate({ base_url: baseUrl, model, api_key: apiKey });
+              }}
               disabled={probe.isPending}
             >
               {probe.isPending ? "探测中…" : "测试连接"}
