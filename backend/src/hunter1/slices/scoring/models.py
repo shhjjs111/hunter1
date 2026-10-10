@@ -46,21 +46,31 @@ class CandidateProfile(BaseModel):
     directions: list[ProfileItem] = Field(default_factory=list, max_length=MAX_PROFILE_DIRECTIONS)
     summary: str = Field(default="", max_length=MAX_PROFILE_SUMMARY_CHARS)
 
-    @field_validator("summary")
+    @field_validator("summary", mode="before")
     @classmethod
-    def _strip_summary(cls, value: str) -> str:
-        return (value or "").strip()
+    def _strip_summary(cls, value: object) -> object:
+        """先去首尾空白，**再**算长度上限（`mode="before"`）。
 
-    @field_validator("keywords", "directions")
-    @classmethod
-    def _drop_blank_items(cls, value: list[str]) -> list[str]:
-        """去掉全空白的条目。
-
-        不然 `["", ""]` 能通过下面「至少要有一项信号」的检查 —— 画像实际是空的，
-        却被当成「已配置」，评分照跑（提示词里写着「（未指定）」）。那等于让
-        不变量说谎。
+        `max_length` 是字段约束，跑在 after-validator 之前 —— 顺序反了的话，
+        「恰好 2000 字符 + 一个尾换行」会因为那个换行被拒（长度按未剥离的原文算），
+        用户的观感是「明明只有 2000 字却说我超了」。
         """
-        return [item for item in value if item]
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("keywords", "directions", mode="before")
+    @classmethod
+    def _drop_blank_items(cls, value: object) -> object:
+        """去掉全空白的条目 —— **在算 maxItems 之前**（`mode="before"`）。
+
+        空白条目既不是用户写下的信号，也不该占配额：顺序反了时
+        `["AI"] + [""] * 50` 会因为「51 条超过 50 条上限」被拒，而拒绝理由
+        （「关键词超上限」）与实际（用户只写了 1 个关键词）不符 —— 用户盯着自己那
+        一个关键词，不知道该改什么。本校验器的本意（见下方「至少要有一项信号」）
+        正是「全空白条目不算内容」，那就得在计数之前生效。
+        """
+        if not isinstance(value, list):
+            return value
+        return [item for item in value if not (isinstance(item, str) and not item.strip())]
 
     def model_post_init(self, _context: object) -> None:
         if not self.keywords and not self.directions and not self.summary:

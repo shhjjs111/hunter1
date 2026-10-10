@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
 from hunter1.platform.llm import LLMError, LLMResponse
-from hunter1.slices.scoring.models import CandidateProfile
+from hunter1.slices.scoring.models import MAX_PROFILE_KEYWORDS, CandidateProfile
 from hunter1.slices.scoring.prompts import PROMPT_VERSION
 from hunter1.slices.scoring.router import build_router
 from hunter1.slices.scoring.store import ScoreStore
@@ -338,6 +338,20 @@ class TestProfileEndpoints:
             response = client.put("/api/scoring/profile", json={"keywords": ["AI"] * 5000})
             assert response.status_code == 422, "超量关键词必须被挡在入库之前"
             assert "上限" in response.json()["detail"]
+
+    def test_blank_items_do_not_trigger_the_oversize_rejection(self, db: Database) -> None:
+        """1 个真实关键词 + 50 个空串 → 200：空白条目不占配额。
+
+        修复前这里是 422，且 `detail` 说「关键词超上限」—— 与用户实际写的
+        （一个关键词）不符，等于给了一条查不出问题的线索。上限本身照旧（见上一条）。
+        """
+        with self._client(db, FakeLLM()) as client:
+            response = client.put(
+                "/api/scoring/profile",
+                json={"keywords": ["AI"] + [""] * MAX_PROFILE_KEYWORDS},
+            )
+            assert response.status_code == 200
+            assert response.json()["profile"]["keywords"] == ["AI"]
 
     def test_oversized_summary_rejected(self, db: Database) -> None:
         with self._client(db, FakeLLM()) as client:
