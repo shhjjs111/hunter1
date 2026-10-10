@@ -130,12 +130,6 @@ class Database:
             # 存在这种竞态留下的重复行 —— 先收敛再建索引，否则启动路径直接抛裸
             # IntegrityError、应用起不来（与上面消息序号同款处理）。
             removed = self._collapse_duplicate_applications(connection)
-            if removed:
-                print(
-                    f"检测到 {removed} 条同一岗位的重复投递记录，已保留各岗位最新的一条"
-                    "并补建唯一索引。",
-                    file=sys.stderr,
-                )
             connection.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_applications_job ON applications (job_id)"
@@ -144,6 +138,14 @@ class Database:
             # 清掉被取代的旧非唯一索引（旧代码建在 ORM 的 index=True 上）——
             # 与上面的消息索引同因：同列冗余只占空间、拖慢写入，还让读代码的人困惑。
             connection.execute(text("DROP INDEX IF EXISTS ix_applications_job_id"))
+
+            # 同上面那条：日志宣称「已补建唯一索引」必须放在**索引真的建成之后**。
+            if removed:
+                print(
+                    f"检测到 {removed} 条同一岗位的重复投递记录，已保留各岗位最新的一条"
+                    "并补建唯一索引。",
+                    file=sys.stderr,
+                )
 
             # 新列：`create_all` 只对**新表**生效，老库补不上列（与上面的索引同因）。
             # SQLite 的 ADD COLUMN 没有 IF NOT EXISTS，先查 PRAGMA 再补。
