@@ -53,6 +53,69 @@ def _raw(title: str, url: str, *, company: str = "示例科技", **kw: object) -
     return RawJob(company=company, title=title, detail_url=url, **kw)  # type: ignore[arg-type]
 
 
+class BatchOnlyJobs:
+    """只实现抓取真正需要的两个方法，并记录调用序。
+
+    **刻意不实现 `get`**：旧实现逐条 `get()`，这个替身会在那里直接 `AttributeError`
+    —— 替身本身就是 N+1 的闸门（比断言次数更早、更响）。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.stored: dict[str, Job] = {}
+
+    def get_many(self, job_ids: list[str]) -> dict[str, Job]:
+        self.calls.append("get_many")
+        return {job_id: self.stored[job_id] for job_id in job_ids if job_id in self.stored}
+
+    def upsert_facts(self, job: Job) -> None:
+        self.calls.append("upsert_facts")
+        self.stored[job.id] = job
+
+
+class TestBatchLookup:
+    """一页 N 条岗位**一次**读库，而不是 N 次（N+1）。"""
+
+    def test_whole_page_costs_one_lookup(self) -> None:
+        jobs = BatchOnlyJobs()
+        raw = [_raw(f"岗位{index}", f"https://example.com/j/{index}") for index in range(20)]
+
+        result = crawl_company(FakeCrawler("甲", raw), jobs=jobs)  # type: ignore[arg-type]
+
+        assert result.created == 20
+        assert jobs.calls.count("get_many") == 1
+        assert "get" not in jobs.calls
+
+    def test_known_jobs_are_merged_from_the_same_batch(self) -> None:
+        """已在库的那些走合并（不是新建），且仍只有一次查询。"""
+        first = _raw("产品经理", "https://example.com/j/1")
+        jobs = BatchOnlyJobs()
+        seeded = crawl_company(FakeCrawler("甲", [first]), jobs=jobs)  # type: ignore[arg-type]
+        assert seeded.created == 1
+
+        jobs.calls.clear()
+        again = crawl_company(
+            FakeCrawler("甲", [first, _raw("新岗位", "https://example.com/j/2")]),
+            jobs=jobs,  # type: ignore[arg-type]
+        )
+
+        assert (again.created, again.updated) == (1, 1)
+        assert jobs.calls.count("get_many") == 1
+
+    def test_duplicate_in_one_page_counts_as_update(self) -> None:
+        """同一页里重复出现的岗位：第二条按「更新」算 —— 与旧的逐条 `get` 行为一致。
+
+        批量取只是把「读」压成一次，**不改变**一条岗位在页内出现两次时的语义。
+        """
+        raw = _raw("产品经理", "https://example.com/j/1")
+        jobs = BatchOnlyJobs()
+
+        result = crawl_company(FakeCrawler("甲", [raw, raw]), jobs=jobs)  # type: ignore[arg-type]
+
+        assert (result.created, result.updated) == (1, 1)
+        assert len(jobs.stored) == 1
+
+
 class FlakyJobs:
     """包装真实仓储，让接下来 `failures` 次 `upsert_facts` 抛错（模拟 DB 写失败）。
 

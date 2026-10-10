@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,13 @@ from hunter1.platform.text import normalize_job_title
 
 if TYPE_CHECKING:
     from hunter1.platform.db.database import Database
+
+#: `get_many` 每次 `IN (...)` 的 id 个数上限。
+#:
+#: SQLite 的绑定变量默认上限是 999（`SQLITE_MAX_VARIABLE_NUMBER`），一次把一整页
+#: 塞进 `IN` 会在长页上直接报错。500 留足余量，也让「一页 300 条」这种常见规模
+#: 仍然只需一次查询。
+_ID_CHUNK = 500
 
 
 def _to_company(row: CompanyRow) -> Company:
@@ -219,6 +227,22 @@ class SqliteJobRepository:
         with self._db.session() as session:
             row = session.get(JobRow, job_id)
             return _to_job(row) if row is not None else None
+
+    def get_many(self, job_ids: Sequence[str]) -> dict[str, Job]:
+        """一次取回一批岗位（见 `JobRepository.get_many` 的端口说明）。
+
+        分批查：SQLite 的绑定变量数有上限（默认 999），而抓取一页可能有几千条 ——
+        一次 `IN (...)` 会在**长页**上直接报错。去重也在这里做：同一页重复出现的 id
+        不必占两次变量名额。
+        """
+        unique = list(dict.fromkeys(job_ids))
+        found: dict[str, Job] = {}
+        for start in range(0, len(unique), _ID_CHUNK):
+            chunk = unique[start : start + _ID_CHUNK]
+            with self._db.session() as session:
+                for row in session.scalars(select(JobRow).where(JobRow.id.in_(chunk))):
+                    found[row.id] = _to_job(row)
+        return found
 
     def get_by_prefix(self, prefix: str, *, limit: int = PREFIX_MATCH_LIMIT) -> list[Job]:
         """按 id 前缀查找（助手常只看到前 8 位 id）。

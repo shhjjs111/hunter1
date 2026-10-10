@@ -87,14 +87,27 @@ def crawl_company(
 
     result.fetched = len(raw_jobs)
     try:
-        for raw in raw_jobs:
-            job_id = job_identity(detail_url=raw.detail_url, company=raw.company, title=raw.title)
-            existing = jobs.get(job_id)
+        # 先**一次**问清楚「这一页里哪些岗位已经在库」，再逐条合并 —— 原先每条都
+        # `jobs.get()`，一页 50 条就是 50 次往返（N+1）。合并本身需要旧记录的内容，
+        # 所以省不掉读，只能把它从 N 次压成 1 次。
+        job_ids = [
+            job_identity(detail_url=raw.detail_url, company=raw.company, title=raw.title)
+            for raw in raw_jobs
+        ]
+        existing_by_id = jobs.get_many(job_ids)
+        for raw, job_id in zip(raw_jobs, job_ids, strict=True):
+            existing = existing_by_id.get(job_id)
             if existing is None:
-                jobs.upsert_facts(_new_job(job_id, raw, timestamp))
+                fresh = _new_job(job_id, raw, timestamp)
+                jobs.upsert_facts(fresh)
+                # 写回映射：同一页里重复出现的同一个岗位，第二条要按「更新」处理
+                # （旧实现逐条 `get` 时第二次能读到刚写的行，计数与合并行为都得跟上）
+                existing_by_id[job_id] = fresh
                 result.created += 1
             else:
-                jobs.upsert_facts(_merge(existing, raw, timestamp))
+                merged = _merge(existing, raw, timestamp)
+                jobs.upsert_facts(merged)
+                existing_by_id[job_id] = merged
                 result.updated += 1
     except Exception as exc:
         # 落库失败同样收进结果，**不穿出去**：承诺是「单站失败不中断整轮」，

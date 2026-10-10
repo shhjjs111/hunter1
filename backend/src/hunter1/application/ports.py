@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from hunter1.domain.assistant import Message
@@ -37,6 +37,15 @@ class JobRepository(Protocol):
     def upsert_facts(self, job: Job) -> None: ...
 
     def get(self, job_id: str) -> Job | None: ...
+
+    def get_many(self, job_ids: Sequence[str]) -> dict[str, Job]:
+        """一次取回一批岗位，键是 id —— **只含确实存在的那些**。
+
+        存在的理由：抓取要「已入库的就合并、没有的才新建」，逐条 `get` 让一页 50 条
+        变成 50 次往返（N+1）。缺的 id 不出现在结果里（调用方按「取不到 = 库里没有」
+        处理，不需要 None 占位）。
+        """
+        ...
 
     def get_by_prefix(self, prefix: str, *, limit: int = 20) -> list[Job]: ...
 
