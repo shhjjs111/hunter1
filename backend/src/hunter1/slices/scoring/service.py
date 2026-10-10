@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from hunter1.application.ports import LLMProvider
-from hunter1.domain.llm import LLMError
+from hunter1.domain.llm import LLMError, describe_llm_error
 from hunter1.domain.models import Job
 from hunter1.slices.scoring.models import CandidateProfile, ScoreCard, ScoringError
 from hunter1.slices.scoring.prompts import (
@@ -54,7 +54,9 @@ def score_job(
             max_tokens=max_tokens,
         )
     except LLMError as exc:
-        raise ScoringError(f"llm failed: {exc}") from exc
+        # 上游模型失败：文案必须是**可行动的中文**（见 `describe_llm_error`）——
+        # 界面此前显示的是 "llm failed: transport_failed"，用户从中读不出下一步。
+        raise ScoringError(describe_llm_error(exc)) from exc
 
     try:
         payload = json.loads(response.content)

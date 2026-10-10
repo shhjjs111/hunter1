@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hunter1.domain.llm import LLMResponse
+from hunter1.domain.llm import LLMError, LLMResponse
 from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db import Database
 from hunter1.platform.db.settings import LLM_KEY
@@ -262,6 +262,36 @@ class TestConnectionProbe:
             payload = client.post("/api/settings/test").json()
             assert payload["ok"] is False
             assert "配置不完整" in payload["message"]
+
+    def test_llm_error_is_translated_to_actionable_chinese(self, db: Database) -> None:
+        """`LLMError` 不许把内部码原样丢给用户 —— 翻成可行动的中文，code 仍保留。
+
+        实测（修复前）：端点不可达时配置页上显示的就是 `LLMError: transport_failed`，
+        用户从中读不出下一步；而同一个页面在「模型未配置」时给的是
+        「模型未配置：请先在「配置」页填好 base_url / 模型 / API Key」。
+        """
+
+        class UnreachableLLM:
+            def close(self) -> None:
+                """端口要求：释放资源。"""
+
+            def complete(self, **_kw: Any) -> LLMResponse:
+                raise LLMError("transport_failed", "connect timeout")
+
+        app = FastAPI()
+        app.include_router(
+            build_router(store=SettingsStore(db), llm_factory=lambda _settings: UnreachableLLM()),
+            prefix="/api",
+        )
+        with TestClient(app) as client:
+            client.put("/api/settings", json=FORM)
+            payload = client.post("/api/settings/test").json()
+
+        assert payload["ok"] is False
+        message = payload["message"]
+        assert "连不上模型端点" in message, message
+        assert "transport_failed" in message, "原始 code 必须留着 —— 排查时唯一的机器可读抓手"
+        assert "LLMError:" not in message, "内部异常类名不该出现在用户可见文案里"
 
     def test_error_message_never_carries_the_full_key(self, db: Database) -> None:
         """探测失败原因里不许出现完整 API Key。

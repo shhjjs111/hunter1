@@ -207,11 +207,18 @@ class TestScoreEndpoint:
         assert "岗位不存在" in response.json()["detail"]
 
     def test_llm_failure_is_422_with_reason(self, db: Database) -> None:
-        """模型侧失败 → 422（不是 500，也不是 404）：请求没毛病，是依赖给不出结果。"""
+        """模型侧失败 → 422（不是 500，也不是 404）：请求没毛病，是依赖给不出结果。
+
+        文案要求**可行动**：此前是 `llm failed: upstream_failed`（内部标识符），
+        用户读不出下一步；现在翻成中文并保留原始 code（见 `describe_llm_error`）。
+        """
         for client in _client(db, FakeLLM(boom=True)):
             response = client.post(f"/api/scoring/{JOB_ID}")
             assert response.status_code == 422
-            assert "llm failed" in response.json()["detail"]
+            detail = response.json()["detail"]
+            assert "模型调用失败" in detail, detail
+            assert "upstream_failed" in detail, "原始 code 要留着（排查靠它）"
+            assert "llm failed" not in detail
 
     def test_bad_model_output_is_422_and_does_not_write(self, db: Database) -> None:
         """模型输出不可用时不得写回分数 —— 「没评上」不能变成「评了 0 分」。"""
@@ -308,6 +315,32 @@ class TestProfileEndpoints:
             )
             assert response.status_code == 422
             assert "画像" in response.json()["detail"]
+
+    def test_rejection_reason_has_no_pydantic_internals(self, db: Database) -> None:
+        """422 的「具体原因」要是一句人话 —— 不带 pydantic 的实现细节与文档链接。
+
+        实测（修复前）界面上那一段是：中文说明后面直接拼上
+        `1 validation error for CandidateProfile Value error, … [type=value_error,
+        input_value={'keywords': [], …}] For further information visit
+        https://errors.pydantic.dev/2.13/v/value_error` —— 用户看不懂，而可读的那半句
+        被挤在末尾。现在只取第一条错的原因。
+        """
+        with self._client(db, FakeLLM()) as client:
+            response = client.put(
+                "/api/scoring/profile",
+                json={"keywords": [], "directions": [], "summary": ""},
+            )
+
+        detail = response.json()["detail"]
+        assert "至少要有一项信号" in detail, detail
+        # 「具体原因」那一半也不许是英文原文：领域不变量的话会原样拼到这里
+        # （实测：不变量还是英文时，界面末尾就是 `candidate profile needs at least
+        # one of keywords/directions/summary`）。只断言前半句是抓不住的 ——
+        # `PROFILE_INVALID_DETAIL` 本身就含「至少要有一项信号」，那半句谁写都过。
+        assert "candidate profile" not in detail, detail
+        assert "errors.pydantic.dev" not in detail
+        assert "input_value" not in detail
+        assert "validation error for" not in detail
 
     def test_score_without_profile_is_409_not_405(self, db: Database) -> None:
         """端点**必须存在**：画像没配时也给 409 + 指引，不能是「端点不存在」。"""

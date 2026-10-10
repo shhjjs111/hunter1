@@ -74,7 +74,8 @@ class CandidateProfile(BaseModel):
 
     def model_post_init(self, _context: object) -> None:
         if not self.keywords and not self.directions and not self.summary:
-            raise ValueError("candidate profile needs at least one of keywords/directions/summary")
+            # 中文：这句话会经 `PROFILE_INVALID_DETAIL` 一直显示到配置页上。
+            raise ValueError("画像至少要有一项信号（关键词 / 方向 / 背景摘要）")
 
 
 class ScoreCard(BaseModel):

@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
 from hunter1.application.ports import LLMProvider
+from hunter1.domain.llm import LLMError, describe_llm_error
 from hunter1.domain.settings import LLMSettings, plaintext_warning
 from hunter1.platform.text import redact_secret
 from hunter1.slices.settings.schemas import (
@@ -35,6 +36,19 @@ def _redact(message: str, settings: LLMSettings) -> str:
     自身出错时的抹除共用同一份，避免两处措辞/规则分叉）。
     """
     return redact_secret(message, settings.api_key)
+
+
+def _failure_text(exc: Exception) -> str:
+    """探测失败的对外文案。
+
+    `LLMError` 走**可行动的中文**（见 `domain.llm.describe_llm_error`）—— 界面此前直接
+    显示 `LLMError: transport_failed`，用户不知道下一步该做什么。其它异常保留
+    「类型名: 消息」的形状：那些通常是环境/实现问题（代理、证书、库的怪状态），
+    原文对排查更有用，而文案本身会经过 `_redact` 抹掉密钥。
+    """
+    if isinstance(exc, LLMError):
+        return describe_llm_error(exc)
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _view(settings: LLMSettings) -> SettingsView:
@@ -185,7 +199,7 @@ def build_router(
         except Exception as exc:
             return ConnectionTestResponse(
                 ok=False,
-                message=_redact(f"{type(exc).__name__}: {exc}", settings),
+                message=_redact(_failure_text(exc), settings),
             )
         finally:
             # 探测也是一次完整使用 —— 客户端每请求新建，用完释放。

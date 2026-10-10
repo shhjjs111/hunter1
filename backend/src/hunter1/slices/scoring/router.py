@@ -89,6 +89,24 @@ def _score_view(job: Job, score: int) -> ScoreView:
     )
 
 
+def _first_reason(exc: Exception) -> str:
+    """把校验异常压成**一句人话**（去掉 pydantic 的实现细节与文档链接）。
+
+    `str(ValidationError)` 的形态是：
+
+        `1 validation error for CandidateProfile Value error, … [type=value_error,
+         input_value={…}, input_type=dict] For further information visit
+         https://errors.pydantic.dev/2.13/v/value_error`
+
+    —— 前两句还有用，后面那些是给开发者看的。取第一条错的 `msg`（去掉 pydantic
+    加的 `Value error, ` 前缀）就够用户判断该改什么。
+    """
+    if isinstance(exc, ValidationError) and exc.errors():
+        first = exc.errors()[0]
+        return str(first.get("msg", exc)).removeprefix("Value error, ")
+    return str(exc)
+
+
 def build_router(
     *,
     store: ScoreStore,
@@ -136,10 +154,14 @@ def build_router(
         try:
             profile = form.to_profile()
         except (ValidationError, ValueError) as exc:
-            # 校验必须在写入之前 —— 被拒的请求不许动已存画像
+            # 校验必须在写入之前 —— 被拒的请求不许动已存画像。
+            #
+            # 原因给**一句人话**：pydantic 的 `str(exc)` 会带 `input_value={...}`、
+            # 内部 type 代码与 `errors.pydantic.dev` 链接（实测界面上的原文就是这个），
+            # 用户看不懂，还把可读的那半句挤到后面。这里只取第一条错的原因。
             raise HTTPException(
                 status_code=422,
-                detail=f"{PROFILE_INVALID_DETAIL}。具体原因：{exc}",
+                detail=f"{PROFILE_INVALID_DETAIL}。具体原因：{_first_reason(exc)}",
             ) from exc
         store.save_profile(profile)
         return ProfileView(profile=profile)
