@@ -17,10 +17,14 @@ from sqlalchemy.exc import IntegrityError
 
 from hunter1.domain.assistant import Message, Role, ToolCall
 from hunter1.platform.db.enums import restore_enum
+from hunter1.platform.db.pagination import check_page
 from hunter1.platform.db.schema import ConversationMessageRow, ConversationRow
 
 if TYPE_CHECKING:
     from hunter1.platform.db.database import Database
+
+#: 会话标题的列宽。落库与返回值都用它截断（见 `create`）。
+TITLE_MAX_CHARS = 255
 
 
 def _is_sequence_conflict(exc: IntegrityError) -> bool:
@@ -72,14 +76,17 @@ class SqliteConversationRepository:
     def create(self, *, title: str) -> Conversation:
         conversation_id = uuid.uuid4().hex
         now = self._clock()
+        # 落库要截断到列宽，**返回的必须是截断后**的值 —— 否则调用方拿到一个
+        # 永远读不回来的标题（界面显示 A、重新加载变成 B，而两边都以为自己是对的）。
+        stored_title = title[:TITLE_MAX_CHARS]
         with self._db.session() as session:
             session.add(
                 ConversationRow(
-                    id=conversation_id, title=title[:255], created_at=now, updated_at=now
+                    id=conversation_id, title=stored_title, created_at=now, updated_at=now
                 )
             )
             session.commit()
-        return Conversation(id=conversation_id, title=title, created_at=now, updated_at=now)
+        return Conversation(id=conversation_id, title=stored_title, created_at=now, updated_at=now)
 
     def get(self, conversation_id: str) -> Conversation | None:
         with self._db.session() as session:
@@ -87,6 +94,7 @@ class SqliteConversationRepository:
             return _to_conversation(row) if row is not None else None
 
     def list(self, *, limit: int = 50, offset: int = 0) -> list[Conversation]:
+        check_page(limit=limit, offset=offset)
         # 第二键 id：多个会话可能同 updated_at（时钟注入、批量创建），同值行顺序
         # SQL 不作保证。理由见 repository.py 的 _JOB_ORDER。
         #
@@ -183,22 +191,50 @@ class SqliteConversationRepository:
             f"无法为会话 {conversation_id} 分配消息序号：并发写入冲突过多"
         ) from last_error
 
-    def messages(self, conversation_id: str, *, limit: int | None = None) -> list[Message]:
-        with self._db.session() as session:
-            statement = (
-                select(ConversationMessageRow)
-                .where(ConversationMessageRow.conversation_id == conversation_id)
-                .order_by(ConversationMessageRow.sequence.asc())
-            )
-            rows = list(session.scalars(statement))
+    def messages(
+        self, conversation_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> list[Message]:
+        """读一段对话的消息，按 `sequence` 正序。
+
+        - `limit is None`：全部（`offset` 必须为 0）。
+        - `limit` 给定：取**窗口**，`offset` **从最新往回数** ——
+          `offset=0` 是最近 `limit` 条，`offset=limit` 是再往前的一段。
+          于是旧消息既能被上限保护、又不会变得够不着。
+
+        `limit == 0` 显式返回空：`rows[-limit:]` 在 0 时等于**全部**（`rows[-0:]`），
+        于是「不带历史」的意图会静默变成「带全部历史」，正好相反。这条语义不能靠
+        调用方「别传 0」来保证。
+
+        负数**拒绝而不是返回空**：它与「不要历史」是两回事，属于调用方算错了
+        （SQLite 的 `LIMIT -1` 更是「不限量」，方向完全相反）。
+        """
         if limit is not None:
-            # `rows[-limit:]` 在 limit=0 时是 `rows[-0:]` —— 等于**全部**：
-            # `assistant_history_limit` 若被配成 0（意图「不带历史」），会静默变成
-            # 「带全部历史」，正好与意图相反。负数同理给出错误窗口。显式返回空。
-            if limit <= 0:
-                return []
-            if len(rows) > limit:
-                rows = rows[-limit:]
+            check_page(limit=limit, offset=offset)
+        elif offset:
+            raise ValueError("offset 只在给了 limit 时有意义（窗口从最新往回数）。")
+        if limit == 0:
+            return []
+        with self._db.session() as session:
+            if limit is None:
+                statement = (
+                    select(ConversationMessageRow)
+                    .where(ConversationMessageRow.conversation_id == conversation_id)
+                    .order_by(ConversationMessageRow.sequence.asc())
+                )
+                rows = list(session.scalars(statement))
+            else:
+                # **把 LIMIT 下推到 SQL**：别把整段对话读进内存再在 Python 里切片 ——
+                # 会话没有删除端点，消息只增不减，长会话会把整表读进来。
+                # 倒序取「最新的 limit 条，跳过 offset 条」再翻回正序
+                # （`sequence` 在同一会话内唯一，排序确定）。
+                statement = (
+                    select(ConversationMessageRow)
+                    .where(ConversationMessageRow.conversation_id == conversation_id)
+                    .order_by(ConversationMessageRow.sequence.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+                rows = list(reversed(list(session.scalars(statement))))
         return [_to_message(row) for row in rows]
 
 
@@ -210,15 +246,22 @@ def _to_conversation(row: ConversationRow) -> Conversation:
 
 def _to_message(row: ConversationMessageRow) -> Message:
     raw_calls: list[dict[str, Any]] = list(row.tool_calls or [])
-    tool_calls = [
-        ToolCall(
-            id=str(item.get("id", "")),
-            name=str(item.get("name", "")),
-            arguments=dict(item.get("arguments") or {}),
+    tool_calls: list[ToolCall] = []
+    for item in raw_calls:
+        if not isinstance(item, dict):
+            continue
+        raw_arguments = item.get("arguments")
+        # 只认**映射**形态。原先的 `dict(item.get("arguments") or {})` 对非映射值会抛
+        # （`dict("ab")` → ValueError，`dict([1, 2])` → TypeError），于是库里一条坏值
+        # 就让整段对话读不出来 —— 一条坏工具调用不该让历史整体消失。
+        arguments = raw_arguments if isinstance(raw_arguments, dict) else {}
+        tool_calls.append(
+            ToolCall(
+                id=str(item.get("id", "")),
+                name=str(item.get("name", "")),
+                arguments=arguments,
+            )
         )
-        for item in raw_calls
-        if isinstance(item, dict)
-    ]
     return Message(
         role=restore_enum(Role, row.role, default=Role.USER, where="会话消息角色"),
         content=row.content,

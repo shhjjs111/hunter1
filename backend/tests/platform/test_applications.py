@@ -295,3 +295,11 @@ class TestRepairOfDuplicateApplications:
             )
         assert "ix_applications_job_id" not in names
         assert "uq_applications_job" in names
+
+
+def test_negative_limit_is_rejected(db: Database) -> None:
+    """同 jobs 仓储：负 `LIMIT` 在 SQLite 等于**不限量**，必须拒绝。"""
+    with pytest.raises(ValueError):
+        db.applications().list(limit=-1, offset=0)
+    with pytest.raises(ValueError):
+        db.applications().list(limit=10, offset=-1)

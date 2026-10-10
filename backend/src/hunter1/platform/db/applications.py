@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from hunter1.domain.models import Application, ApplicationStage
 from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.like import escape_like
+from hunter1.platform.db.pagination import check_page
 from hunter1.platform.db.schema import ApplicationRow
 
 if TYPE_CHECKING:
@@ -121,6 +122,7 @@ class SqliteApplicationRepository:
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Application]:
         # 第二键 id：同 updated_at 行的顺序 SQL 不作保证，而本方法直接走 offset 分页
         # （批量导入/脚本写入时同秒不罕见）。与 jobs 仓储同款，理由见 repository.py 的 _JOB_ORDER。
+        check_page(limit=limit, offset=offset)
         with self._db.session() as session:
             statement = (
                 select(ApplicationRow)

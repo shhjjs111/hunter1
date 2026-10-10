@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from hunter1.domain.models import CaptureStatus, Company, Job
 from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.like import escape_like
+from hunter1.platform.db.pagination import check_page
 from hunter1.platform.db.schema import CompanyRow, JobRow
 from hunter1.platform.text import normalize_job_title
 
@@ -239,6 +240,7 @@ class SqliteJobRepository:
             return int(total or 0)
 
     def list(self, *, limit: int = 100, offset: int = 0) -> list[Job]:
+        check_page(limit=limit, offset=offset)
         with self._db.session() as session:
             statement = select(JobRow).order_by(*_JOB_ORDER).limit(limit).offset(offset)
             return [_to_job(row) for row in session.scalars(statement)]
@@ -248,6 +250,7 @@ class SqliteJobRepository:
 
         空关键词退化为「列出最近岗位」—— 助手问「有什么岗位」时的用法。
         """
+        check_page(limit=limit, offset=offset)
         normalized = normalize_job_title(keyword)
         with self._db.session() as session:
             statement = select(JobRow).order_by(*_JOB_ORDER)

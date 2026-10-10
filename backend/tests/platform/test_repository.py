@@ -347,3 +347,16 @@ class TestIllegalEnumValuesInDatabase:
 
         assert titles == {"好行", "坏行"}
         capsys.readouterr()
+
+
+def test_negative_limit_is_rejected(db: Database) -> None:
+    """SQLite 的 `LIMIT -1` 是**不限量**。
+
+    调用方漏了校验时，「取一页」会静默变成「取整库」—— 方向正好相反，而且毫无迹象。
+    """
+    with pytest.raises(ValueError):
+        db.jobs().list(limit=-1)
+    with pytest.raises(ValueError):
+        db.jobs().list(offset=-1)
+    with pytest.raises(ValueError):
+        db.jobs().search(keyword="产品", limit=-1)

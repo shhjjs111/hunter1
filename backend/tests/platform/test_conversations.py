@@ -162,11 +162,22 @@ class TestMessages:
         assert repo.messages(conv.id, limit=0) == []
 
     def test_negative_limit_does_not_slice_a_wrong_window(self, db: Database) -> None:
+        """负的窗口参数**拒绝**，而不是兜成一个空窗口。
+
+        （这条原先断言 `== []`：那时把负值当「空窗口」静默兜住。但 SQLite 的
+        `LIMIT -1` 是**不限量** —— 兜成空窗口会把「调用方算错了」这件事盖住，
+        而分页窗口悄悄变样的表现是漏行/重行，比报错难查得多。故收紧为报错。）
+        """
         repo = db.conversations()
         conv = repo.create(title="t")
         for index in range(4):
             repo.append(conv.id, Message(Role.USER, f"m{index}"))
-        assert repo.messages(conv.id, limit=-1) == []
+        with pytest.raises(ValueError):
+            repo.messages(conv.id, limit=-1)
+        with pytest.raises(ValueError):
+            repo.messages(conv.id, limit=2, offset=-1)
+        with pytest.raises(ValueError):
+            repo.list(limit=-1)
 
 
 class FakeClockAdvance(FakeClock):
@@ -387,3 +398,66 @@ class TestAppendMany:
         after = repo.get(conv.id)
         assert after is not None
         assert after.updated_at >= before.updated_at
+
+
+class TestMessageWindow:
+    """`messages(limit/offset)`：窗口**从最新往回数**，且把 LIMIT 下推到 SQL。
+
+    会话没有删除端点，消息只增不减 —— 既要有上限，又不能因此让旧消息够不着。
+    """
+
+    def _conversation(self, db: Database):  # type: ignore[no-untyped-def]
+        repo = _repo(db, FakeClock())
+        conversation = repo.create(title="会话")
+        repo.append_many(
+            conversation.id,
+            [Message(role=Role.USER, content=f"m{i}") for i in range(1, 7)],
+        )
+        return repo, conversation.id
+
+    def test_limit_returns_the_newest_still_in_chronological_order(self, db: Database) -> None:
+        repo, cid = self._conversation(db)
+        assert [m.content for m in repo.messages(cid, limit=2)] == ["m5", "m6"]
+
+    def test_offset_counts_back_from_the_newest(self, db: Database) -> None:
+        """从最新往回数，所以旧消息够得着 —— 上限不会让历史变得够不着。"""
+        repo, cid = self._conversation(db)
+        assert [m.content for m in repo.messages(cid, limit=2, offset=2)] == ["m3", "m4"]
+
+    def test_zero_limit_still_means_no_history(self, db: Database) -> None:
+        """`limit=0` 的语义保持不变：不要历史。别被这次的窗口改动带偏。"""
+        repo, cid = self._conversation(db)
+        assert repo.messages(cid, limit=0) == []
+
+
+class TestCreateTitle:
+    def test_returned_title_is_the_stored_one(self, db: Database) -> None:
+        """落库要截断到列宽，**返回值**也必须是截断后的。
+
+        否则调用方拿到一个永远读不回来的标题：界面显示 A、重新加载变成 B。
+        """
+        repo = _repo(db, FakeClock())
+        created = repo.create(title="标" * 600)
+        assert len(created.title) == 255
+        stored = repo.get(created.id)
+        assert stored is not None and stored.title == created.title
+
+
+class TestToolCallHydration:
+    def test_non_mapping_arguments_do_not_break_the_whole_read(self) -> None:
+        """库里一条坏值不该让整段对话读不出来（`dict("ab")` 会抛 ValueError）。"""
+        from types import SimpleNamespace
+
+        from hunter1.platform.db.conversations import _to_message
+
+        row = SimpleNamespace(
+            role="user",
+            content="问",
+            tool_calls=[
+                {"id": "c1", "name": "t", "arguments": "not-a-mapping"},
+                {"id": "c2", "name": "t2", "arguments": {"keyword": "产品"}},
+            ],
+            tool_call_id=None,
+        )
+        message = _to_message(row)  # type: ignore[arg-type]
+        assert [call.arguments for call in message.tool_calls] == [{}, {"keyword": "产品"}]
