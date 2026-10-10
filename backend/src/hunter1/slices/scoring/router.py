@@ -37,6 +37,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
 from hunter1.application.ports import LLMProvider
+from hunter1.domain.models import Job
 from hunter1.slices.scoring.models import (
     MAX_PROFILE_DIRECTIONS,
     MAX_PROFILE_ITEM_CHARS,
@@ -66,6 +67,26 @@ PROFILE_INVALID_DETAIL = (
 def _now() -> datetime:
     """当前时刻（UTC）。注入 `clock` 是为了让测试固定时间。"""
     return datetime.now(UTC)
+
+
+def _score_view(job: Job, score: int) -> ScoreView:
+    """把一行岗位 + 分数投影成响应。
+
+    POST（写回**之后**）与 GET 共用它：两处必须给同一份结论（前端共用一套渲染）。
+    文本一律取自**库里那一行** —— 写库前按 `MAX_SCORE_TEXT_CHARS` 截断过，若响应改从
+    模型原文拼，同一份评分就有两种长度（打分时看到全文、刷新后变短），而截断只打到
+    stderr，界面上无从察觉。共用投影也让「新增一列只改一处」成立。
+    """
+    return ScoreView(
+        job_id=job.id,
+        score=score,
+        summary=job.score_summary,
+        advantages=job.score_advantages,
+        gaps=job.score_gaps,
+        model=job.score_model,
+        prompt_version=job.score_prompt_version,
+        scored_at=job.scored_at,
+    )
 
 
 def build_router(
@@ -143,33 +164,23 @@ def build_router(
             llm.close()
 
         scored_at = now()
-        if (
-            store.save_score(
-                job_id,
-                card.score,
-                model=card.model,
-                prompt_version=card.prompt_version,
-                scored_at=scored_at,
-                summary=card.summary,
-                advantages=card.advantages,
-                gaps=card.gaps,
-            )
-            is None
-        ):
+        saved = store.save_score(
+            job_id,
+            card.score,
+            model=card.model,
+            prompt_version=card.prompt_version,
+            scored_at=scored_at,
+            summary=card.summary,
+            advantages=card.advantages,
+            gaps=card.gaps,
+        )
+        if saved is None:
             # 窄竞态：上面 load 到了、写分前岗位被删。store.save_score 的契约就是
             # 「岗位不存在时返回 None，调用方据此报 404」—— 不接就会返回 200
             # 声称已写分。
             raise HTTPException(status_code=404, detail=f"岗位不存在：{job_id}")
-        return ScoreView(
-            job_id=job_id,
-            score=card.score,
-            summary=card.summary,
-            advantages=card.advantages,
-            gaps=card.gaps,
-            model=card.model,
-            prompt_version=card.prompt_version,
-            scored_at=scored_at,
-        )
+        # 响应从**写回后的那一行**构造，而不是模型原文：见 `_score_view`。
+        return _score_view(saved, card.score)
 
     @router.get("/scoring/{job_id}", summary="读已存下的评分（未评过为 404）")
     def read_score(job_id: str) -> ScoreView:
@@ -187,16 +198,7 @@ def build_router(
             # 「读一份已存在的评分」，没有就是不满足前置条件。与 `GET /scoring/profile`
             # 的取舍刻意不同 —— 那边的 `null` 是**正常初始态**（界面据此渲染空表单）。
             raise HTTPException(status_code=404, detail=f"该岗位还没有评过分：{job_id}")
-        return ScoreView(
-            job_id=job.id,
-            score=job.match_score,
-            summary=job.score_summary,
-            advantages=job.score_advantages,
-            gaps=job.score_gaps,
-            model=job.score_model,
-            prompt_version=job.score_prompt_version,
-            scored_at=job.scored_at,
-        )
+        return _score_view(job, job.match_score)
 
     return router
 

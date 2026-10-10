@@ -141,6 +141,28 @@ class TestScoreEndpoint:
             assert stored.status_code == 200
             assert stored.json() == body, "POST 与 GET 必须给同一份结论（前端共用一套渲染）"
 
+    def test_overlong_conclusion_is_the_same_on_post_and_read(self, db: Database) -> None:
+        """超过上限的结论文本：POST 与 GET 必须给**同一份**（截断后的）文本。
+
+        上面那条用例只喂短文本，两种实现都一样 —— 它守不住「响应从模型原文拼」这种
+        写法。写库前按 `MAX_SCORE_TEXT_CHARS` 截断（非静默，见 `store._clip`），所以
+        响应也必须取自**库里那一行**：否则用户打分时看到全文、刷新一次就变短，而截断
+        只打到 stderr，界面上无从察觉。
+        """
+        from hunter1.slices.scoring.store import MAX_SCORE_TEXT_CHARS
+
+        long_text = "观" * (MAX_SCORE_TEXT_CHARS + 50)
+        payload = {k: long_text for k in ("summary", "advantages", "gaps")} | {"score": 77}
+        posted: dict[str, Any] = {}
+        read: dict[str, Any] = {}
+        for client in _client(db, FakeLLM(payload)):
+            posted = client.post(f"/api/scoring/{JOB_ID}").json()
+            read = client.get(f"/api/scoring/{JOB_ID}").json()
+
+        for field in ("summary", "advantages", "gaps"):
+            assert len(posted[field]) == MAX_SCORE_TEXT_CHARS
+            assert posted[field] == read[field]
+
     def test_never_scored_job_is_404_on_read(self, db: Database) -> None:
         """还没评过 → 404 + 可读原因。
 
