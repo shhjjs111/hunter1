@@ -60,6 +60,25 @@ class TestSaveScore:
             store.save_score(JOB_ID, 200)
         assert db.jobs().get(JOB_ID).match_score is None  # type: ignore[union-attr]
 
+    @pytest.mark.parametrize("bad", [88.9, "88", None])
+    def test_non_integer_score_is_rejected_before_writing(
+        self, store: ScoreStore, db: Database, bad: object
+    ) -> None:
+        """非整数分数必须在写库**之前**被拒 —— 否则这个岗位此后读不出来。
+
+        这是「坏值落库、整行读 500」那条缺陷的护栏：`Job.match_score` 是 `int`，而
+        写分走定向列、绕过 pydantic。放 88.9 进去之后，`db.jobs().get(JOB_ID)`
+        （也就是 `GET /api/jobs`、`GET /api/jobs/{id}`）每一次都抛 ValidationError。
+        断言分两层：抛 ValueError（不是 TypeError —— 调用方按 ValueError 接），
+        以及库**没被污染**（这一行照旧读得出来）。
+        """
+        db.jobs().upsert(_job())
+
+        with pytest.raises(ValueError):
+            store.save_score(JOB_ID, bad)  # type: ignore[arg-type]
+
+        assert db.jobs().get(JOB_ID).match_score is None  # type: ignore[union-attr]
+
     def test_does_not_clobber_other_columns(self, store: ScoreStore, db: Database) -> None:
         """只写 match_score 一列 —— 抓取并发更新的标题/城市不被回滚。"""
         db.jobs().upsert(_job(title="原标题"))

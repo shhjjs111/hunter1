@@ -80,8 +80,13 @@ class ScoreStore:
         模型不是白算的。写入前按 `MAX_SCORE_TEXT_CHARS` 截断：这是外部模型给的文本，
         长度不受控，而每个岗位一行、行数没有上限。
         """
-        if not (SCORE_MIN <= score <= SCORE_MAX):
-            raise ValueError(f"match_score 越界：{score}（应在 {SCORE_MIN}..{SCORE_MAX}）")
+        # **类型和取值域一起挡**：`Job.match_score` 是 `int | None`（ge=0/le=100），
+        # 而这里绕过 pydantic 直写列。只比大小的写法会放非整数（88.9）进去 ——
+        # 之后**每一次读该行**都抛 ValidationError（`GET /api/jobs`、
+        # `GET /api/jobs/{id}` 全 500），即「分存进去了、这个岗位却再也打不开」；
+        # 字符串更糟：`<=` 本身抛 TypeError，报错形状都不是调用方预期的 ValueError。
+        if not isinstance(score, int) or not (SCORE_MIN <= score <= SCORE_MAX):
+            raise ValueError(f"match_score 必须是 {SCORE_MIN}..{SCORE_MAX} 的整数，收到 {score!r}")
         if not self._db.jobs().set_score(
             job_id,
             score,
