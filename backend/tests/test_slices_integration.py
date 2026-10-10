@@ -246,6 +246,47 @@ class TestFrontendServing:
         assert "dev.sh" in payload["hint"]  # 给出可行动的下一步
         db.dispose()
 
+    def test_half_built_dist_explains_instead_of_crashing(self, tmp_path: Path) -> None:
+        """产物目录在、`index.html` 不在 → 503 + 提示，**不是** 500。
+
+        回归护栏：`frontend_dir()` 原先只判目录存在，于是这条路径上 SPA 回落的
+        `FileResponse` 抛 `RuntimeError: File at path ... does not exist` —— 用户拿到
+        500，而真正的原因（产物不完整）一个字都没说。半截构建、`HUNTER1_FRONTEND_DIR`
+        指错、打包产物不完整都会落到这里。
+        """
+        half = tmp_path / "half-built"
+        (half / "assets").mkdir(parents=True)
+        (half / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+
+        test_client, db = _make_app(tmp_path, frontend=half)
+
+        for path in ("/", "/settings"):
+            response = test_client.get(path)
+            assert response.status_code == 503, f"{path} 应给可读 503，实得 {response.status_code}"
+            assert "前端产物未构建" in response.json()["detail"]
+        db.dispose()
+
+    def test_products_removed_after_startup_do_not_crash(self, tmp_path: Path) -> None:
+        """启动后产物被换掉（部署脚本正在覆盖目录）→ 可读 503，不是 500。
+
+        这条钉的是 `spa()` 里的第二道闸：只靠 `frontend_dir()` 在启动时判一次是不够的，
+        目录会在进程活着的时候被换 —— 那时 `FileResponse` 又会抛 `RuntimeError`。
+        """
+        dist = tmp_path / "dist"
+        (dist / "assets").mkdir(parents=True)
+        index = dist / "index.html"
+        index.write_text("<html><div id=root></div></html>", encoding="utf-8")
+
+        test_client, db = _make_app(tmp_path, frontend=dist)
+        assert test_client.get("/").status_code == 200
+
+        index.unlink()  # 部署脚本换目录的那一瞬
+
+        response = test_client.get("/")
+        assert response.status_code == 503, f"应给可读 503，实得 {response.status_code}"
+        assert "前端产物未构建" in response.json()["detail"]
+        db.dispose()
+
     def test_with_build_serves_spa_and_falls_back(self, tmp_path: Path) -> None:
         dist = tmp_path / "dist"
         (dist / "assets").mkdir(parents=True)

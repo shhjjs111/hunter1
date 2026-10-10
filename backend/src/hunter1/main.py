@@ -68,27 +68,40 @@ def _default_llm_factory(settings: LLMSettings) -> LLMProvider:
     )
 
 
+def _usable_dist(candidate: Path) -> Path | None:
+    """这个目录能不能真的伺服 SPA —— 判据是 `index.html` 在不在。
+
+    只判「目录存在」不够：半截构建 / `HUNTER1_FRONTEND_DIR` 指错 / 打包产物不完整时，
+    目录在而 `index.html` 不在 —— SPA 回落的 `FileResponse` 会当场抛
+    `RuntimeError: File at path ... does not exist`，于是**每一个非 API 路径都是 500**，
+    而那条「前端产物未构建 + 构建命令」的 503 恰恰不会出现（它只在返回 None 时走）。
+    用户看到的东西与真实原因（产物不完整）毫无关系。
+
+    `index.html` 是 SPA 唯一必需的产物：`assets/` 缺失只是资源 404，少了它整站打不开。
+    """
+    return candidate if (candidate / "index.html").is_file() else None
+
+
 def frontend_dir() -> Path | None:
-    """前端构建产物所在目录；不存在返回 None（开发态的正常情形）。
+    """前端构建产物所在目录；不可用返回 None（开发态的正常情形）。
 
     解析顺序：
     1. `HUNTER1_FRONTEND_DIR` 环境变量（测试与联调用）；
     2. 打包态：PyInstaller 解包目录下的 `hunter1/web_dist`；
     3. 源码态：仓库的 `frontend/dist`。
+
+    三层都走 `_usable_dist`：「存在」不算数，「能伺服」才算。
     """
     override = os.environ.get("HUNTER1_FRONTEND_DIR")
     if override:
-        candidate = Path(override)
-        return candidate if candidate.is_dir() else None
+        return _usable_dist(Path(override))
 
     if getattr(sys, "frozen", False):
         bundled = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-        candidate = bundled / "hunter1" / "web_dist"
-        return candidate if candidate.is_dir() else None
+        return _usable_dist(bundled / "hunter1" / "web_dist")
 
     # main.py → hunter1 → src → backend → 仓库根
-    candidate = Path(__file__).resolve().parents[3] / "frontend" / "dist"
-    return candidate if candidate.is_dir() else None
+    return _usable_dist(Path(__file__).resolve().parents[3] / "frontend" / "dist")
 
 
 @dataclass
@@ -293,6 +306,19 @@ def _static_file_within(dist_root: Path, path: str) -> Path | None:
     return None
 
 
+def _frontend_missing() -> JSONResponse:
+    """前端产物不可用时的可读回应（503 + 可行动的下一步）。"""
+    return JSONResponse(
+        {
+            "detail": "前端产物未构建",
+            "hint": "cd frontend && npm install && npm run build；"
+            "或开发期用 bash scripts/dev.sh 起 Vite（:5173）",
+            "api_docs": f"{API_PREFIX}/docs",
+        },
+        status_code=503,
+    )
+
+
 def _mount_frontend(app: FastAPI) -> None:
     """服务前端 SPA；产物不存在时给一条可读提示（开发态的预期情形）。
 
@@ -305,15 +331,7 @@ def _mount_frontend(app: FastAPI) -> None:
 
         @app.get("/", include_in_schema=False)
         def no_frontend() -> JSONResponse:
-            return JSONResponse(
-                {
-                    "detail": "前端产物未构建",
-                    "hint": "cd frontend && npm install && npm run build；"
-                    "或开发期用 bash scripts/dev.sh 起 Vite（:5173）",
-                    "api_docs": f"{API_PREFIX}/docs",
-                },
-                status_code=503,
-            )
+            return _frontend_missing()
 
         return
 
@@ -332,6 +350,11 @@ def _mount_frontend(app: FastAPI) -> None:
             found = _static_file_within(dist_root, path)
             if found is not None:
                 return FileResponse(found)
+        if not index.is_file():
+            # 启动时 `frontend_dir()` 判过它在 —— 走到这里说明产物**启动后被换掉**了
+            # （部署脚本正在覆盖目录）。照实回可读 503，别让 `FileResponse` 抛
+            # `RuntimeError` 变成 500：那是个与原因毫无关系的报错。
+            return _frontend_missing()
         return FileResponse(index)
 
 
