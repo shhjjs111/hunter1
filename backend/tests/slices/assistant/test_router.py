@@ -114,6 +114,23 @@ class MidStreamFailureLLM:
         raise LLMError("stream_error", "Insufficient Balance")
 
 
+class ConversationDeletingLLM(ScriptedLLM):
+    """在模型调用**期间**把会话删掉 —— 复现「存在性检查通过后、落库之前」的真实竞态。
+
+    两次 `store.get` 之间隔着整段模型调用，这是该窗口唯一可达的构造方式：端点的存在性
+    检查用的是模型调用**之前**读到的那一份。
+    """
+
+    def __init__(self, *, store: ConversationStore, conversation_id: str) -> None:
+        super().__init__(deltas=("好的",))
+        self._store = store
+        self._conversation_id = conversation_id
+
+    def complete_with_tools(self, *, messages: list[Message], **kwargs: Any) -> LLMResponse:
+        self._store.delete(self._conversation_id)
+        return super().complete_with_tools(messages=messages, **kwargs)
+
+
 @pytest.fixture()
 def db(tmp_path: Path) -> Database:
     database = Database(tmp_path / "assistant.db")
@@ -555,6 +572,34 @@ class TestUnknownConversationOnWritePaths:
             )
             assert second.status_code == 200
             assert second.json()["conversation_id"] == conversation_id
+
+    def test_turn_conversation_deleted_during_the_model_call_is_404_not_500(
+        self, db: Database
+    ) -> None:
+        """存在性检查之后、落库之前会话被删 → 按「会话不存在」如实 404，不是 500。
+
+        窗口 = 整段模型调用。原先 `_persist` 挂在 try **之外**，它抛的 `KeyError` 无人
+        接住 → 500 —— 而 500 的语义是「实现坏了」，这却只是一次正常的并发删除。该轮的
+        用户消息与模型回复同样不落库（本来就写不进一个已不存在的会话）。
+        """
+        store = ConversationStore(db)
+        conversation_id = ""
+        for client in _client(db, ScriptedLLM()):
+            conversation_id = client.post("/api/assistant/turn", json={"message": "第一句"}).json()[
+                "conversation_id"
+            ]
+        assert conversation_id and db.conversations().list() != []
+
+        deleting = ConversationDeletingLLM(store=store, conversation_id=conversation_id)
+        for client in _client(db, deleting):
+            response = client.post(
+                "/api/assistant/turn",
+                json={"message": "第二句", "conversation_id": conversation_id},
+            )
+            assert response.status_code == 404
+            assert "会话不存在" in response.json()["detail"]
+        # 已经删掉的会话不会被这一轮「复活」成一条只有问没有答的记录
+        assert db.conversations().list() == []
 
 
 class TestLengthTruncatedAnswerIsAnnounced:

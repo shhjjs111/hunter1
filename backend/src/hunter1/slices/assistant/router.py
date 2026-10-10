@@ -23,8 +23,9 @@ SSE 的两条硬约定（沿用旧界面的实现教训）：
 （原先 /turn 用 502 表示上游失败、且用 `except Exception` 一把兜住 —— 同一个上游
 故障在两处给两种码，实现 bug 还会被伪装成「上游故障」。）
 
-**上表对两个端点的覆盖范围不同**：`/turn` 的 try/except 罩住「取配置 → 跑一轮 →
-落库」全段，所以是完整的；`/stream` 只能罩住**开流之前**那一小段（空消息 422、
+**上表对两个端点的覆盖范围不同**：`/turn` 的 try/except 罩住「取配置 → 跑一轮」，
+落库那一步另有一个**只认「会话已被删」**的兜底（`KeyError` → 404，见 `turn` 里的
+注释），两段加起来才是全路径；`/stream` 只能罩住**开流之前**那一小段（空消息 422、
 未知会话 404、工厂抛错 409）—— 流一旦开始状态码就已经定死，之后任何失败都只能作为
 一条 SSE `error` 事件交给前端。两个端点**刻意给同一组码**，前端不必为同一件事写
 两套判断。
@@ -255,13 +256,24 @@ def build_router(
             if llm is not None:
                 llm.close()
 
-        conversation_id = _persist(
-            store,
-            conversation_id=body.conversation_id,
-            title=text,
-            user_message=user_message,
-            reply=result.reply,
-        )
+        try:
+            conversation_id = _persist(
+                store,
+                conversation_id=body.conversation_id,
+                title=text,
+                user_message=user_message,
+                reply=result.reply,
+            )
+        except KeyError as exc:
+            # 「存在性检查通过 → 落库」之间会话被删（窗口 = 整段模型调用）。落库必须在
+            # try **里面**：`_persist` 与仓储的 `append_many` 对未知会话都抛 `KeyError`
+            # （见 platform/db/conversations.py），裸穿出去就是 500 —— 而 500 的意思是
+            # 「实现坏了」，这却只是一次正常的并发删除。按与读端点、以及上面那句存在性
+            # 检查**同一语义**给 404：该轮本来也写不进一个已不存在的会话，用户消息与
+            # 模型回复一起不落库（与「整轮跑完才落库」的承诺一致）。
+            raise HTTPException(
+                status_code=404, detail=f"会话不存在：{body.conversation_id}"
+            ) from exc
         return TurnResponse(
             conversation_id=conversation_id,
             reply=_stored_reply(result.reply),
