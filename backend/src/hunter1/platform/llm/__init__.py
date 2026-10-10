@@ -12,10 +12,13 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from threading import Lock
 from typing import Any
 from urllib.parse import urlsplit
@@ -30,6 +33,41 @@ from hunter1.platform.text import redact_secret
 TRANSIENT_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 STRUCTURED_MODES = ("json_schema", "json_object", "none")
 
+#: 重试之间的等待上限（秒）。
+#:
+#: 厂商给的 `Retry-After` 也可能离谱（真见过 3600）。照单全收会把一个 HTTP 请求挂成
+#: 小时级，而端点后面还排着别的请求、用户正等着这次回答 —— 等 20 秒已经比「快速失败
+#: 让用户重试」更差，再长就只是把线程占死。
+MAX_RETRY_DELAY = 20.0
+
+#: 指数退避的基数（秒）：第 n 次失败后等 `base * 2**(n-1)`，再叠抖动。
+RETRY_BASE_DELAY = 0.5
+
+
+def _parse_retry_after(value: str | None, *, now: float | None = None) -> float | None:
+    """解析 `Retry-After` 头；看不懂就返回 None（调用方退回退避）。
+
+    RFC 7231 允许两种形态：**秒数**或 **HTTP 日期**。只认前者会让带日期的厂商白给
+    一个头（少，但确实有）；日期已过按 0 处理 —— 立刻重试正是它的字面意思。
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        moment = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if moment.tzinfo is None:
+        return None
+    return max(0.0, moment.timestamp() - (time.time() if now is None else now))
+
+
 # 「这个端点拒绝过哪些结构化格式」—— **进程级**记忆，按 (base_url, model) 键控。
 #
 # 为什么不能放在客户端实例上：客户端是**每请求新建**的（见 `main._runtime_llm`
@@ -43,21 +81,46 @@ STRUCTURED_MODES = ("json_schema", "json_object", "none")
 #
 # 线程安全：FastAPI 的同步端点跑在线程池里，可能并发。取用 setdefault 时加锁；
 # 之后的 in / add 是单个原子操作，CPython 下无需额外保护。
-_rejected_modes_by_endpoint: dict[tuple[str, str], set[str]] = {}
+#
+# 上限：键里含**用户可控**的 base_url，而每次改配置都会用新键调一次 `_shared_rejected_modes`。
+# 不设上限就是只增不减（长期跑的进程里越攒越多）。这份记忆是**优化**不是正确性 ——
+# 丢掉一条只是下次多打一个注定失败的请求（与上面「宁可漏记」同一个取舍），所以
+# 按 LRU 淘汰是安全的；反过来误留一条才是永久性的，所以淘汰只看「多久没用」。
+MAX_REJECTION_KEYS = 64
+
+_rejected_modes_by_endpoint: OrderedDict[tuple[str, str], set[str]] = OrderedDict()
 _rejected_modes_lock = Lock()
 
 
 def _shared_rejected_modes(base_url: str, model: str) -> set[str]:
-    """取该端点的共享拒绝记忆（跨客户端实例存活）。"""
+    """取该端点的共享拒绝记忆（跨客户端实例存活），并把它标成「最近用过」。"""
     key = (base_url, model)
     with _rejected_modes_lock:
-        return _rejected_modes_by_endpoint.setdefault(key, set())
+        modes = _rejected_modes_by_endpoint.get(key)
+        if modes is not None:
+            _rejected_modes_by_endpoint.move_to_end(key)
+            return modes
+        modes = set()
+        _rejected_modes_by_endpoint[key] = modes
+        while len(_rejected_modes_by_endpoint) > MAX_REJECTION_KEYS:
+            _rejected_modes_by_endpoint.popitem(last=False)
+        return modes
 
 
 def clear_rejected_modes() -> None:
     """清空记忆。给测试隔离用 —— 生产代码没有调用它的理由。"""
     with _rejected_modes_lock:
         _rejected_modes_by_endpoint.clear()
+
+
+def rejected_mode_endpoints() -> tuple[tuple[str, str], ...]:
+    """当前记着的端点键，**旧 → 新**。
+
+    给测试用（断言上限与淘汰顺序）；排查时也用得上 —— 「这个端点为什么不再试结构化
+    输出」的答案就在这份记忆里，而它此前没有任何读取口。
+    """
+    with _rejected_modes_lock:
+        return tuple(_rejected_modes_by_endpoint)
 
 
 # 「这个 400 是在说格式不支持吗」的特征词。只认**明确指向格式参数**的措辞，
@@ -120,6 +183,7 @@ class OpenAICompatibleClient:
         max_retries: int = 2,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        random_fn: Callable[[], float] = random.random,
     ) -> None:
         cleaned_url = (base_url or "").strip().rstrip("/")
         if not cleaned_url:
@@ -145,6 +209,7 @@ class OpenAICompatibleClient:
         self.timeout = max(1.0, float(timeout))
         self.max_retries = max(1, int(max_retries))
         self._sleep = sleep
+        self._random = random_fn
         self._client = httpx.Client(timeout=self.timeout, transport=transport)
         # 记住哪些模式被厂商拒绝过，避免每次都重试一遍。
         # **跨实例共享**（按端点键控）—— 客户端每请求新建，实例级记忆等于没有。
@@ -442,6 +507,26 @@ class OpenAICompatibleClient:
         """把厂商回显在错误体里的 API Key 抹掉（见 `platform.text.redact_secret`）。"""
         return redact_secret(text, self.api_key)
 
+    def _retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
+        """这次失败之后等多久再试。三件事，按优先级：
+
+        1. **听 `Retry-After`**。厂商明确说了「X 秒后再来」，自己按节奏重试只会继续
+           吃 429（还可能被判成滥用）。有头就照办 —— 只做上限裁剪，不加抖动：
+           那个数字是它给的承诺，不是我们的估计。
+        2. **指数退避**（没给头时）。上游过载时线性增长等于持续加压（0.5/1.0/1.5s
+           对「正在恢复」的服务几乎等于不停敲）；指数才有实质让路。
+        3. **抖动**。多个客户端/线程同时失败会齐步重试，形成周期性脉冲把刚恢复的
+           服务再打下去。用「等抖动」（一半固定 + 一半随机）而不是全抖动：前者保证
+           至少等到标称值的一半，不会退化成立刻重试。
+        """
+        if response is not None:
+            hinted = _parse_retry_after(response.headers.get("Retry-After"))
+            if hinted is not None:
+                return min(hinted, MAX_RETRY_DELAY)
+        ceiling = min(RETRY_BASE_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+        half = ceiling / 2
+        return half + half * self._random()
+
     def _post(self, payload: dict[str, Any], *, reject_mode: str | None = None) -> dict[str, Any]:
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -463,14 +548,14 @@ class OpenAICompatibleClient:
                 code = "transport_failed"
                 if attempt >= self.max_retries:
                     raise LLMError(code) from None
-                self._sleep(0.5 * attempt)
+                self._sleep(self._retry_delay(attempt, None))
                 continue
 
             if response.status_code in TRANSIENT_STATUS:
                 code = f"http_{response.status_code}"
                 if attempt >= self.max_retries:
                     raise LLMError(code)
-                self._sleep(0.5 * attempt)
+                self._sleep(self._retry_delay(attempt, response))
                 continue
 
             if response.status_code >= 400:

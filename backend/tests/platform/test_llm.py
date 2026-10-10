@@ -10,6 +10,8 @@ TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应�
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from email.utils import format_datetime
 from typing import ClassVar
 
 import httpx
@@ -17,10 +19,15 @@ import pytest
 
 from hunter1.domain.assistant import Message, Role
 from hunter1.platform.llm import (
+    MAX_REJECTION_KEYS,
+    MAX_RETRY_DELAY,
     PROVIDER_PRESETS,
     LLMError,
     OpenAICompatibleClient,
+    _parse_retry_after,
+    _shared_rejected_modes,
     clear_rejected_modes,
+    rejected_mode_endpoints,
     resolve_preset,
 )
 
@@ -160,6 +167,161 @@ class TestResponseParsing:
         result = _client(handler).complete(system_prompt="s", user_prompt="u")
         assert result.input_tokens is None
         assert result.output_tokens is None
+
+
+class TestRetryTiming:
+    """重试的**等待**本身是行为的一部分：听厂商的、不同步敲、不把线程挂死。"""
+
+    def test_retry_after_header_is_honored(self) -> None:
+        """厂商给了 Retry-After 就照办 —— 否则继续吃 429。"""
+        slept: list[float] = []
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "3"})
+            return _ok_response("好了")
+
+        result = _client(handler, max_retries=2, sleep=slept.append).complete(
+            system_prompt="s", user_prompt="u"
+        )
+
+        assert result.content == "好了"
+        assert slept == [3.0]
+
+    def test_absurd_retry_after_is_capped(self) -> None:
+        """`Retry-After: 3600` 不许把一个 HTTP 请求挂成小时级。"""
+        slept: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, headers={"Retry-After": "3600"})
+
+        with pytest.raises(LLMError) as excinfo:
+            _client(handler, max_retries=2, sleep=slept.append).complete(
+                system_prompt="s", user_prompt="u"
+            )
+
+        assert excinfo.value.code == "http_503"
+        assert slept == [MAX_RETRY_DELAY]
+
+    def test_backoff_is_exponential_and_jittered(self) -> None:
+        """没有 Retry-After 时按**指数**退避，并且每一档都带抖动。
+
+        抖动取满（`random_fn` 恒 1.0）时的标称值：0.5 / 1.0 / 2.0。线性退避会得到
+        0.5 / 1.0 / 1.5 —— 对正在恢复的上游几乎等于不停敲。
+        """
+        slept: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503)
+
+        with pytest.raises(LLMError):
+            _client(handler, max_retries=4, sleep=slept.append, random_fn=lambda: 1.0).complete(
+                system_prompt="s", user_prompt="u"
+            )
+
+        assert slept == [0.5, 1.0, 2.0]
+
+    def test_jitter_never_collapses_to_immediate_retry(self) -> None:
+        """抖动取 0 时仍要等标称值的一半 —— 全抖动会退化成立刻重试。"""
+        slept: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503)
+
+        with pytest.raises(LLMError):
+            _client(handler, max_retries=4, sleep=slept.append, random_fn=lambda: 0.0).complete(
+                system_prompt="s", user_prompt="u"
+            )
+
+        assert slept == [0.25, 0.5, 1.0]
+
+    def test_unparseable_retry_after_falls_back_to_backoff(self) -> None:
+        """看不懂的头不能变成「不等待」—— 退回退避。"""
+        slept: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, headers={"Retry-After": "soon"})
+
+        with pytest.raises(LLMError):
+            _client(handler, max_retries=2, sleep=slept.append, random_fn=lambda: 1.0).complete(
+                system_prompt="s", user_prompt="u"
+            )
+
+        assert slept == [0.5]
+
+    def test_transport_failure_also_backs_off(self) -> None:
+        """连接失败没有响应头可读 —— 走退避，而不是崩在 None 上。"""
+        slept: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("no route")
+
+        with pytest.raises(LLMError):
+            _client(handler, max_retries=3, sleep=slept.append, random_fn=lambda: 1.0).complete(
+                system_prompt="s", user_prompt="u"
+            )
+
+        assert slept == [0.5, 1.0]
+
+
+class TestRetryAfterParsing:
+    """`Retry-After` 的两种合法形态都要认（RFC 7231）。"""
+
+    def test_seconds_form(self) -> None:
+        assert _parse_retry_after("2") == 2.0
+        assert _parse_retry_after(" 7 ") == 7.0
+
+    def test_http_date_form(self) -> None:
+        moment = datetime(2026, 10, 10, 12, 0, 30, tzinfo=UTC)
+        stamp = format_datetime(moment, usegmt=True)
+
+        assert _parse_retry_after(stamp, now=moment.timestamp() - 10) == pytest.approx(10.0)
+        # 已经过去的日期 = 「现在就可以重试」，不是负数
+        assert _parse_retry_after(stamp, now=moment.timestamp() + 5) == 0.0
+
+    def test_garbage_and_absence_are_none(self) -> None:
+        assert _parse_retry_after(None) is None
+        assert _parse_retry_after("") is None
+        assert _parse_retry_after("soon") is None
+
+
+class TestRejectionMemoryBound:
+    """这份记忆此前只增不减（键里含用户可控的 base_url）。"""
+
+    def _touch(self, index: int) -> None:
+        _shared_rejected_modes(f"https://api{index}.example.com/v1", "m")
+
+    def test_endpoints_are_capped(self) -> None:
+        clear_rejected_modes()
+        for index in range(MAX_REJECTION_KEYS + 10):
+            self._touch(index)
+
+        assert len(rejected_mode_endpoints()) == MAX_REJECTION_KEYS
+
+    def test_oldest_endpoint_is_evicted_first(self) -> None:
+        clear_rejected_modes()
+        for index in range(MAX_REJECTION_KEYS):
+            self._touch(index)
+        first = rejected_mode_endpoints()[0]
+
+        # 再碰一次最老的那个（模拟用户切回旧配置），它就不该被淘汰
+        _shared_rejected_modes(first[0], "m")
+        _shared_rejected_modes("https://brand-new.example.com/v1", "m")
+
+        live = rejected_mode_endpoints()
+        assert first in live, "刚碰过的端点被淘汰了"
+        assert len(live) == MAX_REJECTION_KEYS
+        assert "https://api1.example.com/v1" not in {key[0] for key in live}
+
+    def test_same_endpoint_does_not_grow_the_memory(self) -> None:
+        """同一端点反复取用不该反复新增 —— 否则客户端每请求新建就会撑爆上限。"""
+        clear_rejected_modes()
+        for _ in range(MAX_REJECTION_KEYS * 3):
+            self._touch(0)
+
+        assert len(rejected_mode_endpoints()) == 1
 
 
 class TestErrorsAndRetry:
