@@ -36,8 +36,10 @@ if [[ -z "$OWNER_REPO" ]]; then
   exit 2
 fi
 
-if [[ ! "$OWNER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
-  echo "owner/repo 格式不对：$OWNER_REPO（应为 owner/repo，用正斜杠）" >&2
+# owner / repo 的字符白名单：每段必须以**字母数字开头**（[A-Za-z0-9][A-Za-z0-9._-]*）
+# —— 这条顺带挡掉 `.` / `..`（`..` 以点开头、直接不匹配），避免拼出可疑的 URL/路径。
+if [[ ! "$OWNER_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "owner/repo 格式不对：$OWNER_REPO（应为 owner/repo，用正斜杠；每段以字母数字开头）" >&2
   exit 2
 fi
 
