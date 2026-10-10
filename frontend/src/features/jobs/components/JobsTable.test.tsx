@@ -75,4 +75,20 @@ describe("JobsTable", () => {
       expect(target?.textContent).toContain("AI产品经理");
     }
   });
+
+  it("http/https 的详情链接正常渲染为可点链接", () => {
+    render(<JobsTable jobs={[{ ...JOB, detail_url: "http://example.com/2" }]} onApply={() => {}} onScore={() => {}} />);
+    const link = screen.getByRole("link", { name: "AI产品经理" });
+    expect(link.getAttribute("href")).toBe("http://example.com/2");
+  });
+
+  it("协议不是 http(s) 时不当链接渲染（防外部 detail_url 注入 javascript: 等）", () => {
+    // detail_url 来自外部站点的抓取结果，是不可信输入。直接塞进 href 等于把外部
+    // 内容当链接渲染；非 http(s) 一律退化为纯文本，岗位名照常显示。
+    render(
+      <JobsTable jobs={[{ ...JOB, detail_url: "javascript:alert(1)" }]} onApply={() => {}} onScore={() => {}} />,
+    );
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText("AI产品经理")).toBeTruthy();
+  });
 });

@@ -7,6 +7,35 @@ import type { JobSummary } from "../api";
  * 空态与行内按钮都走 `shared/ui` 的原语：这两个位置原先各手写了一份边框与
  * 悬停样式，改视觉时得记得两处（而且容易只改一处）。
  */
+/**
+ * 只放行 http/https 的详情链接。
+ *
+ * `detail_url` 来自外部站点的抓取结果，是不可信输入 —— 直接塞进 `href` 等于把
+ * 外部内容当链接渲染：`javascript:`（React 会拦，但依赖库版本）、`data:`、
+ * `file:` 之类都不该成为可点链接。取不出 http(s) 时返回 null，调用方退回纯文本。
+ */
+function safeHref(raw: string): string | null {
+  try {
+    const url = new URL(raw, window.location.origin);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 岗位名 + 详情链接：协议不是 http(s) 时退化成纯文本（见 safeHref）。 */
+function JobTitleLink({ title, url }: { title: string; url: string }) {
+  const href = safeHref(url);
+  if (href === null) {
+    return <span>{title}</span>;
+  }
+  return (
+    <a className="text-blue-700 hover:underline" href={href} target="_blank" rel="noreferrer">
+      {title}
+    </a>
+  );
+}
+
 export function JobsTable({
   jobs,
   loading = false,
@@ -54,14 +83,7 @@ export function JobsTable({
                   `aria-describedby` 补上 —— 屏幕阅读器会念「评分，AI产品经理 字节跳动」，
                   视觉用户靠行位置区分，两边都不吃亏。 */}
               <td className="py-2 pr-4" id={`job-${job.id}-label`}>
-                <a
-                  className="text-blue-700 hover:underline"
-                  href={job.detail_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {job.title}
-                </a>
+                <JobTitleLink title={job.title} url={job.detail_url} />
               </td>
               <td className="py-2 pr-4">{job.company}</td>
               <td className="py-2 pr-4">{job.city ?? "—"}</td>
