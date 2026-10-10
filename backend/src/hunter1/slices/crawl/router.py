@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from hunter1.slices.crawl.runner import CrawlRunner
 from hunter1.slices.crawl.schemas import CrawlStatusResponse, StartCrawlResponse
@@ -24,8 +24,18 @@ def build_router(*, runner: CrawlRunner) -> APIRouter:
 
     @router.post("/crawl", response_model=StartCrawlResponse, summary="启动一轮抓取")
     def start_crawl() -> StartCrawlResponse:
-        # 已有任务在跑时 start() 返回 False —— 不抛错，让调用方按 started 分支处理
-        return StartCrawlResponse(started=runner.start())
+        # 已在跑时 `start()` 返回 False —— 那不是错误，调用方按 `started` 分支处理。
+        #
+        # 唯一会让它抛错的是「线程起不来」（`RuntimeError: can't start new thread`，
+        # 线程/句柄耗尽）。那**不是**请求的问题，而是**服务器资源**问题，所以给 503 +
+        # 可读原因，而不是裸 500 —— 500 会让人拿着「实现 bug」的线索去查代码与端口契约。
+        # 刻意只捕 `RuntimeError`：抛别的说明实现坏了，那该响亮地 500
+        # （与 assistant `/turn` 对 LLMError 的取舍同源）。
+        try:
+            started = runner.start()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=f"抓取线程启动失败：{exc}") from exc
+        return StartCrawlResponse(started=started)
 
     @router.get("/crawl/status", response_model=CrawlStatusResponse, summary="抓取进度快照")
     def crawl_status() -> CrawlStatusResponse:

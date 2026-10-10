@@ -81,7 +81,11 @@ class CrawlRunner:
     # ---- 对外 ----
 
     def start(self) -> bool:
-        """非阻塞启动一轮；已有任务在跑则返回 False。"""
+        """非阻塞启动一轮；已有任务在跑返回 False，线程起不来则抛 `RuntimeError`。
+
+        抛错前会把 `running` 回滚成 False —— 否则进度页会永远停在「正在抓取」。
+        调用方（HTTP 面）负责把它映射成可读的失败，见 `slices/crawl/router.py`。
+        """
         with self._lock:
             if self._state.running:
                 return False

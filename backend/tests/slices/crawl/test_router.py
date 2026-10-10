@@ -66,6 +66,51 @@ class TestStartEndpoint:
         assert response.status_code == 200
         assert response.json() == {"started": True}
 
+    def test_unstartable_thread_fails_loudly_with_503(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """线程起不来时给 503 + 可读原因，而不是裸 500。
+
+        `runner.start()` 会因线程/句柄耗尽抛 `RuntimeError`（见 runner 的用例）。那**不是**
+        请求的问题，而是**服务器资源**问题：500 会让人拿着「实现 bug」的线索去查代码与
+        端口契约，而真正的原因在服务器侧。
+
+        契约形状不变 —— `StartCrawlResponse` 只表达「已启动 / 已在跑」，启动**失败**由
+        状态码表达；同时钉住「状态必须回滚」，否则进度页永远停在「正在抓取」。
+
+        （用 `db` fixture 而不是 `TemporaryDirectory`：Windows 下临时目录清理时
+        SQLite 还占着文件句柄，`rmtree` 会抛 WinError 32 —— 与断言无关的噪音。）
+        """
+        import types
+
+        import hunter1.slices.crawl.runner as runner_module
+
+        class UnstartableThread:
+            """替身：构造得出来，`start()` 必炸（真实场景是线程/句柄耗尽）。"""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            def start(self) -> None:
+                raise RuntimeError("can't start new thread")
+
+        runner = CrawlRunner(
+            crawler_factory=lambda: [FakeCrawler("甲")], jobs=db.jobs(), clock=lambda: NOW
+        )
+        app = FastAPI()
+        app.include_router(build_router(runner=runner), prefix="/api")
+
+        monkeypatch.setattr(
+            runner_module, "threading", types.SimpleNamespace(Thread=UnstartableThread)
+        )
+        with TestClient(app) as test_client:
+            response = test_client.post("/api/crawl")
+
+            assert response.status_code == 503
+            assert "线程启动失败" in response.json()["detail"]
+            status = test_client.get("/api/crawl/status").json()
+            assert status["running"] is False, "线程没起来却留着 running=True"
+
     def test_second_start_is_refused_without_error(self) -> None:
         """已在跑时返回 started=false —— 不抛错，让调用方按标志分支。
 
