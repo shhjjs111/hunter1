@@ -66,6 +66,25 @@ describe("api 客户端错误漏斗", () => {
     expect(data?.configured).toBe(false);
   });
 
+  it("Content-Type 大小写不敏感：`application/JSON` 也是 JSON，不该被误判成非 JSON", async () => {
+    // 回归护栏：原先按字面量 `contentType.includes("json")` 判类型 —— `application/JSON`
+    // 不含小写 "json"，于是一个**正常**的 JSON 响应被漏斗改判成 502「非 JSON 响应」。
+    // 媒体类型的大小写不保证（代理/框架可能回 `Application/JSON`）。
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ base_url: null, model: null, masked_key: "", configured: false }), {
+          status: 200,
+          headers: { "Content-Type": "Application/JSON; charset=UTF-8" },
+        }),
+    );
+
+    const { data, error, response } = await api.GET("/api/settings");
+
+    expect(response.status).toBe(200);
+    expect(error).toBeUndefined();
+    expect(data?.configured).toBe(false);
+  });
+
   it("204（DELETE 投递）不被当成非 JSON 响应", async () => {
     // 204 没有正文。带 `Content-Type` 的 204 在真实服务器上并不罕见 —— 只看类型
     // 就会把一个成功的删除改判成「非 JSON 响应」错误，所以 204/304 要显式放过。

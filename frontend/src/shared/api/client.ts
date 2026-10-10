@@ -71,7 +71,11 @@ export const errorFunnel: Middleware = {
       return undefined;
     }
     const contentType = response.headers.get("Content-Type");
-    if (!contentType || contentType.includes("json")) {
+    // 类型判断**大小写不敏感**：HTTP 类型记号（`application/JSON`、`Text/HTML`）
+    // 大小写不必然是小写。按字面量 `includes("json")` 比会把 `application/JSON`
+    // 误判成「非 JSON」，于是把一个**正常**的响应错误地改成 502（用户看到
+    // 「后端返回了非 JSON 响应」，而后端其实答得好好的）。按规范归一化再比。
+    if (!contentType || contentType.toLowerCase().includes("json")) {
       return undefined;
     }
     return jsonErrorResponse(
