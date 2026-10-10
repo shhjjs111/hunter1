@@ -596,8 +596,30 @@
         "type": "object"
       },
       "ScoreView": {
-        "description": "`POST /api/scoring/{job_id}` 的响应。",
+        "description": "`POST` / `GET /api/scoring/{job_id}` 的响应。\n\n模型算出来的三段结论文本全在这里，**并且已落库**（见 `store.save_score`）——\n原先 `advantages` / `gaps` 连响应都没进，`summary` 也只是闪一下：刷新页面即无据\n可查，而模型已经为此花过钱。",
         "properties": {
+          "advantages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advantages"
+          },
+          "gaps": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gaps"
+          },
           "job_id": {
             "title": "Job Id",
             "type": "string"
@@ -627,6 +649,18 @@
           "score": {
             "title": "Score",
             "type": "integer"
+          },
+          "scored_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scored At"
           },
           "summary": {
             "anyOf": [
@@ -1457,6 +1491,44 @@
       }
     },
     "/api/scoring/{job_id}": {
+      "get": {
+        "description": "把上一次评分的结果读回来。\n\n为什么要有这条：模型算出来的优势 / 差距 / 摘要原先只在 POST 的响应里闪一下\n就没了，刷新页面即无据可查 —— 写下来的东西必须有读回去的路，否则「落库」\n只是自欺。响应形状与 POST 相同，前端两处共用一套渲染。",
+        "operationId": "read_score_api_scoring__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoreView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "读已存下的评分（未评过为 404）"
+      },
       "post": {
         "operationId": "score_api_scoring__job_id__post",
         "parameters": [

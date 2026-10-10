@@ -25,7 +25,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `router.py` | HTTP 端点（`POST /api/scoring/{job_id}`） |
+| `router.py` | HTTP 端点（`POST` / `GET /api/scoring/{job_id}`） |
 | `service.py` | 评分用例（`score_job`） |
 | `prompts.py` | **提示词与口径**（与代码共置；改它 = 改这一版评分行为） |
 | `models.py` | 切片自有领域模型（画像 / 评分卡 / 失败类型） |
@@ -37,7 +37,18 @@
 |---|---|---|
 | GET | `/api/scoring/profile` | 读候选人画像（**未配置时为 `null`**，不是 404 —— 未配置是初始状态） |
 | PUT | `/api/scoring/profile` | 保存画像；不合法 → 422（见下「画像上限」） |
-| POST | `/api/scoring/{job_id}` | 评分并写回；**409 画像未配置或不可用**、404 岗位不存在、422 模型失败 |
+| POST | `/api/scoring/{job_id}` | 评分并写回；**409 画像未配置/不可用，或模型未配置**、404 岗位不存在、422 模型失败 |
+| GET | `/api/scoring/{job_id}` | 读已存下的评分（形状与 POST 相同）；岗位不存在 → 404，**还没评过 → 404 + 可读原因** |
+
+**评分的结论文本会落库。** `score` / `summary` / `advantages` / `gaps` 与溯源
+（`score_model` / `score_prompt_version` / `scored_at`）同一次写入岗位行。原先
+`advantages` / `gaps` 连响应都没进、`summary` 也只是闪一下 —— 刷新页面即无据可查，
+而模型已经为此花过钱。所以「写下来的东西要有读回去的路」：`GET` 就是那条路。
+重评一次整组替换（不保留上一次的优势配上这一次的分，那看起来像模型自相矛盾）。
+文本按 `store.MAX_SCORE_TEXT_CHARS` 截断，截断时在 stderr 留痕。
+
+**409 有两种来源**（画像未配置/不可用、模型未配置）共用同一个码是刻意的：界面上的
+动作是同一个（去「配置」页补齐），`detail` 足以分辨。
 
 端点**始终挂载**：画像未配置不是「端点不存在」，而是「端点存在但状态未就绪」
 （409 + 修复指引）。若改成「没配就不挂载」，前端照契约发出的 POST 会落进 SPA

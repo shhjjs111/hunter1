@@ -16,9 +16,12 @@
 
 | 状态 | 含义 |
 |---|---|
-| 409 | 画像未配置 —— 请求没毛病，是服务端状态未就绪，`detail` 给出修复指引 |
-| 404 | 岗位不存在 |
+| 409 | 服务端状态未就绪：画像未配置/不可用，或模型未配置（`detail` 给修复指引） |
+| 404 | 岗位不存在（`GET` 的另一层含义：该岗位还没有评过分） |
 | 422 | 请求体不合法（画像为空）或模型侧失败（依赖给不出可用结果） |
+
+409 的两种来源共用一个码是**刻意**的：界面上的动作是同一个（去「配置」页补齐），
+而 `detail` 已经能分辨。新增第三种来源时同样要更新这张表。
 
 注意 422 不吞非契约异常：`LLMProvider` 实现约定失败抛 `LLMError`；抛别的说明是
 实现 bug，应当响亮地失败（500），而不是伪装成「模型不可用」（见测试
@@ -139,13 +142,17 @@ def build_router(
             # 客户端是每请求新建的 —— 用完即释放，别把连接池攒在进程里
             llm.close()
 
+        scored_at = now()
         if (
             store.save_score(
                 job_id,
                 card.score,
                 model=card.model,
                 prompt_version=card.prompt_version,
-                scored_at=now(),
+                scored_at=scored_at,
+                summary=card.summary,
+                advantages=card.advantages,
+                gaps=card.gaps,
             )
             is None
         ):
@@ -157,8 +164,38 @@ def build_router(
             job_id=job_id,
             score=card.score,
             summary=card.summary,
+            advantages=card.advantages,
+            gaps=card.gaps,
             model=card.model,
             prompt_version=card.prompt_version,
+            scored_at=scored_at,
+        )
+
+    @router.get("/scoring/{job_id}", summary="读已存下的评分（未评过为 404）")
+    def read_score(job_id: str) -> ScoreView:
+        """把上一次评分的结果读回来。
+
+        为什么要有这条：模型算出来的优势 / 差距 / 摘要原先只在 POST 的响应里闪一下
+        就没了，刷新页面即无据可查 —— 写下来的东西必须有读回去的路，否则「落库」
+        只是自欺。响应形状与 POST 相同，前端两处共用一套渲染。
+        """
+        job = store.load(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"岗位不存在：{job_id}")
+        if job.match_score is None:
+            # 「还没评过」用 404 + 可读原因，而不是返回 null：本端点的语义是
+            # 「读一份已存在的评分」，没有就是不满足前置条件。与 `GET /scoring/profile`
+            # 的取舍刻意不同 —— 那边的 `null` 是**正常初始态**（界面据此渲染空表单）。
+            raise HTTPException(status_code=404, detail=f"该岗位还没有评过分：{job_id}")
+        return ScoreView(
+            job_id=job.id,
+            score=job.match_score,
+            summary=job.score_summary,
+            advantages=job.score_advantages,
+            gaps=job.score_gaps,
+            model=job.score_model,
+            prompt_version=job.score_prompt_version,
+            scored_at=job.scored_at,
         )
 
     return router

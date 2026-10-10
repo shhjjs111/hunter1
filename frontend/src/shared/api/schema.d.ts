@@ -224,7 +224,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * 读已存下的评分（未评过为 404）
+         * @description 把上一次评分的结果读回来。
+         *
+         *     为什么要有这条：模型算出来的优势 / 差距 / 摘要原先只在 POST 的响应里闪一下
+         *     就没了，刷新页面即无据可查 —— 写下来的东西必须有读回去的路，否则「落库」
+         *     只是自欺。响应形状与 POST 相同，前端两处共用一套渲染。
+         */
+        get: operations["read_score_api_scoring__job_id__get"];
         put?: never;
         /** 给一个岗位评分并写回 */
         post: operations["score_api_scoring__job_id__post"];
@@ -549,9 +557,17 @@ export interface components {
         };
         /**
          * ScoreView
-         * @description `POST /api/scoring/{job_id}` 的响应。
+         * @description `POST` / `GET /api/scoring/{job_id}` 的响应。
+         *
+         *     模型算出来的三段结论文本全在这里，**并且已落库**（见 `store.save_score`）——
+         *     原先 `advantages` / `gaps` 连响应都没进，`summary` 也只是闪一下：刷新页面即无据
+         *     可查，而模型已经为此花过钱。
          */
         ScoreView: {
+            /** Advantages */
+            advantages?: string | null;
+            /** Gaps */
+            gaps?: string | null;
             /** Job Id */
             job_id: string;
             /** Model */
@@ -560,6 +576,8 @@ export interface components {
             prompt_version?: string | null;
             /** Score */
             score: number;
+            /** Scored At */
+            scored_at?: string | null;
             /** Summary */
             summary?: string | null;
         };
@@ -1117,6 +1135,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProfileView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_score_api_scoring__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreView"];
                 };
             };
             /** @description Validation Error */

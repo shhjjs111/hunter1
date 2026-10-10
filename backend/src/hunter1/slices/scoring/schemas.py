@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from hunter1.slices.scoring.models import CandidateProfile
@@ -55,13 +57,21 @@ class ProfileView(BaseModel):
 
 
 class ScoreView(BaseModel):
-    """`POST /api/scoring/{job_id}` 的响应。"""
+    """`POST` / `GET /api/scoring/{job_id}` 的响应。
+
+    模型算出来的三段结论文本全在这里，**并且已落库**（见 `store.save_score`）——
+    原先 `advantages` / `gaps` 连响应都没进，`summary` 也只是闪一下：刷新页面即无据
+    可查，而模型已经为此花过钱。
+    """
 
     job_id: str
     score: int
     summary: str | None = None
+    advantages: str | None = None
+    gaps: str | None = None
     model: str | None = None
     prompt_version: str | None = None
+    scored_at: datetime | None = None
 
 
 __all__ = ["ProfileForm", "ProfileView", "ScoreView"]

@@ -116,6 +116,46 @@ class TestScoreEndpoint:
         assert row.score_prompt_version == PROMPT_VERSION
         assert row.scored_at is not None, "还缺打分时间 —— 回溯需要它"
 
+    def test_conclusion_texts_are_persisted_and_readable_back(self, db: Database) -> None:
+        """优势 / 差距 / 摘要要落库，并且**读得回来**。
+
+        与上面那条同因：原先 `summary` 只在响应里闪一下、`advantages` / `gaps` 连响应
+        都没进 —— 模型算出来的东西刷新页面即无据可查。落库之外还得有读回去的路
+        （`GET`），否则「落库」只是自欺。
+        """
+        payload = {
+            "score": 77,
+            "advantages": "有 LLM 落地经验",
+            "gaps": "缺大规模团队经验",
+            "summary": "总体匹配",
+        }
+        for client in _client(db, FakeLLM(payload)):
+            response = client.post(f"/api/scoring/{JOB_ID}")
+            assert response.status_code == 200
+            body = response.json()
+            assert body["advantages"] == "有 LLM 落地经验"
+            assert body["gaps"] == "缺大规模团队经验"
+            assert body["summary"] == "总体匹配"
+
+            stored = client.get(f"/api/scoring/{JOB_ID}")
+            assert stored.status_code == 200
+            assert stored.json() == body, "POST 与 GET 必须给同一份结论（前端共用一套渲染）"
+
+    def test_never_scored_job_is_404_on_read(self, db: Database) -> None:
+        """还没评过 → 404 + 可读原因。
+
+        不是返回 `null`：本端点的语义是「读一份**已存在**的评分」，没有就是不满足
+        前置条件。与 `GET /scoring/profile` 的取舍刻意不同 —— 那边 `null` 是正常初始态。
+        """
+        for client in _client(db, FakeLLM()):
+            response = client.get(f"/api/scoring/{JOB_ID}")
+            assert response.status_code == 404
+            assert "还没有评过" in response.json()["detail"]
+
+            missing = client.get("/api/scoring/ghost")
+            assert missing.status_code == 404
+            assert "岗位不存在" in missing.json()["detail"]
+
     def test_missing_job_is_404(self, db: Database) -> None:
         for client in _client(db, FakeLLM()):
             assert client.post("/api/scoring/zzzz").status_code == 404
