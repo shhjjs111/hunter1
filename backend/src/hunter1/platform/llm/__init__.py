@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
 import time
@@ -56,9 +57,15 @@ def _parse_retry_after(value: str | None, *, now: float | None = None) -> float 
     if not text:
         return None
     try:
-        return max(0.0, float(text))
+        seconds = float(text)
     except ValueError:
         pass
+    else:
+        # `nan` / `inf` 也要当成「看不懂」：`float('nan')` 解析成功，而
+        # `max(0.0, nan)` 在 Python 里回落到 0.0 —— 于是「有头就照办」的分支给出
+        # **立即重试**，既不退避也不抖动，正好与「看不懂就退回退避」相反。
+        # （`inf` 本身会被调用方的上限裁掉，但一起拒掉更一致，也让 NaN 无处漏。）
+        return seconds if math.isfinite(seconds) and seconds >= 0 else None
     try:
         moment = parsedate_to_datetime(text)
     except (TypeError, ValueError):

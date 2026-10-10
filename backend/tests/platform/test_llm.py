@@ -281,6 +281,17 @@ class TestRetryAfterParsing:
         # 已经过去的日期 = 「现在就可以重试」，不是负数
         assert _parse_retry_after(stamp, now=moment.timestamp() + 5) == 0.0
 
+    def test_non_finite_or_negative_is_not_a_delay(self) -> None:
+        """`nan` / `inf` / 负数都不是「厂商给的秒数」。
+
+        `float('nan')` 能解析成功，而 `max(0.0, nan)` 在 Python 里回落到 0.0 ——
+        于是「有头就照办」的分支给出**立即重试**，既不退避也不抖动，正好与
+        「看不懂就退回退避」相反。`inf` / 负数同理：一律当看不懂。
+        """
+        assert _parse_retry_after("nan") is None
+        assert _parse_retry_after("inf") is None
+        assert _parse_retry_after("-1") is None
+
     def test_garbage_and_absence_are_none(self) -> None:
         assert _parse_retry_after(None) is None
         assert _parse_retry_after("") is None
