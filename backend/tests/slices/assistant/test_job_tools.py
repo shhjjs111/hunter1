@@ -5,7 +5,7 @@ TDD：本文件先于实现编写（实现已随 M4c 一并落地，此处覆盖
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -13,7 +13,7 @@ import pytest
 from hunter1.domain.models import ApplicationStage, CaptureStatus, Job
 from hunter1.platform.db import Database
 from hunter1.slices.applications import change_stage, new_application
-from hunter1.slices.assistant.job_tools import SEARCH_LIMIT_MAX, build_tools
+from hunter1.slices.assistant.job_tools import SEARCH_LIMIT_MAX, _local_date, build_tools
 
 
 @pytest.fixture()
@@ -343,3 +343,23 @@ class TestToolSetShape:
         result = registry.invoke("ghost", {}, call_id="c1")
         assert not result.ok
         assert "search_jobs" in (result.error or "")
+
+
+class TestLocalDate:
+    """助手报给模型的日期必须是**本地**日期。
+
+    `updated_at` 存的是 UTC，而投递页按本地时区渲染（`ApplicationsPage.formatDate`
+    的注释里专门写了不能用 `iso.slice(0, 10)` —— 同一个坑）。不转换的话两边会在
+    UTC+8 的凌晨差一天，用户只会以为助手记错了。
+    """
+
+    def test_utc_evening_is_the_next_day_in_utc8(self) -> None:
+        """本地 10-06 01:00 = UTC 10-05 17:00 —— 不转换就会说成 10-05。"""
+        moment = datetime(2026, 10, 5, 17, 0, tzinfo=UTC)
+        assert _local_date(moment, timezone(timedelta(hours=8))) == "2026-10-06"
+        assert moment.strftime("%Y-%m-%d") == "2026-10-05", "这正是不转换时区的错法"
+
+    def test_same_zone_is_unchanged(self) -> None:
+        """本地就是 UTC 时不该动 —— 防「修时区」修成无条件加一天。"""
+        moment = datetime(2026, 10, 5, 17, 0, tzinfo=UTC)
+        assert _local_date(moment, UTC) == "2026-10-05"

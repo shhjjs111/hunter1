@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, tzinfo
+
 from hunter1.application.ports import ApplicationRepository, JobRepository
 from hunter1.platform.text import JD_FENCE_CLOSE, JD_FENCE_OPEN, fence_untrusted_jd
 from hunter1.slices.assistant.tools import Tool, ToolRegistry, tool
@@ -17,6 +19,19 @@ SEARCH_LIMIT_MAX = 50
 #: 回灌给模型的岗位描述上限（字符）。与评分切片的 `MAX_JD_CHARS` 同量级 ——
 #: JD 是抓来的外部文本，长度不受控，工具结果也不该被它撑爆。
 JD_PREVIEW_LIMIT = 1500
+
+
+def _local_date(moment: datetime, tz: tzinfo | None = None) -> str:
+    """按**本地时区**取日期（`tz` 只给测试用；生产传 None = 跟随系统本地时区）。
+
+    不能直接 `moment.strftime("%Y-%m-%d")`：`updated_at` 存的是 UTC。UTC+8 的凌晨
+    （本地 10-06 01:00 = UTC 10-05 17:00）会显示成**前一天** —— 助手说的日期与投递页
+    显示的日期对不上，而用户只会以为助手记错了。
+
+    同因，前端 `ApplicationsPage.formatDate` 也刻意不用 `iso.slice(0, 10)`。
+    """
+    return moment.astimezone(tz).strftime("%Y-%m-%d")
+
 
 # 阶段的中文名（给助手读的消息用）
 _STAGE_LABELS: dict[str, str] = {
@@ -138,7 +153,7 @@ def build_tools(
             lines = [f"共 {len(found)} 条投递："]
             for item in found:
                 stage = _STAGE_LABELS.get(item.stage.value, item.stage.value)
-                when = item.updated_at.strftime("%Y-%m-%d")
+                when = _local_date(item.updated_at)
                 note = f"，备注：{item.note}" if item.note else ""
                 lines.append(f"- {item.company} · {item.title} — {stage}（{when}）{note}")
             return "\n".join(lines)
