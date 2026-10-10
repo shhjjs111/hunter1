@@ -269,7 +269,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 连通性探测（真发一次最小请求） */
+        /**
+         * 连通性探测（真发一次最小请求）
+         * @description 表单给了值就探测**表单这一份**，没给才探测已保存的配置。
+         *
+         *     为什么要有请求体：用户改了输入框再点「测试连接」，他以为验的是眼前这份；
+         *     原先端点不带请求体，探测的却是**服务端已保存**的配置 —— 于是可能先看到
+         *     「连接成功」，保存下去才发现另一份根本连不上（或反过来）。请求体可选是为了
+         *     兼容不带体的调用（curl / 旧前端）：那时退回原行为。
+         *
+         *     `api_key` 留空 = 「不改」：界面只回显掩码、读不到原值，所以用它探测时得拿
+         *     已保存的那把钥匙 —— 与 PUT 的同名字段同一约定。
+         */
         post: operations["test_connection_api_settings_test_post"];
         delete?: never;
         options?: never;
@@ -1270,7 +1281,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SettingsForm"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1279,6 +1294,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectionTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

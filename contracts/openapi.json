@@ -1632,7 +1632,25 @@
     },
     "/api/settings/test": {
       "post": {
+        "description": "表单给了值就探测**表单这一份**，没给才探测已保存的配置。\n\n为什么要有请求体：用户改了输入框再点「测试连接」，他以为验的是眼前这份；\n原先端点不带请求体，探测的却是**服务端已保存**的配置 —— 于是可能先看到\n「连接成功」，保存下去才发现另一份根本连不上（或反过来）。请求体可选是为了\n兼容不带体的调用（curl / 旧前端）：那时退回原行为。\n\n`api_key` 留空 = 「不改」：界面只回显掩码、读不到原值，所以用它探测时得拿\n已保存的那把钥匙 —— 与 PUT 的同名字段同一约定。",
         "operationId": "test_connection_api_settings_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SettingsForm"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Form"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -1643,6 +1661,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "连通性探测（真发一次最小请求）"

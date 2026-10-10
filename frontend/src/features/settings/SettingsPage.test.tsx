@@ -174,4 +174,36 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText(/Base URL/)).toBeDefined();
     expect(screen.getByRole("button", { name: "保存" })).toBeDefined();
   });
+
+  it("「测试连接」用表单当前值，而不是已保存的配置", async () => {
+    // 回归护栏：原先点「测试连接」命中的是**服务端已保存的配置**（端点不带请求体）。
+    // 用户改了输入框再点测试，测的还是旧配置 —— 他以为验的是眼前这份，实际不是。
+    const probeBodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const req = input as Request;
+        if (req.method === "POST") {
+          probeBodies.push(await req.clone().text());
+          return jsonResponse({ ok: true, message: "连接成功" });
+        }
+        return jsonResponse(SETTINGS);
+      }),
+    );
+
+    renderPage();
+    const baseUrl = (await screen.findByLabelText(/Base URL/)) as HTMLInputElement;
+    await waitFor(() => expect(baseUrl.value).toBe("https://api.example.com/v1"));
+
+    // 用户改了地址与模型，但**没有保存**
+    fireEvent.change(baseUrl, { target: { value: "https://typed.example.com/v1" } });
+    fireEvent.change(screen.getByLabelText("模型"), { target: { value: "deepseek-reasoner" } });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    await screen.findByText(/连接成功/);
+
+    expect(probeBodies).toHaveLength(1);
+    expect(probeBodies[0]).toContain("https://typed.example.com/v1");
+    expect(probeBodies[0]).toContain("deepseek-reasoner");
+  });
 });

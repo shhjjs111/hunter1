@@ -113,7 +113,10 @@ export function SettingsPage() {
             <Button type="submit" variant="primary" disabled={save.isPending}>
               {save.isPending ? "保存中…" : "保存"}
             </Button>
-            <Button onClick={() => probe.mutate()} disabled={probe.isPending}>
+            <Button
+              onClick={() => probe.mutate({ base_url: baseUrl, model, api_key: apiKey })}
+              disabled={probe.isPending}
+            >
               {probe.isPending ? "探测中…" : "测试连接"}
             </Button>
             {save.isSuccess && <SuccessNotice message="已保存。" />}

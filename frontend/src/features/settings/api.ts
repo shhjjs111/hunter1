@@ -41,8 +41,15 @@ export function useSaveSettings() {
 
 export function useTestConnection() {
   return useMutation({
-    mutationFn: async () => {
-      const { data, error, response } = await api.POST("/api/settings/test");
+    mutationFn: async (form: SettingsForm) => {
+      // 用**表单当前值**探测，而不是已保存的配置：用户改了输入框再点「测试连接」时，
+      // 测的应该正是他眼前的值 —— 否则他可能先看到「连接成功」，保存下去却是另一份
+      // 配置（或反之），白高兴一场。调用方（SettingsPage）传的就是表单的派生值。
+      //
+      // `api_key` 留空 = 「不改」（后端拿已保存的那把钥匙）—— 界面只回显掩码。
+      const { data, error, response } = await api.POST("/api/settings/test", {
+        body: form,
+      });
       if (error || !data) {
         // 探测失败的原因（连不上 / 401 / 模型名不对）后端写在 detail 里 ——
         // 手写「探测失败」会把它整段吞掉。注意端点本身对「探测不通过」是

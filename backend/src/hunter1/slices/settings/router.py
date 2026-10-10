@@ -121,7 +121,17 @@ def build_router(
         return _view(candidate)
 
     @router.post("/settings/test", summary="连通性探测（真发一次最小请求）")
-    def test_connection() -> ConnectionTestResponse:
+    def test_connection(form: SettingsForm | None = None) -> ConnectionTestResponse:
+        """表单给了值就探测**表单这一份**，没给才探测已保存的配置。
+
+        为什么要有请求体：用户改了输入框再点「测试连接」，他以为验的是眼前这份；
+        原先端点不带请求体，探测的却是**服务端已保存**的配置 —— 于是可能先看到
+        「连接成功」，保存下去才发现另一份根本连不上（或反过来）。请求体可选是为了
+        兼容不带体的调用（curl / 旧前端）：那时退回原行为。
+
+        `api_key` 留空 = 「不改」：界面只回显掩码、读不到原值，所以用它探测时得拿
+        已保存的那把钥匙 —— 与 PUT 的同名字段同一约定。
+        """
         try:
             settings = store.get_llm()
         except ValueError as exc:
@@ -136,6 +146,15 @@ def build_router(
                 ok=False,
                 message=f"已保存的配置不可用，请重新填写并保存后再测试：{exc}",
             )
+        if form is not None:
+            key = form.api_key.strip() or (settings.api_key if settings else "")
+            try:
+                candidate = LLMSettings(base_url=form.base_url, model=form.model, api_key=key)
+            except ValidationError as exc:
+                # 与 PUT 同一形状：填的这份不合法 → 422 + 字段级原因。前端
+                # `apiErrorMessage` 对 4xx 会把 detail 显示出来，所以用户看得到原因。
+                raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+            settings = candidate
         if settings is None or not settings.is_configured:
             return ConnectionTestResponse(
                 ok=False, message="配置不完整：base_url / 模型 / API Key 都要填。"

@@ -155,6 +155,90 @@ class TestSaveSettings:
             assert db.settings().get_llm() is None  # 一个都没落库
 
 
+class TestProbeUsesTheSubmittedForm:
+    """探测必须验**用户眼前那一份** —— 原先端点不带请求体，验的是已保存的配置。
+
+    后果不是「少验一次」：用户改了输入框点「测试连接」看到「连接成功」，保存下去却是
+    另一份配置（或反过来，明明能连的配置被判成连不上）。
+    """
+
+    @staticmethod
+    def _client(db: Database, seen: list[LLMSettings]) -> Iterator[TestClient]:
+        app = FastAPI()
+
+        def factory(settings: LLMSettings) -> Any:  # 与 `_boom_factory` 同形：替身不必满足协议
+            seen.append(settings)
+            return FakeLLM()
+
+        app.include_router(
+            build_router(store=SettingsStore(db), llm_factory=factory), prefix="/api"
+        )
+        with TestClient(app) as test_client:
+            yield test_client
+
+    def test_form_values_are_probed_not_the_saved_ones(self, db: Database) -> None:
+        seen: list[LLMSettings] = []
+        for client in self._client(db, seen):
+            client.put("/api/settings", json=FORM)  # 先存一份**不同**的配置
+            response = client.post(
+                "/api/settings/test",
+                json={
+                    "base_url": "https://typed.example.com/v1",
+                    "model": "typed-model",
+                    "api_key": "",
+                },
+            )
+            assert response.json()["ok"] is True
+            assert [item.base_url for item in seen] == ["https://typed.example.com/v1"]
+            assert seen[0].model == "typed-model"
+
+    def test_blank_key_in_the_form_falls_back_to_the_saved_one(self, db: Database) -> None:
+        """界面只回显掩码、读不到原值 —— 空 key 必须是「不改」，不是「拿空 key 去试」。"""
+        seen: list[LLMSettings] = []
+        for client in self._client(db, seen):
+            client.put("/api/settings", json=FORM)
+            client.post(
+                "/api/settings/test",
+                json={"base_url": "https://typed.example.com/v1", "model": "m", "api_key": ""},
+            )
+            assert seen[0].api_key == FORM["api_key"]
+
+    def test_typed_key_is_used_when_given(self, db: Database) -> None:
+        seen: list[LLMSettings] = []
+        for client in self._client(db, seen):
+            client.put("/api/settings", json=FORM)
+            client.post(
+                "/api/settings/test",
+                json={
+                    "base_url": "https://api.example.com/v1",
+                    "model": "m",
+                    "api_key": "sk-typed",
+                },
+            )
+            assert seen[0].api_key == "sk-typed"
+
+    def test_bodyless_call_still_probes_the_saved_config(self, db: Database) -> None:
+        """不带请求体（curl / 旧前端）退回原行为 —— 这是兼容性钉子。"""
+        seen: list[LLMSettings] = []
+        for client in self._client(db, seen):
+            client.put("/api/settings", json=FORM)
+            response = client.post("/api/settings/test")
+            assert response.json()["ok"] is True
+            assert seen[0].base_url == FORM["base_url"]
+
+    def test_invalid_form_is_422_like_save(self, db: Database) -> None:
+        """填的这份不合法 → 与 PUT 同一形状（422 + 字段级原因），而不是 200+ok:false。"""
+        seen: list[LLMSettings] = []
+        for client in self._client(db, seen):
+            client.put("/api/settings", json=FORM)
+            response = client.post(
+                "/api/settings/test",
+                json={"base_url": "not-a-url", "model": "m", "api_key": ""},
+            )
+            assert response.status_code == 422
+            assert seen == [], "不合法的表单不该走到工厂（不该真发一次请求）"
+
+
 class TestConnectionProbe:
     def test_success(self, db: Database) -> None:
         for client in _client(db):
