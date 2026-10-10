@@ -32,6 +32,8 @@ import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from pydantic import ValidationError
+
 ROOT = Path(__file__).resolve().parent.parent
 # 脚本在仓库根、包在 backend/src —— 显式加路径，不依赖安装状态
 # （本机解释器是 Python embeddable，不走 PYTHONPATH），所以下面的 import 必须
@@ -226,7 +228,20 @@ def build_manifest(
 
     # 回读：生成物必须能被消费端模型接受。字段形状、url 协议、sha256 格式
     # 都在这一句里被真正校验一次（而不是等用户端拒绝）。
-    return ReleaseManifest.model_validate(payload)
+    #
+    # ⚠ 这里抛的是 pydantic 的 `ValidationError`（`assets.0.url` 不是 http 时最常触发），
+    # 而它**不是** `ManifestError` —— 原先就这么裸穿出去：`main` 的
+    # `except ManifestError` 接不住，用户看到的是一段 traceback + 退出码 1（「脚本崩了」），
+    # 而同一个脚本对别的非法输入（平台名、版本不符）给的是「生成清单失败：<原因>」+ 2。
+    # 「输入错(2)」与「脚本崩了(1)」是两个不同的信号，调用方会据此决定要不要重试 ——
+    # 所以在这一层统一成 ManifestError，别让契约的边界漏出一种异常形状。
+    try:
+        return ReleaseManifest.model_validate(payload)
+    except ValidationError as exc:
+        first = exc.errors()[0] if exc.errors() else {}
+        loc = ".".join(str(part) for part in first.get("loc", ())) or "清单"
+        reason = str(first.get("msg", exc)).removeprefix("Value error, ")
+        raise ManifestError(f"生成的清单不合法（{loc}）：{reason}") from exc
 
 
 def main(argv: Sequence[str] | None = None) -> int:

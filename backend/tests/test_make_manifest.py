@@ -317,6 +317,42 @@ class TestCli:
         assert not out.exists()
 
 
+class TestBadUrlBaseIsAnInputError:
+    """`--url-base` 给不出 http(s) 地址时，是**输入错**（2 + 一句原因），不是「脚本崩了」。
+
+    原先 `build_manifest` 末尾的回读抛的是 pydantic `ValidationError` —— 它继承
+    ValueError，**不是** `ManifestError`，于是穿过 `main` 的 `except ManifestError`：
+    用户看到一段 traceback 与退出码 1，而同脚本对其它非法输入（平台名、版本不符）
+    给的是「生成清单失败：<原因>」+ 2。「输入错」与「崩溃」是两个信号，调用方据此
+    决定要不要重试，不能混。
+    """
+
+    #: 空串与缺协议是最常见的两种手滑（`--url-base github.com/x/y`、忘带 --url-base）
+    BAD_BASES = ("github.com/x/y", "ftp://example.com/v", "")
+
+    @pytest.mark.parametrize("base", BAD_BASES)
+    def test_build_manifest_raises_manifest_error(self, artifact: Path, base: str) -> None:
+        with pytest.raises(make_manifest.ManifestError) as excinfo:
+            make_manifest.build_manifest(
+                version=make_manifest.__version__,
+                assets=[("win32", artifact)],
+                url_for=lambda _platform, name: f"{base}/{name}",
+            )
+        assert "http" in str(excinfo.value), str(excinfo.value)
+
+    @pytest.mark.parametrize("base", BAD_BASES)
+    def test_cli_exits_two_with_a_readable_reason(
+        self, artifact: Path, tmp_path: Path, base: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = tmp_path / "manifest.json"
+        code = make_manifest.main(
+            ["--asset", f"win32={artifact}", "--url-base", base, "--out", str(out)]
+        )
+        assert code == 2, f"输入错应 exit 2（不是崩溃的 1），实际 {code}"
+        assert not out.exists()
+        assert "生成清单失败" in capsys.readouterr().err
+
+
 class TestPlaceholderWarning:
     """清单合法（http + 正确 sha256）所以不报错 —— 但地址指向不存在的地方。"""
 
