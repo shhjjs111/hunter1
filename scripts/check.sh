@@ -14,6 +14,18 @@
 # 另含：shell 脚本静态分析（shellcheck；未装则本节未执行、末尾以退出码 3 报出）与
 #       语法（bash -n）、PyInstaller 规格语法（compile）。
 #
+# ⚠ 沙箱的「批量删除守卫」会让本脚本**门禁全绿却以 1 退出**（WorkBuddy 沙箱实测；
+#   普通环境没有这层守卫，本机 Hermes 运行时复现不出来）。
+#   触发点是前端覆盖率收尾：vitest 的 v8 provider 一次性递归删 `frontend/coverage/.tmp`，
+#   条目数超过阈值（默认 50）即被 Node 侧拦下并报
+#   `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]`。
+#   实测对照（沙箱内、**必须后台**运行）：默认 → 1；`CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=1000` → 0；
+#   `CODEBUDDY_SAFE_DELETE_ENABLED=0` → 0。
+#   首选只抬阈值（守卫仍开着，只放行这一处体积正常的清理）：
+#     CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=1000 bash scripts/check.sh
+#   注意：**前台**跑可能被自动提权到沙箱之外，此时守卫不生效、测出来一律通过（输出里
+#   会出现 bypassed 字样）—— 要复现或要证伪，都得后台跑。CI（ubuntu）没有守卫，不受影响。
+#
 # ⚠ scripts/ 的 ruff 检查必须显式传 `--config backend/pyproject.toml`。
 #   根目录没有 ruff 配置，不传就会用 ruff 的**默认规则集**（行长 88、规则集也不同），
 #   与 backend/ 的判定标准不一致 —— 实测过：默认集下 E402 未启用，会建议你删掉
