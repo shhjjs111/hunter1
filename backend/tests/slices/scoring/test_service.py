@@ -191,7 +191,3 @@ class TestProfile:
     def test_profile_requires_some_signal(self) -> None:
         with pytest.raises(ValueError):
             CandidateProfile(keywords=[], directions=[], summary="")
-
-    def test_screen_by_title_keywords(self) -> None:
-        assert PROFILE.matches_title("AI产品经理") is True
-        assert PROFILE.matches_title("行政专员") is False

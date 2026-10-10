@@ -10,8 +10,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from hunter1.platform.text import normalize_job_title
-
 # ---- 画像的输入上限 ----
 #
 # 这不是「性能优化」，是**成本与可用性的闸门**：画像会被原样拼进评分提示词
@@ -67,21 +65,6 @@ class CandidateProfile(BaseModel):
     def model_post_init(self, _context: object) -> None:
         if not self.keywords and not self.directions and not self.summary:
             raise ValueError("candidate profile needs at least one of keywords/directions/summary")
-
-    @property
-    def has_content(self) -> bool:
-        return bool(self.keywords or self.directions or self.summary)
-
-    def matches_title(self, title: str) -> bool:
-        """标题是否命中任一关键词（归一化后子串匹配）。"""
-        normalized = normalize_job_title(title)
-        if not normalized:
-            return False
-        return any(
-            normalize_job_title(keyword) in normalized
-            for keyword in self.keywords
-            if normalize_job_title(keyword)
-        )
 
 
 class ScoreCard(BaseModel):
