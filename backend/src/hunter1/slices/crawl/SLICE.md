@@ -15,7 +15,7 @@
 | `CrawlRunner` / `CrawlSnapshot` / `SiteProgress` | 进度运行器（后台线程 + 快照） |
 | `SITES` / `SiteDefinition` / `available_sites` / `build_site` / `build_all` / `get_site` | 站点注册表 |
 | `ListPageSpec` / `StaticHtmlCrawler` / `BaseCrawler` / `parse_list_page` | 适配器 |
-| `CrawlBlockedError` / `detect_blocking` / `ensure_not_blocked` | 风控页守卫 |
+| `CrawlBlockedError` / `CrawlEmptyPageError` / `detect_blocking` / `ensure_not_blocked` | 风控页与「首页解析不出岗位」守卫 |
 | `build_router` | HTTP 面工厂 |
 
 ## 依赖

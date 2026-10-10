@@ -112,11 +112,13 @@ class TestScoreIsolation:
 class TestProfileLoadDistinguishesStates:
     """「还没配过」与「存坏了」必须能分辨 —— 这是本模块文档给的承诺。
 
-    实测：把 `load_profile` 里 `if raw is None: return None` 整段去掉（未配置时直接
-    `CandidateProfile.model_validate(None)` → ValidationError → 抛「画像不合法」），
-    全部 scoring 用例照样绿 —— 因为路由的 GET 对 ValueError 也是 200 + `profile=null`，
-    只差一个 `warning` 字段，而没有用例断言那个字段。后果是**全新安装的用户第一次
-    打开配置页，看到的是「已保存的画像不可用，请重新填写」**。
+    这条分支**已经被钉住**：把 `load_profile` 里 `if raw is None: return None` 整段
+    去掉（未配置时直接 `CandidateProfile.model_validate(None)` → ValidationError →
+    抛「画像不合法」），本类与路由侧的用例会红（本轮实测 2 failed）—— 「全新安装的
+    用户第一次打开配置页看到『已保存的画像不可用』」这种回归有人守。
+
+    （原注释称「全部 scoring 用例照样绿」，那是更早一轮的实测结论；用例集补齐之后
+    它不再成立，故照实改掉 —— 留着一句已经为假的实测记录，比没有记录更坏。）
     """
 
     def test_never_configured_is_none_not_an_error(self, store: ScoreStore) -> None:

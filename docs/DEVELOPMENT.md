@@ -321,12 +321,14 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    | 带已移除字段的旧配置 | `GET /api/settings` 的 `broken` 为 `false`（不被判损坏） |
 6. **更新链路演练**（起本地 HTTP 服务当"发布源"，无需真的上传）：
    ```bash
-   cd dist/verify/serve && <python> -m http.server <PORT> --bind 127.0.0.1
+   # 就在产物目录里起服务（清单与 zip 都在 dist/ 下）——**这一步的清单要按这个地址
+   # 重新生成一份**：`--url-base http://127.0.0.1:<PORT>`，否则清单里的下载地址指向线上。
+   cd dist && <python> -m http.server <PORT> --bind 127.0.0.1
    <新版本 exe> update --source http://127.0.0.1:<PORT>/manifest.json   # 期望「已是最新」
    <旧版本 exe> update --source … --dest <dir> --download               # 期望「可更新」+ 解压
    # 把清单里 sha256 改一个字符再跑 → 期望 checksum_mismatch 且目标目录为空
    ```
-   两个实测细节（省得下次卡住）：
+   三个实测细节（省得下次卡住）：
    - `make_manifest.py` 的 `version` **取自包本身**，所以它生成的清单版本 = 当前
      代码版本，拿它当"更新源"永远得到「已是最新」、**不触发下载**。要演练下载路径，
      得手工把清单里的 `version` 抬高一位（如 `0.1.1`）—— 那是测试夹具，不是产物。

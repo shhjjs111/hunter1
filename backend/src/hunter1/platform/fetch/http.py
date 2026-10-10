@@ -79,7 +79,7 @@ def _decode_bytes(content: bytes, *, declared: str | None) -> str:
     """解出响应体文本，带编码回退。
 
     优先级：**可信的声明** → 严格 utf-8 → 体里的 `<meta charset>` →
-    **不可信的声明**（latin-1 家族）→ gb18030 / big5 → utf-8 宽松。
+    gb18030 / big5 → **不可信的声明**（latin-1 家族）→ utf-8 宽松。
 
     为什么「声明」要分可信与不可信：HTTP 默认值就是 ISO-8859-1，而大量中文站
     实际发 UTF-8。latin-1 能解码任意字节序列、永不抛异常 —— 先采信它就等于把
