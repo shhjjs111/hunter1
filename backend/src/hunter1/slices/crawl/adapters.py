@@ -224,20 +224,6 @@ def _item_company(item: Tag, spec: ListPageSpec, *, default: str) -> str:
     return _item_text(item, spec.company_selector) or default
 
 
-def _has_item_container(html: str, spec: ListPageSpec) -> bool:
-    """页面上还认得出「岗位条目容器」吗。
-
-    把两种「0 条」分开的唯一信号：
-
-    - 容器在、里面没有条目 → 真的是空列表页（今天没岗位）；
-    - 容器**根本没匹配到** → 我们读不懂这个页面了（改版 / 选择器失效），
-      必须报错，否则界面会显示「抓取成功，0 条」，用户以为站点空了。
-
-    只在「这一页解析出了 0 条」时才调用 —— 正常路径不会多解析一次。
-    """
-    return bool(BeautifulSoup(html, "lxml").select(spec.item_selector))
-
-
 class StaticHtmlCrawler(BaseCrawler):
     """按 `ListPageSpec` 抓取静态列表页的适配器。"""
 
@@ -266,13 +252,20 @@ class StaticHtmlCrawler(BaseCrawler):
             ensure_not_blocked(html, url=url)
             page_jobs = parse_list_page(html, self.spec, company=self.company, page_url=url)
             if not page_jobs:
-                # 两种「0 条」必须分开（见 guards 模块的原则）：
-                # - **条目容器根本没匹配到** → 我们读不懂这个页面了（改版 / 选择器失效）。
-                #   这正是原先的静默 bug：返回 [] 与「今天真没岗位」长得一模一样，
-                #   界面显示「抓取成功，0 条」，用户以为站点空了，且永远不会知道。
-                # - 容器在、只是里面没有条目 → 真的是空列表页，不报错（下面 break）。
-                # 只在首页这么判：后续页是空的才是真的「没有更多了」。
-                if page == 1 and not _has_item_container(html, self.spec):
+                # 首页一条都没解析出来就**报错**，不返回空结果（决策与理由见
+                # `guards.CrawlEmptyPageError` 与 test_adapters 里那条用例）。
+                #
+                # 刻意不再试图「用选择器分辨是哪一种」：判据本身站不住 ——
+                # ①「空列表页」与「选择器失效」在 HTML 层面无法区分（两种情况下
+                #   `select(item_selector)` 都可能是空集）；
+                # ②反过来「条目节点在、但字段认不出（标题/链接抽取全失败）」时
+                #   选择器**非空**，而解析结果同样是 0 —— 那种页面本来是同一类
+                #   「读不懂」，却会被那条判据放过去、静默返回 0 条。
+                # 既然分不开，就统一按「拿不到数据」处理：文案两种可能都写、
+                # 请人工确认（见 CrawlEmptyPageError 的消息）。
+                #
+                # 只在首页这么判：后续页空才是真的「没有更多了」。
+                if page == 1:
                     raise CrawlEmptyPageError(url)
                 break  # 空页 = 没有更多了
             for job in page_jobs:

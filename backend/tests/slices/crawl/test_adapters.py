@@ -542,3 +542,20 @@ class TestCrawlerRaisesOnChallenge:
             self._crawler(empty).fetch()
         assert "empty_first_page" in str(excinfo.value)
         assert "人工确认" in str(excinfo.value)
+
+    def test_items_present_but_unreadable_also_reports(self) -> None:
+        """条目节点在、字段却一条都认不出 → 同样报错，不是静默 0 条。
+
+        这是上一条判据漏掉的另一半：`li.job` 明明匹配上了，而标题/链接全抽不出来时
+        条目选择器**非空** —— 原先那条「选择器命中为空才算读不懂」会放它过去，界面
+        照样显示「抓取成功，0 条」。半死（容器在、条目在、字段认不出）恰恰是改版最
+        常见的形态，所以判据不再依赖选择器命中与否。
+        """
+        half_dead = (
+            "<html><head><title>招聘</title></head><body>"
+            "<ul class='jobs'><li class='job'><span>岗位</span></li></ul>"
+            "</body></html>"
+        )
+        with pytest.raises(CrawlEmptyPageError) as excinfo:
+            self._crawler(half_dead).fetch()
+        assert "empty_first_page" in str(excinfo.value)
