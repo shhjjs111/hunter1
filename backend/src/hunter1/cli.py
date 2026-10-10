@@ -151,6 +151,22 @@ def _port_problem(host: str, port: int) -> str | None:
     return None
 
 
+def _release_context(context: AppContext) -> None:
+    """释放组装处持有的资源。
+
+    只 `db.dispose()` 会漏掉 `HttpFetcher`（httpx 连接池）—— 连接不关就随进程
+    生命周期累积，与 `examples/demo_crawl.py` 的 `fetcher.close()`、
+    `refresh_fixtures` 的 `with HttpFetcher(...)` 口径不一致。
+
+    `TextFetcher` 端口只声明了 `get_text`、没有 `close`，所以用 `getattr` 取：
+    真正的 `HttpFetcher.close()` 会被调到，测试里的无状态假件（没有 close）干净跳过。
+    """
+    context.db.dispose()
+    closer = getattr(context.fetcher, "close", None)
+    if closer is not None:
+        closer()
+
+
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -167,7 +183,7 @@ def _serve(args: argparse.Namespace) -> int:
     port_problem = _port_problem(args.host, args.port)
     if port_problem is not None:
         print(port_problem)
-        context.db.dispose()
+        _release_context(context)
         return 2
 
     print(f"Hunter1 已启动：{url}")
@@ -189,7 +205,7 @@ def _serve(args: argparse.Namespace) -> int:
         # 正常返回路径根本走不到。所以清理必须在 finally —— 否则 SQLite 的
         # `-wal` / `-shm` 会留在数据目录里（实测可复现），与「删目录即卸载」
         # 的便携定位不符，也和 `_crawl` 的行为不一致。
-        context.db.dispose()
+        _release_context(context)
     return 0
 
 
@@ -211,7 +227,7 @@ def _crawl(args: argparse.Namespace) -> int:
     finally:
         # 与 `_serve` 同一约定：异常路径也必须释放连接 —— 否则 SQLite 的
         # `-wal` / `-shm` 会留在数据目录里（「删目录即卸载」的便携定位）。
-        context.db.dispose()
+        _release_context(context)
     # 退出码按「站点是否全部成功」判，不按「抓到几条」：
     #   - 全部站点成功但本轮没有新岗位（都抓过了，很常见）→ 0，不是失败；
     #   - 有站点失败 → 1，哪怕别的站点抓到了几百条 —— 失败要让定时任务/CI 看见。

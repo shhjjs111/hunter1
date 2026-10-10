@@ -363,8 +363,15 @@ class TestCrawlExitCode:
             def dispose(self) -> None:
                 pass
 
+        class _FakeFetcher:
+            # 假件也带 close：`_release_context` 会对 fetcher 调 `close()`
+            # （守 HttpFetcher 连接池的释放，见 TestCrawlClosesFetcher）。
+            def close(self) -> None:
+                pass
+
         class _FakeContext:
             db = _FakeDb()
+            fetcher = _FakeFetcher()
 
             @classmethod
             def default(cls, **_kw: object) -> _FakeContext:
@@ -483,3 +490,45 @@ class TestPortProbe:
         assert problem is not None
         assert "无权绑定" in problem
         assert "已被占用" not in problem
+
+
+class TestCrawlClosesFetcher:
+    """audit C18：`_crawl` 退出时也要关掉 `HttpFetcher`（httpx 连接池）。
+
+    只 `db.dispose()` 会漏掉抓取器的连接池 —— 与 `examples/demo_crawl.py` 的
+    `fetcher.close()`、`refresh_fixtures` 的 `with HttpFetcher(...)` 口径不一致。
+    """
+
+    def test_crawl_closes_the_fetcher(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from hunter1 import cli
+        from hunter1.slices import crawl as crawl_pkg
+
+        closed: list[bool] = []
+
+        class _FakeFetcher:
+            def close(self) -> None:
+                closed.append(True)
+
+        class _FakeDb:
+            def jobs(self) -> object:
+                return object()
+
+            def dispose(self) -> None:
+                pass
+
+        class _FakeContext:
+            db = _FakeDb()
+            fetcher = _FakeFetcher()
+
+            @classmethod
+            def default(cls, **_kw: object) -> _FakeContext:
+                return cls()
+
+            def crawler_factory(self) -> list[object]:
+                return []
+
+        monkeypatch.setattr(cli, "AppContext", _FakeContext)
+        monkeypatch.setattr(crawl_pkg, "crawl_all", lambda *_a, **_kw: BatchCrawlResult([]))
+
+        assert cli._crawl(_build_parser().parse_args(["crawl"])) == 0
+        assert closed == [True], "退出时没关抓取器的连接池"
