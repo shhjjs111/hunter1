@@ -94,10 +94,17 @@ def build_router(
             raise HTTPException(status_code=404, detail=f"投递不存在：{application_id}")
         # stage 已由请求体校验成合法枚举（非法值在进入本函数之前就是 422）
         updated = service.change_stage(application, stage=body.stage, now=now(), note=body.note)
-        if not store.update_existing(updated):
-            # get 与写入之间记录被删了：只更新、不插回 —— 否则用户删掉的记录会
-            # 「复活」（静默撤销删除）。此时按「已不存在」如实回 404。
-            raise HTTPException(status_code=404, detail=f"投递已被删除：{application_id}")
+        # **带上读到的版本号**：两次并发推进各自读到同一版、各自写一次时，后写的会把
+        # 先写的整体覆盖（读-改-写丢更新），而两边都拿到 200 —— 没人知道有一边白改了。
+        if not store.update_existing(updated, expected_updated_at=application.updated_at):
+            # 写不进去有两种原因，**必须分开报**：记录被删（404，别插回去——插回等于
+            # 静默撤销删除），或在我们读完之后被别处改过（409，让调用方刷新重试）。
+            if store.get(application_id) is None:
+                raise HTTPException(status_code=404, detail=f"投递已被删除：{application_id}")
+            raise HTTPException(
+                status_code=409,
+                detail="这条投递刚被别处改过（阶段或备注已变），请刷新后重试。",
+            )
         return schemas.StageUpdateResponse(application_id=updated.id, stage=updated.stage)
 
     @router.delete("/applications/{application_id}", status_code=204, summary="删除投递")

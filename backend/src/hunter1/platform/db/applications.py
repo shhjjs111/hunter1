@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, func, select, update
@@ -89,17 +90,29 @@ class SqliteApplicationRepository:
                     raise exc
                 return _to_application(existing)
 
-    def update_existing(self, application: Application) -> bool:
+    def update_existing(
+        self, application: Application, *, expected_updated_at: datetime | None = None
+    ) -> bool:
         """只更新**已存在**的行；行不在（已被删）返回 `False`，**不插入**。
 
         原先的阶段推进是 `get` 之后再 `upsert`：两步之间记录被删除时，upsert 会把
         它当成新记录插回去 —— 用户明明删了，刷新又回来了（静默撤销删除）。
+
+        `expected_updated_at` 是**乐观锁**：调用方给出它**读到**的那一版的
+        `updated_at`，写入时要求行仍是那一版。否则两个并发请求各读一次、各写一次，
+        后写的那个会把先写的整体覆盖掉（读-改-写丢更新）—— 而两边的响应都是 200，
+        没人会知道有一边的改动消失了。
+
+        传 `None` = 不做版本校验（只在调用方明确要覆盖时才用）。
         """
         with self._db.session() as session:
+            statement = update(ApplicationRow).where(ApplicationRow.id == application.id)
+            if expected_updated_at is not None:
+                # 与读取时同一格式（`UtcDateTime` 的 bind/result 是对称的），
+                # 所以这里是精确比较，不需要容差。
+                statement = statement.where(ApplicationRow.updated_at == expected_updated_at)
             outcome = session.execute(
-                update(ApplicationRow)
-                .where(ApplicationRow.id == application.id)
-                .values(
+                statement.values(
                     job_id=application.job_id,
                     company=application.company,
                     title=application.title,

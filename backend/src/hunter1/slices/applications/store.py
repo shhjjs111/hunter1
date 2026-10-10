@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from hunter1.domain.models import Application
 from hunter1.platform.db import Database
 from hunter1.platform.db.applications import SqliteApplicationRepository
@@ -34,9 +36,17 @@ class ApplicationStore:
         """
         return self._db.applications().insert_for_job(application)
 
-    def update_existing(self, application: Application) -> bool:
-        """只更新已存在的行；行已被删则返回 False（**不**把它插回去）。"""
-        return self._db.applications().update_existing(application)
+    def update_existing(
+        self, application: Application, *, expected_updated_at: datetime | None = None
+    ) -> bool:
+        """只更新已存在的行；行已被删返回 False（**不**把它插回去）。
+
+        `expected_updated_at` 见平台仓储的同名参数：不传就是不做版本校验，
+        传了就是**乐观锁** —— 拿下并发下的读-改-写丢更新（阶段推进就是这种写法）。
+        """
+        return self._db.applications().update_existing(
+            application, expected_updated_at=expected_updated_at
+        )
 
     def get(self, application_id: str) -> Application | None:
         return self._db.applications().get(application_id)

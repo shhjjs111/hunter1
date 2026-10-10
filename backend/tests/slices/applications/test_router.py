@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,7 @@ from sqlalchemy import text
 from hunter1.domain.models import Application, ApplicationStage, Job
 from hunter1.platform.db import Database
 from hunter1.slices.applications.router import build_router
+from hunter1.slices.applications.schemas import MAX_NOTE_CHARS
 from hunter1.slices.applications.store import ApplicationStore
 from hunter1.slices.jobs import JobStore
 
@@ -173,6 +174,70 @@ class TestStageEndpoint:
 
         assert response.status_code == 404
         assert store.get("a1") is None, "记录被删后不该被阶段变更插回来"
+
+
+class TestStageUpdateConflict:
+    """阶段推进是**读-改-写**：并发下必须有人失败，而不是两边都 200 而有一边白改。"""
+
+    def test_concurrent_change_is_409_not_a_silent_overwrite(
+        self,
+        db: Database,
+        store: ApplicationStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """读完之后、写之前被别处改过 → 409，并且**不把别人的改动盖掉**。
+
+        用**可推进的时钟**自建一个 app：更新带上了读到的版本号（`updated_at`），而
+        夹具里的时钟是常量，两次写会同版本 —— 那样校验恒过，测不出任何东西。
+        """
+        import hunter1.slices.applications.router as router_module
+
+        store.upsert(_application(id="a1", stage=ApplicationStage.APPLIED))
+
+        moment = [NOW]
+        app = FastAPI()
+        app.include_router(
+            build_router(store=store, jobs=JobStore(db), clock=lambda: moment[0]), prefix="/api"
+        )
+
+        original = router_module.service.change_stage
+
+        def racing_change_stage(application, *, stage, now, note=None):  # type: ignore[no-untyped-def]
+            mine = original(application, stage=stage, now=now, note=note)
+            # 模拟「另一个请求在我们读完之后、写之前先写成功了」
+            moment[0] = NOW + timedelta(minutes=1)
+            store.update_existing(
+                original(
+                    application,
+                    stage=ApplicationStage.INTERVIEW,
+                    now=moment[0],
+                    note="别处改的",
+                )
+            )
+            return mine
+
+        monkeypatch.setattr(router_module.service, "change_stage", racing_change_stage)
+
+        with TestClient(app) as racing_client:
+            response = racing_client.post(
+                "/api/applications/a1/stage", json={"stage": "written_test"}
+            )
+
+        assert response.status_code == 409
+        assert "请刷新" in response.json()["detail"]
+        loaded = store.get("a1")
+        assert loaded is not None
+        assert loaded.stage is ApplicationStage.INTERVIEW, "别人的改动不许被静默盖掉"
+        assert loaded.note == "别处改的"
+
+    def test_overlong_note_is_422(self, client: TestClient, store: ApplicationStore) -> None:
+        """备注有上限 —— 它是用户手写的自由文本，落进没有列宽约束的 `Text` 列。"""
+        store.upsert(_application(id="a1"))
+        response = client.post(
+            "/api/applications/a1/stage",
+            json={"stage": "interview", "note": "备" * (MAX_NOTE_CHARS + 1)},
+        )
+        assert response.status_code == 422
 
 
 class TestApplyEndpoint:

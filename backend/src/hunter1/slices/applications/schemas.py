@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from hunter1.domain.models import Application, ApplicationStage
+
+#: 备注的长度上限。
+#:
+#: 备注是用户手写的自由文本，直接落进 `applications.note`（那一列是 `Text`，没有列宽
+#: 约束）。没有上限时一次误粘贴就能把整篇文章塞进投递记录 —— 而它每次列表查询都会被
+#: 读出来、跟着响应走。2000 够写任何「面试问了什么 / 下一步做什么」。
+MAX_NOTE_CHARS = 2000
 
 
 class ApplicationSummary(BaseModel):
@@ -52,7 +59,7 @@ class StageUpdateRequest(BaseModel):
     """
 
     stage: ApplicationStage
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=MAX_NOTE_CHARS)
 
 
 class StageUpdateResponse(BaseModel):
