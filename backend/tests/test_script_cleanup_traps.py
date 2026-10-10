@@ -14,6 +14,14 @@
 对 `check.sh` 这种门禁，后果是「所有检查都通过、末尾打印『全部通过』，进程却以 1 退出」：
 判错方向比不判更坏，而且**本机红、CI 绿**，所以长期潜伏。
 
+**「只守最后一条」是错的口径**（对抗式审核第二轮修正）：`set -e` 下处理器里**第一条**
+失败的命令就会中止整个处理器，后面的清理根本轮不到，退出码照样被改写 ——
+实测 `trap 'false; true || true' EXIT` 把 0 变成 1，而只查最后一条的判据会把它放过去。
+假阴性比没有守卫更坏：它声称守住了。所以判据是「**每一条**会执行的命令都自带
+`|| true`」；条件与结构词（`if` / `elif` / `while` / `until` / `for` / `case` / `then` /
+`do` / `else` / `fi` / `done` / `esac` / `}`）例外 —— 它们不以「命令失败」的形式改写
+退出码（`if` 的条件失败只是「不成立」）。
+
 触发条件与 `rm` 的具体实现有关：本机 `rm` 是普通二进制时不触发；一旦 `rm` 被换成
 会拒绝某种路径形态（例如带盘符前缀）的包装函数，清理就失败 → 门禁假红。清理失败
 本身无所谓的，但它不该顶掉结论 —— 所以每条清理都必须自带 `|| true`。
@@ -52,6 +60,12 @@ _GUARD = "|| true"
 #: 其后跟的就是这些收尾词）。
 _BLOCK_ENDERS = frozenset({"fi", "done", "esac", "}", ")", ";;"})
 
+#: 结构与条件词。`then rm -f x` 这类要**剥掉前导词**再判它后面那条命令；
+#: `if`/`elif`/`while`/`until`/`for`/`case` 开头的语句是「条件/头部」，
+#: 它们的返回值不会以「命令失败」的形式改写退出码。
+_LEADING_WORDS = ("then", "do", "else")
+_CONDITION_HEADS = ("if", "elif", "while", "until", "for", "case")
+
 
 def _scripts() -> list[Path]:
     return SCRIPTS
@@ -69,30 +83,52 @@ def _body_of(text: str, name: str) -> str | None:
     return None
 
 
-def _last_command_is_guarded(text: str) -> bool:
-    """`text` 的**最后一条命令**是否自带 `|| true`。
+def _statements(text: str) -> list[str]:
+    """把一段 shell 动作拆成「会执行的语句」。
 
-    只查「整串含 `|| true`」不够：`'rm -f a || true; rm -f b'` 里真正决定退出码的
-    是最后那条 `rm -f b`，它没守卫 —— 而整串确实「含」`|| true`，旧判据会漏判
-    （audit a13）。这里取最后一次出现 `|| true` 的位置，要求其**之后**只剩空白、
-    整行注释或块结束符（`fi` / `done` / `esac` / `}` …）—— 任何还会执行的残留命令
-    都算「守的不是最后一条」。整行注释先剔除：注释里提到 `|| true` 不算数。
+    按行与 `;` 拆，剔掉整行注释与每条语句的行尾注释。刻意**不做** shell 解析：
+    这里要防的是「清理写漏了 `|| true`」，不是把 shell 语法做对 —— 判据只需在
+    **保守方向**成立（宁可多报，不可漏报）。
     """
-    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
-    body = "\n".join(lines)
-    idx = body.rfind(_GUARD)
-    if idx == -1:
+    statements: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0]
+        for piece in line.split(";"):
+            statement = piece.strip()
+            if statement:
+                statements.append(statement)
+    return statements
+
+
+def _can_flip_the_exit_code(statement: str) -> bool:
+    """这条语句是否是「失败就会改写退出码」的那种。"""
+    words = statement.split()
+    while words and words[0] in _LEADING_WORDS:
+        words = words[1:]
+    if not words:
+        return False  # 剥完只剩 `do` / `then` / `else` 这类结构词
+    head = words[0]
+    if head in _BLOCK_ENDERS:
         return False
-    tail = body[idx + len(_GUARD) :]
-    for raw_line in tail.splitlines():
-        line = raw_line.split("#", 1)[0].strip().strip(";").strip()
-        if line and line not in _BLOCK_ENDERS:
-            return False
-    return True
+    # `if` / `for` 开头的语句是条件或头部：条件不成立 ≠ 命令失败。
+    return head not in _CONDITION_HEADS
+
+
+def _every_command_is_guarded(text: str) -> bool:
+    """`text` 里**每一条**能改写退出码的命令是否都自带 `|| true`。
+
+    为什么不是「最后一条」（审核第二轮修正的判据，见模块 docstring）：`set -e` 下
+    处理器里**第一条**失败的命令就中止整个处理器，后面的清理根本轮不到 ——
+    `false; true || true` 的退出码是 1，而只查最后一条的判据会判它「已守卫」。
+    漏判 = 假阴性 = 声称守住了却守不住。
+    """
+    return all(
+        _GUARD in statement for statement in _statements(text) if _can_flip_the_exit_code(statement)
+    )
 
 
 def _unresolved_actions() -> list[str]:
-    """列出「清理动作的**最后一条命令**不带 `|| true`」的 trap，形如 `文件:行: 动作`。"""
+    """列出「清理动作里有命令没带 `|| true`」的 trap，形如 `文件:行: 动作`。"""
     bad: list[str] = []
     for script in _scripts():
         text = script.read_text(encoding="utf-8")
@@ -108,16 +144,14 @@ def _unresolved_actions() -> list[str]:
             if action in {"-", "''", '""'}:
                 continue
             if action.startswith(("'", '"')):
-                # 去掉外层引号再判：守卫要在**最后一条命令**上。
-                if not _last_command_is_guarded(action[1:-1]):
+                # 去掉外层引号再判：每一条命令都要自带守卫。
+                if not _every_command_is_guarded(action[1:-1]):
                     bad.append(f"{script.name}:{lineno}: {action}")
                 continue
-            # 裸词 = 函数名：守卫要写在函数体的**最后一条命令**上。
+            # 裸词 = 函数名：守卫要写在函数体的每一条命令上。
             body = _body_of(text, action)
-            if body is None or not _last_command_is_guarded(body):
-                bad.append(
-                    f"{script.name}:{lineno}: {action}()（函数体的最后一条命令没有 {_GUARD}）"
-                )
+            if body is None or not _every_command_is_guarded(body):
+                bad.append(f"{script.name}:{lineno}: {action}()（函数体里有命令没带 {_GUARD}）")
     return bad
 
 
@@ -168,24 +202,33 @@ def test_unguarded_exit_trap_is_fatal_under_set_e(
     )
 
 
-class TestLastCommandGuard:
-    """audit a13：判定必须落在**最后一条命令**上，不是「整串含 `|| true`」。"""
+class TestEveryCommandGuard:
+    """判定必须落在**每一条**会改退出码的命令上，不是「整串含 `|| true`」。"""
 
     @pytest.mark.parametrize(
         ("body", "expected"),
         [
             ("rm -f /tmp/x 2>/dev/null || true", True),
             ("rm -f /tmp/x", False),
-            # 守卫只在前一条上 —— 最后那条 `rm -f /tmp/y` 才是改写退出码的元凶。
+            # 守卫只在前一条上 —— 最后那条 `rm -f /tmp/y` 会改写退出码。
             ("rm -f /tmp/x || true; rm -f /tmp/y", False),
-            # 循环体里的守卫：其后跟的是收尾词 `done`，仍算「最后一条有守卫」。
+            # **反过来也一样**：`set -e` 下第一条失败的就会中止处理器，后面的守卫
+            # 永远轮不到 —— 这正是只查最后一条时漏掉的那个形态（假阴性）。
+            ("false; true || true", False),
+            ("false || true; true || true", True),
+            # 循环体里的守卫：其后跟的是收尾词 `done`，仍算「每一条都有守卫」。
             ('for p in a b; do\n  rm -f "$p" || true\ndone', True),
+            # 循环体里**只守了最后一条**（且这里只有一条）不算错；但同一行里多一条就错。
+            ('for p in a b; do rm -f "$p" || true; true; done', False),
+            # `if` 的条件失败只是「不成立」，不改写退出码；分支体里的命令要守卫。
+            ("if [ -e /tmp/x ]; then rm -f /tmp/x || true; fi", True),
+            ("if [ -e /tmp/x ]; then rm -f /tmp/x; fi", False),
             # 注释里提到 `|| true` 不算数。
             ("# 说明里提到 || true\nrm -f /tmp/x", False),
         ],
     )
-    def test_last_command_only(self, body: str, expected: bool) -> None:
-        assert _last_command_is_guarded(body) is expected
+    def test_every_command(self, body: str, expected: bool) -> None:
+        assert _every_command_is_guarded(body) is expected
 
 
 class TestSyntheticTrapViolationIsCaught:
@@ -203,3 +246,22 @@ class TestSyntheticTrapViolationIsCaught:
         monkeypatch.setattr(module, "SCRIPTS", [script])
         bad = module._unresolved_actions()
         assert bad, "守卫只在倒数第二条上 —— 必须判为未加守卫"
+
+    def test_failing_first_command_is_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """守卫落在**末尾**、而前面还有一条会失败的命令 → 必须判为未加守卫。
+
+        实测（GNU bash 5.2）：`set -euo pipefail; trap 'false; true || true' EXIT; true`
+        退出码是 **1** —— 第一条失败就中止了处理器。只查最后一条的判据（旧口径）会
+        把这条脚本判成「已守卫」，也就是声称守住了却守不住。
+        """
+        module = sys.modules[__name__]
+        script = tmp_path / "bad2.sh"
+        script.write_text(
+            "#!/usr/bin/env bash\nset -euo pipefail\ntrap 'false; true || true' EXIT\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(module, "SCRIPTS", [script])
+        bad = module._unresolved_actions()
+        assert bad, "第一条命令失败会中止处理器并改写退出码 —— 必须判为未加守卫"
