@@ -620,6 +620,21 @@ class TestLengthTruncatedAnswerIsAnnounced:
                 "done 事件报的回复与落库内容不一致：空回复时事件给的是原始空串"
             )
 
+    def test_blank_reply_is_identical_in_the_turn_response_and_in_the_store(
+        self, db: Database
+    ) -> None:
+        """一次性端点同理：**响应里**的 reply 也必须与落库一字不差。
+
+        这条钉住的是不变量（响应 == 落库）。它同时是「兜底只该有一处定义」的护栏：
+        响应、`done` 事件、落库三处若各写一遍 `reply.strip() or FALLBACK_REPLY`，
+        将来改兜底策略时就会有一处漂掉 —— 那正是上一条用例发现的那种矛盾。
+        """
+        for client in _client(db, ScriptedLLM(reply="")):
+            body = client.post("/api/assistant/turn", json={"message": "讲讲"}).json()
+            stored = client.get(f"/api/assistant/conversations/{body['conversation_id']}").json()
+            assert stored[-1]["content"] == FALLBACK_REPLY, "落库这一侧应当走兜底文案"
+            assert body["reply"] == stored[-1]["content"]
+
     def test_one_shot_turn_stays_quiet_when_finish_reason_is_stop(self, db: Database) -> None:
         llm = ScriptedLLM(finish_reason="stop")
         for client in _client(db, llm):

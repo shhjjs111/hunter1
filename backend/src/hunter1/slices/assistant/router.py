@@ -238,7 +238,7 @@ def build_router(
         )
         return TurnResponse(
             conversation_id=conversation_id,
-            reply=result.reply.strip() or FALLBACK_REPLY,
+            reply=_stored_reply(result.reply),
             iterations=result.iterations,
             truncated=result.truncated,
         )
