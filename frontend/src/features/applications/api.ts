@@ -28,6 +28,15 @@ export const STAGE_ORDER: ApplicationStage[] = [
   "withdrawn",
 ];
 
+/**
+ * 备注的长度上限 —— 与后端 `applications/schemas.MAX_NOTE_CHARS` 一致。
+ *
+ * 契约里带了这个上限（`StageUpdateRequest.note.maxLength`），但生成的类型只有**类型**、
+ * 取不到字面量，所以这里抄一份；测试拿契约快照逐条比对，抄错就红（与 ProfileEditor
+ * 的四个上限同一手法）。
+ */
+export const MAX_NOTE_CHARS = 2000;
+
 async function fetchApplications(): Promise<ApplicationList> {
   const { data, error, response } = await api.GET("/api/applications");
   if (error || !data) {
@@ -76,6 +85,39 @@ export function useChangeStage() {
             }
           : prev,
       );
+      void queryClient.invalidateQueries({ queryKey: ["applications"] });
+    },
+  });
+}
+
+/**
+ * 保存一条投递的备注。
+ *
+ * 端点与改阶段是同一个（`POST /applications/{id}/stage` 同时收 `stage` 与 `note`），
+ * 但**单开一个 mutation**：与改阶段共用一个时，两种操作的失败会落到同一个 `isError`
+ * 上 —— 用户改备注失败却看到「改阶段失败」，而先失败的那条的提示会被后一条顶掉。
+ * 请求体带上**当前**阶段（乐观锁要求整份状态一起提交）。
+ */
+export function useSaveNote() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      applicationId: string;
+      stage: ApplicationStage;
+      note: string;
+    }) => {
+      const { data, error, response } = await api.POST("/api/applications/{application_id}/stage", {
+        params: { path: { application_id: input.applicationId } },
+        // 空串按「清掉备注」提交（后端存 null，界面回到「—」）—— 否则留一个空字符串，
+        // 展示层 `note ?? "—"` 兜不住它，看起来像「有备注但是空的」。
+        body: { stage: input.stage, note: input.note || null },
+      });
+      if (error || !data) {
+        throw new Error(apiErrorMessage(error, "保存备注失败", response));
+      }
+      return data;
+    },
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
     },
   });

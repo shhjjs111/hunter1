@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import contract from "../../../../contracts/openapi.json";
 import { ApplicationsPage } from "./ApplicationsPage";
-import { STAGE_ORDER, type ApplicationList } from "./api";
+import { STAGE_ORDER, MAX_NOTE_CHARS, type ApplicationList } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -201,6 +201,90 @@ describe("ApplicationsPage 截断信号", () => {
     renderPage();
 
     expect(await screen.findByText("共 1 条")).toBeTruthy();
+  });
+});
+
+describe("ApplicationsPage 备注", () => {
+  // 备注是一列**可编辑**的文本。此前它只显示、没有任何填写入口：改阶段的请求把
+  // `item.note`（恒为 null）原样回传，于是那一列永远是「—」—— 用户看得到列名、
+  // 却没有任何地方能写进去。
+  function stubCapture() {
+    const posts: { url: string; body: Record<string, unknown> }[] = [];
+    let failPost = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : (input as Request).url;
+        if (methodOf(input, init) === "POST") {
+          const raw =
+            typeof input === "string"
+              ? String(init?.body ?? "")
+              : await (input as Request).clone().text();
+          posts.push({ url, body: JSON.parse(raw) });
+          if (failPost) {
+            return jsonResponse({ detail: "备注太长了" }, 422);
+          }
+          return jsonResponse({ application_id: "app1", stage: "applied" });
+        }
+        return jsonResponse(LIST);
+      }),
+    );
+    return { posts, fail: () => (failPost = true) };
+  }
+
+  it("敲完即可保存 —— 提交当前阶段与备注", async () => {
+    const { posts } = stubCapture();
+    renderPage();
+
+    const input = (await screen.findByLabelText(/的备注/)) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "约了下周三面试" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0].url).toContain("/stage");
+    expect(posts[0].body).toMatchObject({ stage: "applied", note: "约了下周三面试" });
+  });
+
+  it("没改过就不发请求（点一下不该产生一次写入）", async () => {
+    const { posts } = stubCapture();
+    renderPage();
+
+    const input = (await screen.findByLabelText(/的备注/)) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+
+    await act(async () => {});
+    expect(posts).toHaveLength(0);
+  });
+
+  it("保存失败时保留用户敲的内容（一次网络失败不该吃掉输入）", async () => {
+    const { fail } = stubCapture();
+    fail();
+    renderPage();
+
+    const input = (await screen.findByLabelText(/的备注/)) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "别丢了我" } });
+    fireEvent.blur(input);
+
+    await screen.findByText("备注太长了");
+    expect(input.value).toBe("别丢了我");
+  });
+
+  it("备注长度上限与契约一致", () => {
+    const noteSchema = (
+      contract as {
+        components: {
+          schemas: {
+            StageUpdateRequest: {
+              properties: { note: { anyOf?: { maxLength?: number }[] } };
+            };
+          };
+        };
+      }
+    ).components.schemas.StageUpdateRequest.properties.note;
+    // 契约里 `note` 是 anyOf（string | null），上限在 string 那一支上
+    const limit = noteSchema.anyOf?.find((branch) => branch.maxLength != null)?.maxLength;
+    expect(limit).toBe(MAX_NOTE_CHARS);
   });
 });
 

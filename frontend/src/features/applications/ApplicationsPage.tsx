@@ -1,7 +1,24 @@
 import { useRef, useState } from "react";
 
-import { Button, Card, EmptyState, ErrorNotice, PageHeader, Tag } from "../../shared/ui";
-import { STAGE_LABELS, STAGE_ORDER, useApplications, useChangeStage, useDeleteApplication } from "./api";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorNotice,
+  PageHeader,
+  Tag,
+  fieldClass,
+} from "../../shared/ui";
+import {
+  MAX_NOTE_CHARS,
+  STAGE_LABELS,
+  STAGE_ORDER,
+  useApplications,
+  useChangeStage,
+  useDeleteApplication,
+  useSaveNote,
+  type ApplicationSummary,
+} from "./api";
 
 /**
  * 把 ISO 时间戳按**本地时区**格式化为 YYYY-MM-DD。
@@ -22,6 +39,7 @@ export function ApplicationsPage() {
   const applications = useApplications();
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
+  const saveNote = useSaveNote();
 
   // 列表有固定上限（后端 `LIST_LIMIT`）。用响应里的 `total` / `has_more` 显示真实
   // 条数并提示截断 —— 拿 `items.length` 冒充「共 N 条」会让用户以为投递只有 200 条。
@@ -55,6 +73,51 @@ export function ApplicationsPage() {
       delete next[applicationId];
       return next;
     });
+  }
+
+  // ---- 备注 ----
+  //
+  // 备注是一列**可编辑**的文本（此前只显示、没有任何填写入口：改阶段的请求把
+  // `item.note`（恒为 null）原样回传，于是那一列永远是「—」）。草稿与提交规则：
+  // 敲完回车或点到别处就保存；**没改过不发请求**；失败时**保留用户输入**。
+  const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
+  // 每行最近一次提交的备注：onSuccess 只有在草稿仍是这一次提交的值时才清掉它 ——
+  // 否则会把用户随后敲的新内容一起抹掉（与阶段草稿的「最新意图」同一考量）。
+  const latestNote = useRef<Record<string, string>>({});
+
+  function clearNoteDraft(applicationId: string) {
+    delete latestNote.current[applicationId];
+    setNoteDraft((prev) => {
+      const next = { ...prev };
+      delete next[applicationId];
+      return next;
+    });
+  }
+
+  function commitNote(item: ApplicationSummary) {
+    const draft = noteDraft[item.id];
+    if (draft === undefined) {
+      return; // 这一行没动过
+    }
+    const note = draft.trim();
+    if (note === (item.note ?? "")) {
+      clearNoteDraft(item.id); // 又改回原样 → 不发请求，草稿交还给服务端值
+      return;
+    }
+    latestNote.current[item.id] = note;
+    saveNote.mutate(
+      { applicationId: item.id, stage: item.stage, note },
+      {
+        onSuccess: () => {
+          if (latestNote.current[item.id] === note) {
+            clearNoteDraft(item.id);
+          }
+        },
+        // 失败：**留着草稿**。用户刚敲的字不能因为一次网络失败就消失（与「保存失败时
+        // 密钥输入框不清空」同一个取舍）；库里那份没被改动，错误另有 ErrorNotice，
+        // 用户再触发一次提交即可重试。
+      },
+    );
   }
 
   return (
@@ -146,7 +209,26 @@ export function ApplicationsPage() {
                       </select>
                     </td>
                     <td className="px-4 py-2 text-muted">{formatDate(item.updated_at)}</td>
-                    <td className="px-4 py-2 text-muted">{item.note ?? "—"}</td>
+                    <td className="px-4 py-2">
+                      <input
+                        className={`w-full min-w-40 ${fieldClass}`}
+                        aria-label={`「${item.title}」（${item.company}）的备注`}
+                        maxLength={MAX_NOTE_CHARS}
+                        placeholder="加一条备注…"
+                        value={noteDraft[item.id] ?? item.note ?? ""}
+                        onChange={(event) =>
+                          setNoteDraft((prev) => ({ ...prev, [item.id]: event.target.value }))
+                        }
+                        // 失焦即保存（回车也走这里：blur 只有一个提交入口，避免两处各写一遍）
+                        onBlur={() => commitNote(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    </td>
                     <td className="px-4 py-2 text-right">
                       <Button
                         onClick={() => {
@@ -171,15 +253,17 @@ export function ApplicationsPage() {
         </Card>
       )}
 
-      {/* 阶段变更 / 删除的失败是**另一次操作**的错误，与列表状态无关，单独列在这里。 */}
+      {/* 阶段变更 / 删除 / 备注保存的失败是**另一次操作**的错误，与列表状态无关，单独列在这里。
+          三者的提示分开渲染：合成一条会让「改备注失败」看起来像「改阶段失败」。 */}
       {changeStage.isError && <ErrorNotice message={(changeStage.error as Error).message} />}
+      {saveNote.isError && <ErrorNotice message={(saveNote.error as Error).message} />}
       {remove.isError && <ErrorNotice message={(remove.error as Error).message} />}
 
       <p className="mt-4 text-xs text-muted">
         投递记录里的公司名与岗位名是<b>下单时刻的快照</b> —— 岗位被重抓或改名时，
         这里仍保留当时的说法。
       </p>
-      <Tag>只读提示：阶段可直接在下拉框里改，删除不可撤销。</Tag>
+      <Tag>只读提示：阶段可直接在下拉框里改；备注敲完回车（或点到别处）即保存；删除不可撤销。</Tag>
     </>
   );
 }
