@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -118,8 +120,15 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     # 解压单独一个 try 块：这里的异常形状是**开放集合**（见下面的 catch-all），
     # 而上面下载/建目录的异常另有语义（写盘失败）—— 混在一起会让一个下载期的
     # TypeError 被说成「包坏了」。
+    #
+    # `ok` + `finally` 负责**失败后的收拾**：半解压目录会让下一次更新看到一个
+    # 「已存在但残缺」的版本目录（调用方据此以为该版本已经就位），包也会一直占着
+    # 磁盘。放在 `finally` 里而不是每个 handler 里，是为了让**所有**失败路径（含
+    # 上面那串 catch-all，以及将来新加的形状）都必然收拾一遍，且不改变任何错误码。
+    ok = False
     try:
         _extract_within(archive, extracted)
+        ok = True
     except (DownloadError, ValueError):
         raise
     except zipfile.BadZipFile as exc:
@@ -149,7 +158,31 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
         # 归到「包不对劲」是唯一有行动意义的结论；上面那些更精确的 handler 先接住
         # 常见形状，保持各自的错误码不变。
         raise DownloadError("archive_corrupt", str(exc)) from exc
+    finally:
+        if not ok:
+            _discard_partial(archive, extracted)
     return extracted
+
+
+def _discard_partial(archive: Path, extracted: Path) -> None:
+    """解压失败后的收拾：删掉半成品目录与下载下来的包。
+
+    不清理的后果有两层：`dest_dir/<版本>/` 留下一个**残缺但存在**的目录，而
+    「目录已存在」正是调用方判断「这个版本已经就位」的依据（见模块 docstring 的
+    「解压即用」流程）；另外那个 zip 会一直占着磁盘，且用户看不出它已无用。
+
+    **尽力而为**：失败原因本身可能就是磁盘满/权限不足，清理同样可能失败。清理失败
+    只留一句说明到 stderr，绝不抛出 —— 调用方要的是「为什么更新失败」，把一个清理
+    错误盖上去只会让真正的原因消失。
+    """
+    for target in (extracted, archive):
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink()
+        except OSError as exc:
+            print(f"[update] 清理残留失败：{target}（{exc}）", file=sys.stderr)
 
 
 def _extract_within(archive: Path, dest: Path) -> None:

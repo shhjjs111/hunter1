@@ -376,6 +376,61 @@ class TestPrepareUpdate:
         assert isinstance(excinfo.value.__cause__, zlib.error)
 
 
+class TestFailureCleanup:
+    """失败的更新不许留下半成品：残缺的版本目录会让「下一次更新」以为它已就位。"""
+
+    def _status(self, source: FakeSource):  # type: ignore[no-untyped-def]
+        return check_for_update(source=source, url="u", current_version="0.0.1", platform="win32")
+
+    def test_corrupt_archive_leaves_no_partial_directory(self, tmp_path: Path) -> None:
+        """压缩数据损坏时 `extractall` 会**先写下一部分再炸** —— 残留必须清掉。
+
+        这是最能说明问题的一条：不清理的话 `updates/0.2.0/` 会带着半个包留在磁盘上，
+        而「这个目录存在」正是用户判断「新版本已经下好了」的依据。
+        """
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=_corrupt_deflate_bytes())
+        dest = tmp_path / "updates"
+
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(source=source, status=self._status(source), dest_dir=dest)
+
+        assert excinfo.value.code == "archive_corrupt"
+        assert not (dest / "0.2.0").exists(), "半解压目录留下了"
+        assert not (dest / "hunter1-0.2.0.zip").exists(), "坏包留下了"
+
+    def test_non_zip_payload_is_also_discarded(self, tmp_path: Path) -> None:
+        """不是 zip（镜像返 HTML）：目录都没建，但下载下来的包要清掉。"""
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=b"<html>nope</html>")
+        dest = tmp_path / "updates"
+
+        with pytest.raises(DownloadError):
+            prepare_update(source=source, status=self._status(source), dest_dir=dest)
+
+        assert not (dest / "hunter1-0.2.0.zip").exists()
+
+    def test_rejected_archive_is_discarded_too(self, tmp_path: Path) -> None:
+        """被闸门拒绝（ValueError 那一档）同样收拾 —— 错误码不受清理影响。"""
+        source = FakeSource(manifest=_manifest("0.2.0"), payload=_zip_bytes("../evil.txt"))
+        dest = tmp_path / "updates"
+
+        with pytest.raises(ValueError) as excinfo:
+            prepare_update(source=source, status=self._status(source), dest_dir=dest)
+
+        assert "evil.txt" in str(excinfo.value)
+        assert not (dest / "hunter1-0.2.0.zip").exists()
+        assert not (dest / "0.2.0").exists()
+
+    def test_success_still_keeps_the_archive(self, tmp_path: Path) -> None:
+        """成功路径**不许**被清理逻辑波及：包要留着（用户自己覆盖过去）。"""
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        dest = tmp_path / "updates"
+
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+
+        assert extracted.is_dir()
+        assert (dest / "hunter1-0.2.0.zip").is_file()
+
+
 def test_status_is_a_plain_dataclass() -> None:
     """状态对象要能直接打印/序列化，方便 CLI 与将来的界面复用。"""
     from dataclasses import asdict, is_dataclass
