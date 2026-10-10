@@ -47,11 +47,23 @@ export function AssistantPage() {
   // 窗口小于一个宏任务、人手点不到，但**正确性不该依赖调度时序** —— 这里改为在
   // appendAssistantText 里同步置位，与渲染无关。
   const sawAssistantText = useRef(false);
+  // 本轮助手正文的分片缓冲：**数组收集**、需要时 join，而不是每片都做一次
+  // `last.content + chunk` —— 长回答（几千片）下后者每片都把累积字符串整体复制
+  // 一遍，总代价 O(n²)。数组 push 是摊还 O(1)，join 只在真正要渲染时做。
+  const assistantChunks = useRef<string[]>([]);
+  // 组件是否仍挂载。卸载后到达的流回调 / `send()` 续点一律写不进去 ——
+  // 见下面卸载 effect 的注释。
+  const alive = useRef(true);
 
-  // 卸载时中止在飞的流：否则回调会继续对已卸载的组件 setState
-  // （切走路由后流还在跑，白耗流量也白改状态）。
+  // 卸载处理：中止在飞的流，并置「已卸载」标记。
+  //
+  // 只 abort() 不够：abort 停的是网络，而流的回调与 `send()` 的异步续点仍会继续跑
+  // —— 它们会继续对**已卸载**的组件 setState（React 18+ 静默忽略，但那是「碰巧
+  // 不炸」，正确性不该建在库行为上），`done` 里还会顺带触发一次 assistant 重取。
+  // 所以除了 abort，还要用 alive 标记兜住这些写入与副作用。
   useEffect(() => {
     return () => {
+      alive.current = false;
       abortRef.current?.abort();
     };
   }, []);
@@ -94,6 +106,7 @@ export function AssistantPage() {
     setNotice(null);
     setLive([{ role: "user", content: text }]);
     sawAssistantText.current = false; // 新一轮：清掉上一轮的判断依据
+    assistantChunks.current = []; // 新一轮：清空分片缓冲
     // 记下「发问那一刻」历史里已有的同文本条数：以后比它多一条 = 本轮落库了。
     // 历史还没加载时这里是 0 —— 没关系，`turnSettled` 会挡住「历史随后到达」的误判。
     setTurn({ text, seen: countUserMessages(history, text) });
@@ -112,20 +125,30 @@ export function AssistantPage() {
     // 不记的话：丢一条 text 事件 = 回答缺段，而界面把它当完整结果呈现
     // （后端其实按完整回答落库了，缺的只是这一轮屏幕上的显示）。
     let dropped = false;
+    // 本轮 done 事件里是否给出了「回答被截断/降级」的提示。它是**更严重**的信号
+    // （回答不完整且已按完整结果落库），不能被「丢块」提示盖掉 —— 见下面的提示优先级。
+    let truncatedNotice = false;
 
     try {
       await streamSse(
         apiUrl("/api/assistant/stream"),
         { message: text, conversation_id: currentId ?? "" },
         (event) => {
+          // 卸载后到达的事件一律忽略：不再 setState，也不再触发 done 里的重取。
+          if (!alive.current) {
+            return;
+          }
           if (event.type === "text") {
             appendAssistantText(String(event.text ?? ""));
           } else if (event.type === "tool_start") {
+            // 工具气泡之后的助手正文会另起一个气泡 —— 分片缓冲跟着重开。
+            assistantChunks.current = [];
             setLive((prev) => [
               ...prev,
               { role: "tool", content: `正在调用 ${String(event.name)}…` },
             ]);
           } else if (event.type === "tool_end") {
+            assistantChunks.current = [];
             const ok = event.ok === true;
             setLive((prev) => [
               ...prev,
@@ -150,6 +173,7 @@ export function AssistantPage() {
             // L7：截断/降级是「回答不完整」的信号，不能当正常结果静默呈现。
             const truncated = event.truncated === true;
             const degraded = event.degraded === true;
+            truncatedNotice = truncated || degraded;
             setNotice(
               truncated
                 ? "回答达到轮次上限被截断，内容可能不完整。"
@@ -188,8 +212,16 @@ export function AssistantPage() {
         setError(exc instanceof Error ? exc.message : String(exc));
       }
     } finally {
-      setStreaming(false);
+      // 卸载后不写状态（见 alive 的注释）；abortRef 的清理本身无害。
+      if (alive.current) {
+        setStreaming(false);
+      }
       abortRef.current = null;
+    }
+
+    // 卸载后到此为止：不再写任何状态，也不再动输入框。
+    if (!alive.current) {
+      return;
     }
 
     // 用户中止了本轮（且没等到 done）：半截回答留在屏幕上是对的（他还要看），
@@ -204,11 +236,15 @@ export function AssistantPage() {
       // 不提示的话，半截回答会被当成本轮正常结果 —— 用户以为助手说完了，
       // 而后端其实没落库（落库发生在 yield done 之前）。这属于「静默截断」。
       setNotice("连接中断：回答可能不完整，且本轮没有保存。");
-    } else if (dropped) {
+    } else if (dropped && !truncatedNotice) {
       // 整轮正常结束（收到 done），但中途有 SSE 块没能解析出来 —— 屏幕上的回答
       // 少了那一段，却被当成本轮完整结果呈现。必须点破，否则与上面刚立的
       // 「不许静默截断」规矩自相矛盾。后端已按完整回答落库，所以只提示、
       // **不**把原文还回输入框（还回去反而像「这句没发出去」）。
+      //
+      // 优先级：**截断/降级提示比「丢块」更严重**（前者说明整段回答本身就不完整，
+      // 后者只是屏幕上少了一段），所以 done 已经报了截断时不要再被这条盖掉 ——
+      // 反过来（只有丢块、没有截断）仍然要报。
       setNotice("连接异常：有内容未能解析，这段回答可能不完整。");
     }
 
@@ -228,15 +264,20 @@ export function AssistantPage() {
     if (chunk.trim() !== "") {
       sawAssistantText.current = true;
     }
+    // 分片先进数组缓冲（push 摊还 O(1)），再一次性 join 出正文 —— 不是每片都做一次
+    // `last.content + chunk` 的整串复制（那是 O(n²)）。push 放在 updater **之外**：
+    // setLive 的 updater 必须纯净（StrictMode 下会被调用两次，写进去就会翻倍）。
+    assistantChunks.current.push(chunk);
+    const content = assistantChunks.current.join("");
     setLive((prev) => {
       const last = prev[prev.length - 1];
       // 末尾已是助手气泡就继续追加；否则新开一个。原先这里还判了 `!last.sealed`，
       // 而 `sealed` 全仓没有任何写入点（恒为 undefined）—— 死字段，
       // 留着会让人以为存在「封口后另起气泡」的行为。已删。
       if (last && last.role === "assistant") {
-        return [...prev.slice(0, -1), { ...last, content: last.content + chunk }];
+        return [...prev.slice(0, -1), { ...last, content }];
       }
-      return [...prev, { role: "assistant", content: chunk }];
+      return [...prev, { role: "assistant", content }];
     });
   }
 
@@ -266,6 +307,16 @@ export function AssistantPage() {
             新对话
           </Button>
         </div>
+        {/* 会话列表的加载/错误态：读失败与「没有会话」必须在视觉上分得开 ——
+            空列表看起来就是「一条会话都没有」，用户不会想到去重试（对齐
+            ApplicationsPage 对「失败 ≠ 空」的处理）。firstLoad 才显示加载态；
+            翻页有 placeholderData 兜底，不会闪。 */}
+        {conversations.isLoading && <p className="px-2 text-sm text-muted">加载会话列表…</p>}
+        {conversations.isError && (
+          <div className="px-2">
+            <ErrorNotice message={(conversations.error as Error).message} />
+          </div>
+        )}
         <ul className="space-y-1">
           {(conversations.data?.items ?? []).map((item) => (
             <li key={item.id}>

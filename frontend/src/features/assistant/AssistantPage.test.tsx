@@ -803,3 +803,200 @@ describe("AssistantPage 会话列表分页", () => {
     expect(screen.queryByText(/共 /)).toBeNull();
   });
 });
+
+describe("AssistantPage 提示优先级（截断比丢块严重）", () => {
+  /**
+   * 回归护栏：一轮里**同时**发生「done 说截断」与「有块没解析出来」时，两条提示
+   * 不能互相覆盖 —— 截断说明整段回答本身就不完整（且已按完整结果落库），比「屏幕
+   * 上少了一段」更严重，必须胜出。原先丢块分支无条件 setNotice，会把 done 刚设的
+   * 截断提示盖掉。
+   */
+  it("done 报了截断时，丢块提示不覆盖截断提示", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          const chunks = [
+            `data: ${JSON.stringify({ type: "text", text: REPLY })}\n\n`,
+            "data: {坏掉的\n\n", // 这一段没能解析 —— 回答因此缺了一段
+            `data: ${JSON.stringify({ type: "done", conversation_id: "c1", truncated: true })}\n\n`,
+          ];
+          let i = 0;
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                if (i >= chunks.length) {
+                  controller.close();
+                  return;
+                }
+                controller.enqueue(encoder.encode(chunks[i++]));
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        if (url.includes("/api/assistant/conversations/")) {
+          return jsonResponse([]);
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "你好" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    expect(await screen.findByText(/截断/)).toBeTruthy();
+    expect(screen.queryByText(/有内容未能解析/)).toBeNull();
+    warn.mockRestore();
+  });
+});
+
+describe("AssistantPage 卸载后不再更新", () => {
+  /**
+   * 回归护栏：卸载时只 `abort()` 不够 —— abort 停的是网络，流的回调与 `send()` 的
+   * 异步续点仍会继续跑，对已卸载的组件 setState，并在 `done` 里触发一次 assistant
+   * 重取。React 18+ 会静默忽略这些 setState（本仓实测：不产生任何警告），所以断言
+   * 取那个**可观察**的副作用 —— 卸载后到达的 done 不该再触发 `invalidateQueries`。
+   */
+  it("卸载后到达的 done 不再触发重取（abort 只停网络）", async () => {
+    let push!: (chunk: string) => void;
+    let close!: () => void;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+        close = () => controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          return new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          });
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+    });
+    // 只观察不改行为：refresh() 是这一轮里唯一会调 invalidateQueries 的地方。
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AssistantPage />
+      </QueryClientProvider>,
+    );
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "在吗" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await screen.findByRole("button", { name: "中止" });
+
+    view.unmount(); // 卸载：只 abort；假流不理会 abort，回调仍会继续跑
+
+    // 卸载之后到达的 done —— 修复前会 setCurrentId / setPage 并 refresh()
+    await act(async () => {
+      push(`data: ${JSON.stringify({ type: "done", conversation_id: "c1" })}\n\n`);
+      close();
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("AssistantPage 会话列表的加载/错误态", () => {
+  /**
+   * 回归护栏：会话列表原先没有加载/错误状态 —— 读失败或正在读时侧栏只是一个空
+   * 列表，看起来就是「一条会话都没有」，用户不会想到去重试（对齐 ApplicationsPage
+   * 对「失败 ≠ 空」的处理）。
+   */
+  it("会话列表加载中给出加载态（不把「读着」当成「没有会话」）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})), // 永不返回
+    );
+    renderPage();
+    expect(await screen.findByText("加载会话列表…")).toBeDefined();
+  });
+
+  it("会话列表读取失败时给出错误提示（不把读失败当成「没有会话」）", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ detail: "会话列表炸了" }, 503);
+        }
+        return jsonResponse({});
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText(/加载会话失败/)).toBeDefined();
+  });
+});
+
+describe("AssistantPage 大量分片拼接", () => {
+  /**
+   * 流式正文用「数组收集 + join 拼」而不是每片 `content + chunk`（后者 O(n²)）。
+   * 这条钉的是拼接的**正确性**：几百片既不能丢，也不能被拆成多个气泡。
+   */
+  it("几百个分片拼成一整段，不丢片", async () => {
+    const segments = Array.from({ length: 200 }, (_, i) => `p${i}-`);
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          let i = 0;
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                if (i < segments.length) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({ type: "text", text: segments[i++] })}\n\n`,
+                    ),
+                  );
+                  return;
+                }
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ type: "done", conversation_id: "c1" })}\n\n`),
+                );
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        if (url.includes("/api/assistant/conversations/")) {
+          return jsonResponse([]);
+        }
+        if (url.includes("/api/assistant/conversations")) {
+          return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "在吗" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    expect(await screen.findByText(segments.join(""), {}, { timeout: 5000 })).toBeTruthy();
+  });
+});
