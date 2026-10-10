@@ -24,15 +24,12 @@ class ApplicationStore:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    def upsert(self, application: Application) -> None:
-        """存在即更新，否则插入（按**主键**）。"""
-        self._db.applications().upsert(application)
-
     def insert_for_job(self, application: Application) -> Application:
         """插入一条投递；该岗位已有记录时返回既有的那条（并发下也是幂等的）。
 
         竞态兜底在数据库（`UNIQUE(job_id)`）—— 见 `platform/db/applications.py`
-        的 `insert_for_job`。`upsert` 按主键判断，挡不住「两个请求各生成新 uuid」。
+        的 `insert_for_job`。平台仓储的 `upsert` 按主键判断，挡不住「两个请求各生成
+        新 uuid」，所以生产路径不走它。
         """
         return self._db.applications().insert_for_job(application)
 

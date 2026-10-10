@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from hunter1.domain.models import Application, ApplicationStage, Job
 from hunter1.platform.db import Database
+from hunter1.platform.db.applications import SqliteApplicationRepository
 from hunter1.slices.applications.router import build_router
 from hunter1.slices.applications.schemas import MAX_NOTE_CHARS
 from hunter1.slices.applications.store import ApplicationStore
@@ -37,6 +38,16 @@ def db(tmp_path: Path) -> Database:
 @pytest.fixture()
 def store(db: Database) -> ApplicationStore:
     return ApplicationStore(db)
+
+
+@pytest.fixture()
+def seed(db: Database) -> SqliteApplicationRepository:
+    """播种用：直接拿**平台仓储**。
+
+    切片门面只暴露生产真正走的写路径（`insert_for_job`）—— 播种要能写任意 id 和
+    `updated_at`（排序用例靠它），那是仓储的能力，不该为了测试留在门面上。
+    """
+    return db.applications()
 
 
 @pytest.fixture()
@@ -86,12 +97,15 @@ class TestListEndpoint:
         assert response.json() == {"items": [], "total": 0, "has_more": False}
 
     def test_lists_recent_first_with_shape(
-        self, client: TestClient, store: ApplicationStore
+        self,
+        client: TestClient,
+        store: ApplicationStore,
+        seed: SqliteApplicationRepository,
     ) -> None:
-        store.upsert(
+        seed.upsert(
             _application(id="old", job_id="j-old", updated_at=datetime(2026, 9, 2, tzinfo=UTC))
         )
-        store.upsert(
+        seed.upsert(
             _application(
                 id="new",
                 job_id="j-new",
@@ -111,14 +125,18 @@ class TestListEndpoint:
         assert first["job_id"] == "j-new"
 
     def test_truncation_is_reported_not_silent(
-        self, client: TestClient, store: ApplicationStore, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient,
+        store: ApplicationStore,
+        monkeypatch: pytest.MonkeyPatch,
+        seed: SqliteApplicationRepository,
     ) -> None:
         """超过上限时必须说「还有更多」——否则第 N+1 条起永久不可见且看不出来。"""
         import hunter1.slices.applications.router as router_module
 
         monkeypatch.setattr(router_module, "LIST_LIMIT", 2)
         for index in range(3):
-            store.upsert(
+            seed.upsert(
                 _application(
                     id=f"a{index}",
                     job_id=f"j{index}",
@@ -132,8 +150,10 @@ class TestListEndpoint:
 
 
 class TestStageEndpoint:
-    def test_advances_and_persists(self, client: TestClient, store: ApplicationStore) -> None:
-        store.upsert(_application(id="a1"))
+    def test_advances_and_persists(
+        self, client: TestClient, store: ApplicationStore, seed: SqliteApplicationRepository
+    ) -> None:
+        seed.upsert(_application(id="a1"))
         response = client.post("/api/applications/a1/stage", json={"stage": "interview"})
         assert response.status_code == 200
         assert response.json() == {"application_id": "a1", "stage": "interview"}
@@ -142,9 +162,11 @@ class TestStageEndpoint:
         assert loaded.stage is ApplicationStage.INTERVIEW
         assert loaded.updated_at == NOW
 
-    def test_unknown_stage_is_422(self, client: TestClient, store: ApplicationStore) -> None:
+    def test_unknown_stage_is_422(
+        self, client: TestClient, store: ApplicationStore, seed: SqliteApplicationRepository
+    ) -> None:
         """`stage` 现在是枚举类型 —— 非法值由请求体校验拒为 422（而非路由手工判 400）。"""
-        store.upsert(_application(id="a1"))
+        seed.upsert(_application(id="a1"))
         response = client.post("/api/applications/a1/stage", json={"stage": "bogus"})
         assert response.status_code == 422
 
@@ -153,14 +175,18 @@ class TestStageEndpoint:
         assert response.status_code == 404
 
     def test_deleted_mid_flight_is_not_resurrected(
-        self, client: TestClient, store: ApplicationStore, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient,
+        store: ApplicationStore,
+        monkeypatch: pytest.MonkeyPatch,
+        seed: SqliteApplicationRepository,
     ) -> None:
         """get 与写入之间记录被删掉 → 404，且**不把记录插回去**。
 
         原实现是 `get` 后 `upsert`，而 upsert 见不到行就 INSERT —— 用户刚删掉的记录
         会在这次（可能来自另一个标签页的）阶段变更里悄悄复活，看起来像「删不掉」。
         """
-        store.upsert(_application(id="a1"))
+        seed.upsert(_application(id="a1"))
 
         original = store.get
 
@@ -184,6 +210,7 @@ class TestStageUpdateConflict:
         db: Database,
         store: ApplicationStore,
         monkeypatch: pytest.MonkeyPatch,
+        seed: SqliteApplicationRepository,
     ) -> None:
         """读完之后、写之前被别处改过 → 409，并且**不把别人的改动盖掉**。
 
@@ -192,7 +219,7 @@ class TestStageUpdateConflict:
         """
         import hunter1.slices.applications.router as router_module
 
-        store.upsert(_application(id="a1", stage=ApplicationStage.APPLIED))
+        seed.upsert(_application(id="a1", stage=ApplicationStage.APPLIED))
 
         moment = [NOW]
         app = FastAPI()
@@ -230,9 +257,11 @@ class TestStageUpdateConflict:
         assert loaded.stage is ApplicationStage.INTERVIEW, "别人的改动不许被静默盖掉"
         assert loaded.note == "别处改的"
 
-    def test_overlong_note_is_422(self, client: TestClient, store: ApplicationStore) -> None:
+    def test_overlong_note_is_422(
+        self, client: TestClient, store: ApplicationStore, seed: SqliteApplicationRepository
+    ) -> None:
         """备注有上限 —— 它是用户手写的自由文本，落进没有列宽约束的 `Text` 列。"""
-        store.upsert(_application(id="a1"))
+        seed.upsert(_application(id="a1"))
         response = client.post(
             "/api/applications/a1/stage",
             json={"stage": "interview", "note": "备" * (MAX_NOTE_CHARS + 1)},
@@ -323,9 +352,12 @@ class TestApplyEndpoint:
 
 class TestDeleteEndpoint:
     def test_delete_returns_204_and_removes(
-        self, client: TestClient, store: ApplicationStore
+        self,
+        client: TestClient,
+        store: ApplicationStore,
+        seed: SqliteApplicationRepository,
     ) -> None:
-        store.upsert(_application(id="a1"))
+        seed.upsert(_application(id="a1"))
         response = client.delete("/api/applications/a1")
         assert response.status_code == 204
         assert store.get("a1") is None
