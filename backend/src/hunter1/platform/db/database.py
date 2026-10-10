@@ -105,11 +105,6 @@ class Database:
             # 不能静默 —— 真触发了要有迹可循，否则将来排查「消息顺序怎么变了」
             # 时没有任何线索。
             repaired = self._repair_duplicate_message_sequences(connection)
-            if repaired:
-                print(
-                    f"检测到 {repaired} 个会话的消息序号重复，已重排并补建唯一索引。",
-                    file=sys.stderr,
-                )
             connection.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_conv_messages_conv_seq "
@@ -120,6 +115,15 @@ class Database:
             # 它与上面的唯一索引同列冗余 —— 多一份索引既占空间也拖慢写入，且两个索引
             # 描述同一组列会让读代码的人困惑）。IF EXISTS 兼顾从未建过它的库。
             connection.execute(text("DROP INDEX IF EXISTS ix_conv_messages_conv_seq"))
+
+            # 报「已重排并补建唯一索引」必须放在**索引真的建成之后**。提前打印的话，
+            # 万一建索引失败，日志已经宣称成功了 —— 而这条日志正是将来排查
+            # 「消息顺序怎么变了」的唯一线索，说假话比不说更坏。
+            if repaired:
+                print(
+                    f"检测到 {repaired} 个会话的消息序号重复，已重排并补建唯一索引。",
+                    file=sys.stderr,
+                )
 
             # 「一个岗位至多一条投递」同样必须由数据库保证（`applications/service.py`
             # 的先读后写在并发下失效：两个请求都读到空、各插一条）。老库里可能已经
