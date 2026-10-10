@@ -19,6 +19,11 @@ from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db import Database
 from hunter1.platform.db.settings import LLM_KEY
 from hunter1.slices.settings.router import build_router
+from hunter1.slices.settings.schemas import (
+    MAX_API_KEY_CHARS,
+    MAX_BASE_URL_CHARS,
+    MAX_MODEL_CHARS,
+)
 from hunter1.slices.settings.store import SettingsStore
 
 
@@ -129,6 +134,25 @@ class TestSaveSettings:
             assert first["loc"][0] == "body"
             assert "http(s)" in first["msg"]
             assert db.settings().get_llm() is None  # 没有落库
+
+    def test_overlong_fields_are_422_and_not_stored(self, db: Database) -> None:
+        """三个字段都有长度上限 —— 它们既落进配置库，又**原样**带去请求上游。
+
+        没有上限时，一次手滑粘贴（把整份密钥/配置文件贴进输入框）就能把巨量文本存进
+        配置，而且之后每次请求都带着它。这里用**超过上限一个字符**证明边界真的落在
+        阈值上（不是随手填个大数），并且断言一个都没落库。
+        """
+        over_limit = {
+            "base_url": "https://" + "a" * MAX_BASE_URL_CHARS,
+            "model": "m" * (MAX_MODEL_CHARS + 1),
+            "api_key": "k" * (MAX_API_KEY_CHARS + 1),
+        }
+        for client in _client(db):
+            for field, value in over_limit.items():
+                response = client.put("/api/settings", json={**FORM, field: value})
+                assert response.status_code == 422, f"{field} 超长没有被拒"
+                assert response.json()["detail"][0]["loc"][-1] == field
+            assert db.settings().get_llm() is None  # 一个都没落库
 
 
 class TestConnectionProbe:

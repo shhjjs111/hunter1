@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,12 +18,29 @@ from fastapi.testclient import TestClient
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
 from hunter1.slices.jobs.router import build_router
+from hunter1.slices.jobs.schemas import JobSummary
 from hunter1.slices.jobs.store import JobStore
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 FULL_A = "a" * 32
 FULL_B = "a" * 8 + "b" * 24
 FULL_C = "c" * 32
+
+
+def test_capture_status_is_a_real_enum_in_the_contract() -> None:
+    """契约里必须是**真 enum**，不是裸 `string`。
+
+    裸 `str` 时前端只能维护一份手抄的取值表，取值一变两边就漂 ——
+    `applications/schemas.py` 的 `stage` 早就用枚举，注释里也写明了理由，jobs 这边
+    原先漏了。这条读的是**契约本身**（Pydantic 生成给 OpenAPI 的那份 schema），
+    所以把字段改回 `str` 会直接红。
+    """
+    schema = JobSummary.model_json_schema()
+    rendered = json.dumps(schema["properties"]["capture_status"])
+    assert "CaptureStatus" in rendered, f"capture_status 在契约里不是 enum：{rendered}"
+
+    values = schema["$defs"]["CaptureStatus"]["enum"]
+    assert set(values) == {"unknown", "pending", "complete", "failed"}, values
 
 
 def _seed(db: Database) -> None:

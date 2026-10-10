@@ -143,6 +143,17 @@
         "title": "CandidateProfile",
         "type": "object"
       },
+      "CaptureStatus": {
+        "description": "岗位详情的抓取状态。",
+        "enum": [
+          "unknown",
+          "pending",
+          "complete",
+          "failed"
+        ],
+        "title": "CaptureStatus",
+        "type": "string"
+      },
       "ConnectionTestResponse": {
         "description": "连通性探测的结果 —— **有类型的响应**，不是裸 dict。\n\n裸 `dict[str, str]` 会让 OpenAPI 退化成 `additionalProperties: {type: string}`\n（契约里看不出有什么字段），前端只能靠魔法值判断：`probe.data.ok === \"1\"`。\n本仓库其余 5 个切片所有端点都有类型，唯独这里漏了（AGENTS.md「响应要有类型」）。\n\n`ok` 用 **bool** 而不是 \"1\"/\"0\"：字符串状态码有两个毛病 —— 前端得写\n`=== \"1\"` 这种依赖约定的比较；契约里也说不清 `ok` 到底有哪些取值。",
         "properties": {
@@ -341,8 +352,7 @@
         "description": "岗位详情（列表项 + JD 正文）。",
         "properties": {
           "capture_status": {
-            "title": "Capture Status",
-            "type": "string"
+            "$ref": "#/components/schemas/CaptureStatus"
           },
           "city": {
             "anyOf": [
@@ -462,8 +472,7 @@
         "description": "岗位列表项。",
         "properties": {
           "capture_status": {
-            "title": "Capture Status",
-            "type": "string"
+            "$ref": "#/components/schemas/CaptureStatus"
           },
           "city": {
             "anyOf": [
@@ -643,14 +652,17 @@
         "properties": {
           "api_key": {
             "default": "",
+            "maxLength": 512,
             "title": "Api Key",
             "type": "string"
           },
           "base_url": {
+            "maxLength": 2048,
             "title": "Base Url",
             "type": "string"
           },
           "model": {
+            "maxLength": 200,
             "title": "Model",
             "type": "string"
           }

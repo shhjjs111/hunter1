@@ -338,6 +338,12 @@ export interface components {
             summary: string;
         };
         /**
+         * CaptureStatus
+         * @description 岗位详情的抓取状态。
+         * @enum {string}
+         */
+        CaptureStatus: "unknown" | "pending" | "complete" | "failed";
+        /**
          * ConnectionTestResponse
          * @description 连通性探测的结果 —— **有类型的响应**，不是裸 dict。
          *
@@ -444,8 +450,7 @@ export interface components {
          * @description 岗位详情（列表项 + JD 正文）。
          */
         JobDetail: {
-            /** Capture Status */
-            capture_status: string;
+            capture_status: components["schemas"]["CaptureStatus"];
             /** City */
             city?: string | null;
             /** Company */
@@ -486,8 +491,7 @@ export interface components {
          * @description 岗位列表项。
          */
         JobSummary: {
-            /** Capture Status */
-            capture_status: string;
+            capture_status: components["schemas"]["CaptureStatus"];
             /** City */
             city?: string | null;
             /** Company */

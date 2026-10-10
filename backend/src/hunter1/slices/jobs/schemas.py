@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from hunter1.domain.models import Job
+from hunter1.domain.models import CaptureStatus, Job
 
 
 class JobSummary(BaseModel):
@@ -23,7 +23,10 @@ class JobSummary(BaseModel):
     city: str | None = None
     match_score: int | None = None
     source: str
-    capture_status: str
+    #: 用 `CaptureStatus` 而非 `str`：契约里会输出**真正的 enum**，前端因此能照契约
+    #: 穷尽取值，而不是维护一份手抄的取值表（与 `applications/schemas.py` 的 `stage`
+    #: 同一理由 —— 那边写了长注释，这边原先漏了）。
+    capture_status: CaptureStatus
     detail_url: str
     last_seen_at: datetime | None = None
 
@@ -37,7 +40,7 @@ class JobSummary(BaseModel):
             city=job.city,
             match_score=job.match_score,
             source=job.source,
-            capture_status=job.capture_status.value,
+            capture_status=job.capture_status,
             detail_url=job.detail_url,
             last_seen_at=job.last_seen_at,
         )

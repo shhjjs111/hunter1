@@ -11,15 +11,24 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+# 三个字段都要有上限：它们直接落进本机配置库、并**原样**用于请求上游。
+# 没有上限时，一次手滑粘贴（把整份配置/密钥文件贴进输入框）就能把巨量文本
+# 存进配置并带进每一次请求。取值按「够用 + 明显超过就不是手填」定：
+# base_url 给 2048（URL 的通行上限量级），model 给 200（厂商模型名都很短），
+# api_key 给 512（比已知最长的厂商密钥还宽一倍）。
+MAX_BASE_URL_CHARS = 2048
+MAX_MODEL_CHARS = 200
+MAX_API_KEY_CHARS = 512
 
 
 class SettingsForm(BaseModel):
     """配置页提交的表单。`api_key` 留空表示「不改」。"""
 
-    base_url: str
-    model: str
-    api_key: str = ""
+    base_url: str = Field(max_length=MAX_BASE_URL_CHARS)
+    model: str = Field(max_length=MAX_MODEL_CHARS)
+    api_key: str = Field(default="", max_length=MAX_API_KEY_CHARS)
 
 
 class SettingsView(BaseModel):
