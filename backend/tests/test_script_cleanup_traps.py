@@ -20,6 +20,12 @@
 
 发现路径：审查报告（`check.sh` 本机假红）。本文件把「清理不许让脚本失败」钉住 ——
 光靠「记得写 `|| true`」会在下一个人手里丢。
+
+**数目对得上**：被扫的 EXIT trap 目前是 **5 条**（`check.sh` / `contracts.sh` /
+`dev.sh` / `gh_setup.sh` / `release.sh`）。凡是在哪里写下具体条数，就得与 `_scripts()`
+扫出来的实际数一致 —— 曾有一处写「四条」而实际五条，没人会去数，于是错着留了很久。
+新增脚本或新增 trap 时这个清单自己会变，不需要改本文件；但改完值得跑一次
+`pytest tests/test_script_cleanup_traps.py` 让 `_unresolved_actions()` 重新过一遍。
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -40,6 +47,10 @@ _TRAP_RE = re.compile(r"""^\s*trap\s+(?P<action>'[^']*'|"[^"]*"|\S+)\s+(?P<signa
 _FUNC_RE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", re.MULTILINE)
 
 _GUARD = "|| true"
+
+#: 块结束符：它们本身不会失败，出现在守卫之后无妨（守卫在循环/分支体内时，
+#: 其后跟的就是这些收尾词）。
+_BLOCK_ENDERS = frozenset({"fi", "done", "esac", "}", ")", ";;"})
 
 
 def _scripts() -> list[Path]:
@@ -58,8 +69,30 @@ def _body_of(text: str, name: str) -> str | None:
     return None
 
 
+def _last_command_is_guarded(text: str) -> bool:
+    """`text` 的**最后一条命令**是否自带 `|| true`。
+
+    只查「整串含 `|| true`」不够：`'rm -f a || true; rm -f b'` 里真正决定退出码的
+    是最后那条 `rm -f b`，它没守卫 —— 而整串确实「含」`|| true`，旧判据会漏判
+    （audit a13）。这里取最后一次出现 `|| true` 的位置，要求其**之后**只剩空白、
+    整行注释或块结束符（`fi` / `done` / `esac` / `}` …）—— 任何还会执行的残留命令
+    都算「守的不是最后一条」。整行注释先剔除：注释里提到 `|| true` 不算数。
+    """
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    body = "\n".join(lines)
+    idx = body.rfind(_GUARD)
+    if idx == -1:
+        return False
+    tail = body[idx + len(_GUARD) :]
+    for raw_line in tail.splitlines():
+        line = raw_line.split("#", 1)[0].strip().strip(";").strip()
+        if line and line not in _BLOCK_ENDERS:
+            return False
+    return True
+
+
 def _unresolved_actions() -> list[str]:
-    """列出「清理动作不带 `|| true`」的 trap，形如 `文件:行: 动作`。"""
+    """列出「清理动作的**最后一条命令**不带 `|| true`」的 trap，形如 `文件:行: 动作`。"""
     bad: list[str] = []
     for script in _scripts():
         text = script.read_text(encoding="utf-8")
@@ -75,13 +108,16 @@ def _unresolved_actions() -> list[str]:
             if action in {"-", "''", '""'}:
                 continue
             if action.startswith(("'", '"')):
-                if _GUARD not in action:
+                # 去掉外层引号再判：守卫要在**最后一条命令**上。
+                if not _last_command_is_guarded(action[1:-1]):
                     bad.append(f"{script.name}:{lineno}: {action}")
                 continue
-            # 裸词 = 函数名：守卫可以写在函数体里。
+            # 裸词 = 函数名：守卫要写在函数体的**最后一条命令**上。
             body = _body_of(text, action)
-            if body is None or _GUARD not in body:
-                bad.append(f"{script.name}:{lineno}: {action}()（函数体里也没有 {_GUARD}）")
+            if body is None or not _last_command_is_guarded(body):
+                bad.append(
+                    f"{script.name}:{lineno}: {action}()（函数体的最后一条命令没有 {_GUARD}）"
+                )
     return bad
 
 
@@ -130,3 +166,40 @@ def test_unguarded_exit_trap_is_fatal_under_set_e(
         f"trap 动作为 {action!r} 时退出码应为 {expected}，实际 {proc.returncode}。"
         "bash 的行为变了 —— 请重新确认 test_exit_trap_cleanups_cannot_fail_the_script 的前提。"
     )
+
+
+class TestLastCommandGuard:
+    """audit a13：判定必须落在**最后一条命令**上，不是「整串含 `|| true`」。"""
+
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            ("rm -f /tmp/x 2>/dev/null || true", True),
+            ("rm -f /tmp/x", False),
+            # 守卫只在前一条上 —— 最后那条 `rm -f /tmp/y` 才是改写退出码的元凶。
+            ("rm -f /tmp/x || true; rm -f /tmp/y", False),
+            # 循环体里的守卫：其后跟的是收尾词 `done`，仍算「最后一条有守卫」。
+            ('for p in a b; do\n  rm -f "$p" || true\ndone', True),
+            # 注释里提到 `|| true` 不算数。
+            ("# 说明里提到 || true\nrm -f /tmp/x", False),
+        ],
+    )
+    def test_last_command_only(self, body: str, expected: bool) -> None:
+        assert _last_command_is_guarded(body) is expected
+
+
+class TestSyntheticTrapViolationIsCaught:
+    def test_guard_on_a_non_final_command_is_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """构造一个「守卫没落在最后一条」的脚本，确认扫得出来。"""
+        module = sys.modules[__name__]
+        script = tmp_path / "bad.sh"
+        script.write_text(
+            "#!/usr/bin/env bash\nset -euo pipefail\n"
+            "trap 'rm -f /tmp/ok || true; rm -f /tmp/boom' EXIT\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(module, "SCRIPTS", [script])
+        bad = module._unresolved_actions()
+        assert bad, "守卫只在倒数第二条上 —— 必须判为未加守卫"
