@@ -73,6 +73,14 @@ DEFAULT_PAGE_SIZE = MAX_PAGE_SIZE
 #: OpenAPI 的 description 给不了这个保证）。
 MAX_PAGE = 10_000
 
+#: 一次最多回多少条会话消息；也是默认值。
+#:
+#: 会话**没有删除端点**，消息只增不减 —— 不设上限时，一段长对话会把整表
+#: （含全部工具调用 JSON）一次性塞进响应。`offset` 从**最新往回数**（见读端点），
+#: 所以「只给上限」不会让旧消息变得够不着。
+MAX_MESSAGE_LIMIT = 200
+DEFAULT_MESSAGE_LIMIT = MAX_MESSAGE_LIMIT
+
 FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
 
 
@@ -185,12 +193,22 @@ def build_router(
         response_model=list[ConversationMessageView],
         summary="会话消息",
     )
-    def conversation_messages(conversation_id: str) -> list[ConversationMessageView]:
+    def conversation_messages(
+        conversation_id: str,
+        limit: int = Query(DEFAULT_MESSAGE_LIMIT, ge=1, le=MAX_MESSAGE_LIMIT),
+        offset: int = Query(0, ge=0),
+    ) -> list[ConversationMessageView]:
+        """一段对话的消息，按时间正序；窗口**从最新往回数**。
+
+        `offset=0` 是最近 `limit` 条（聊天界面要的正是这个），`offset=limit` 是再往前的
+        一段 —— 于是旧消息既能被上限保护、又不会变成够不着。上限本身必须有：会话没有
+        删除端点，消息只增不减。
+        """
         if store.get(conversation_id) is None:
             raise HTTPException(status_code=404, detail=f"会话不存在：{conversation_id}")
         return [
             ConversationMessageView(role=str(message.role), content=message.content)
-            for message in store.messages(conversation_id)
+            for message in store.messages(conversation_id, limit=limit, offset=offset)
         ]
 
     # ---- 一次性对话（无流式能力的调用方 / 脚本用）----

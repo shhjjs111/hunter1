@@ -1120,6 +1120,7 @@
     },
     "/api/assistant/conversations/{conversation_id}": {
       "get": {
+        "description": "一段对话的消息，按时间正序；窗口**从最新往回数**。\n\n`offset=0` 是最近 `limit` 条（聊天界面要的正是这个），`offset=limit` 是再往前的\n一段 —— 于是旧消息既能被上限保护、又不会变成够不着。上限本身必须有：会话没有\n删除端点，消息只增不减。",
         "operationId": "conversation_messages_api_assistant_conversations__conversation_id__get",
         "parameters": [
           {
@@ -1129,6 +1130,29 @@
             "schema": {
               "title": "Conversation Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],

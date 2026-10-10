@@ -41,8 +41,10 @@ class ConversationStore:
         """原子追加一批消息（一轮对话的两条同事务落库，不留半截）。"""
         self._db.conversations().append_many(conversation_id, messages)
 
-    def messages(self, conversation_id: str, *, limit: int | None = None) -> list[Message]:
-        return self._db.conversations().messages(conversation_id, limit=limit)
+    def messages(
+        self, conversation_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> list[Message]:
+        return self._db.conversations().messages(conversation_id, limit=limit, offset=offset)
 
 
 __all__ = ["ConversationStore"]

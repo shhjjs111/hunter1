@@ -648,3 +648,32 @@ class TestLengthTruncatedAnswerIsAnnounced:
             reply = client.post("/api/assistant/turn", json={"message": "讲讲"}).json()["reply"]
             assert reply == self.STREAMED
             assert "长度上限" not in reply
+
+
+class TestConversationMessagesWindow:
+    """读消息有上限，但旧消息够得着（会话没有删除端点，消息只增不减）。"""
+
+    def test_window_is_bounded_and_offset_reaches_older(self, db: Database) -> None:
+        for client in _client(db, ScriptedLLM()):
+            cid = client.post("/api/assistant/turn", json={"message": "第 1 问"}).json()[
+                "conversation_id"
+            ]
+            for index in range(2, 6):
+                client.post(
+                    "/api/assistant/turn",
+                    json={"message": f"第 {index} 问", "conversation_id": cid},
+                )
+
+            url = f"/api/assistant/conversations/{cid}"
+            everything = client.get(url).json()
+            assert len(everything) == 10, "5 轮 × 2 条"
+
+            newest = client.get(url, params={"limit": 2}).json()
+            older = client.get(url, params={"limit": 2, "offset": 2}).json()
+            assert newest == everything[-2:], "offset=0 应是最近 2 条"
+            assert older == everything[-4:-2], "offset 从最新往回数，旧消息必须够得着"
+
+            # 越界由 422 拒绝，不静默钳制（与列表分页同一判据）
+            assert client.get(url, params={"limit": 0}).status_code == 422
+            assert client.get(url, params={"limit": 10_000}).status_code == 422
+            assert client.get(url, params={"offset": -1}).status_code == 422

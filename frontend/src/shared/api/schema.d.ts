@@ -80,7 +80,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 会话消息 */
+        /**
+         * 会话消息
+         * @description 一段对话的消息，按时间正序；窗口**从最新往回数**。
+         *
+         *     `offset=0` 是最近 `limit` 条（聊天界面要的正是这个），`offset=limit` 是再往前的
+         *     一段 —— 于是旧消息既能被上限保护、又不会变成够不着。上限本身必须有：会话没有
+         *     删除端点，消息只增不减。
+         */
         get: operations["conversation_messages_api_assistant_conversations__conversation_id__get"];
         put?: never;
         post?: never;
@@ -866,7 +873,10 @@ export interface operations {
     };
     conversation_messages_api_assistant_conversations__conversation_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path: {
                 conversation_id: string;
