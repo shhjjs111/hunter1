@@ -352,10 +352,18 @@ class TestStreamEndpoint:
             # 失败不落库（否则会留下半截会话）
             assert db.conversations().list() == []
 
-    def test_blank_message_is_an_error_event(self, db: Database) -> None:
+    def test_blank_message_is_422_like_the_turn_endpoint(self, db: Database) -> None:
+        """空消息在**两个**端点上给同一个码（422），而不是 200 + 一条 error 事件。
+
+        原先 `/stream` 把它包成一条 error 事件返回 200 —— 同一种输入不合法，两个面
+        给两种答复，前端得为同一件事写两套判断。此刻响应尚未开始，完全可以像
+        `/turn` 一样走异常处理器给出标准 422 JSON。
+        """
         for client in _client(db, ScriptedLLM()):
-            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "   "}).text)
-            assert events == [{"type": "error", "message": "请输入内容后再发送。"}]
+            response = client.post("/api/assistant/stream", json={"message": "   "})
+            assert response.status_code == 422
+            assert "请输入内容" in response.json()["detail"]
+            assert db.conversations().list() == []
 
 
 class TestLlmClientIsReleased:
@@ -601,6 +609,23 @@ class TestLengthTruncatedAnswerIsAnnounced:
             events = _parse_sse(client.post("/api/assistant/stream", json={"message": "讲讲"}).text)
             done = next(event for event in events if event["type"] == "done")
             assert reply == done["reply"]
+
+    def test_first_turn_does_not_use_two_step_creation(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """新会话必须走**同事务**的 `create_with_messages`。
+
+        把 `create()` 换成会炸的替身：新会话若回退到「`create()` + 追加」两步提交，
+        这里必然红；走同事务版本则根本用不到它。（两步提交的后果见
+        `test_store.py::test_failed_first_write_leaves_no_empty_conversation`。）
+        """
+
+        def boom(*_args: object, **_kwargs: object) -> object:
+            raise AssertionError("新会话不该再走两步提交（create + append_many）")
+
+        monkeypatch.setattr(ConversationStore, "create", boom)
+        for client in _client(db, ScriptedLLM()):
+            assert client.post("/api/assistant/turn", json={"message": "你好"}).status_code == 200
 
     def test_blank_reply_is_identical_in_the_event_and_in_the_store(self, db: Database) -> None:
         """空回复时，`done` 事件与落库必须是**同一段文字**。

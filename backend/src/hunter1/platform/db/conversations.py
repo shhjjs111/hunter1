@@ -42,6 +42,29 @@ def _is_sequence_conflict(exc: IntegrityError) -> bool:
     )
 
 
+def _message_row(
+    conversation_id: str, sequence: int, message: Message, now: datetime
+) -> ConversationMessageRow:
+    """一个消息行的构造（`append_many` 与 `create_with_messages` 共用）。
+
+    抽出来是为了让「会话首条消息」与「后续追加」走**同一个**行构造 —— 两处各写一遍
+    时，新增一个列只改一处就会让新建的那条消息缺字段。
+    """
+    return ConversationMessageRow(
+        id=uuid.uuid4().hex,
+        conversation_id=conversation_id,
+        sequence=sequence,
+        role=str(message.role),
+        content=message.content or "",
+        tool_calls=[
+            {"id": call.id, "name": call.name, "arguments": call.arguments}
+            for call in message.tool_calls
+        ],
+        tool_call_id=message.tool_call_id,
+        created_at=now,
+    )
+
+
 @dataclass
 class Conversation:
     """一段对话的元信息。"""
@@ -85,6 +108,35 @@ class SqliteConversationRepository:
                     id=conversation_id, title=stored_title, created_at=now, updated_at=now
                 )
             )
+            session.commit()
+        return Conversation(id=conversation_id, title=stored_title, created_at=now, updated_at=now)
+
+    def create_with_messages(self, *, title: str, messages: Sequence[Message]) -> Conversation:
+        """**同事务**新建会话并写入首批消息，返回会话。
+
+        为什么要有它（而不是 `create()` + `append_many()` 两步）：两步是**两个事务**，
+        第二步失败就留下一段**没有任何消息的空会话** —— 用户在侧栏看到一条点进去什么都没有
+        的对话，而它永远不会被填上。会话与它的首批消息本来就是一个整体（一轮对话的两条
+        消息），没有理由分两次提交。
+
+        `sequence` 从 1 开始：新会话还没有任何消息行，不需要 `append_many` 那套
+        「`max(sequence)+1` + 撞号重试」—— 这里只有一条写入路径。
+        """
+        conversation_id = uuid.uuid4().hex
+        now = self._clock()
+        stored_title = title[:TITLE_MAX_CHARS]
+        with self._db.session() as session:
+            session.add(
+                ConversationRow(
+                    id=conversation_id, title=stored_title, created_at=now, updated_at=now
+                )
+            )
+            # 先落**父行**再落消息：`conversation_messages.conversation_id` 是外键，
+            # 而 ORM 的 flush 顺序不保证按外键排（`PRAGMA foreign_keys=ON` 下先插子行
+            # 会直接报 FOREIGN KEY constraint failed）。显式 flush 把顺序钉死。
+            session.flush()
+            for offset, message in enumerate(messages, start=1):
+                session.add(_message_row(conversation_id, offset, message, now))
             session.commit()
         return Conversation(id=conversation_id, title=stored_title, created_at=now, updated_at=now)
 
@@ -160,25 +212,7 @@ class SqliteConversationRepository:
                     ) + 1
 
                     for offset, message in enumerate(messages):
-                        session.add(
-                            ConversationMessageRow(
-                                id=uuid.uuid4().hex,
-                                conversation_id=conversation_id,
-                                sequence=next_seq + offset,
-                                role=str(message.role),
-                                content=message.content or "",
-                                tool_calls=[
-                                    {
-                                        "id": call.id,
-                                        "name": call.name,
-                                        "arguments": call.arguments,
-                                    }
-                                    for call in message.tool_calls
-                                ],
-                                tool_call_id=message.tool_call_id,
-                                created_at=now,
-                            )
-                        )
+                        session.add(_message_row(conversation_id, next_seq + offset, message, now))
                     conversation.updated_at = now
                     session.commit()
                 return

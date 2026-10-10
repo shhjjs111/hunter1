@@ -16,11 +16,18 @@ SSE 的两条硬约定（沿用旧界面的实现教训）：
 | 状态 | 含义 |
 |---|---|
 | 409 | 模型未配置 / 配置不可用 —— 请求没毛病，服务端状态未就绪 |
+| 404 | 会话不存在（两个**写**端点同样 404，不静默新建 —— 见 `_history_for`） |
 | 422 | 请求体不合法（空消息）或**上游模型失败**（`LLMError`） |
 | 500 | 非契约异常：`LLMProvider` 抛 `LLMError` 之外的异常说明是实现 bug，应当响亮地失败 |
 
 （原先 /turn 用 502 表示上游失败、且用 `except Exception` 一把兜住 —— 同一个上游
 故障在两处给两种码，实现 bug 还会被伪装成「上游故障」。）
+
+**上表对两个端点的覆盖范围不同**：`/turn` 的 try/except 罩住「取配置 → 跑一轮 →
+落库」全段，所以是完整的；`/stream` 只能罩住**开流之前**那一小段（空消息 422、
+未知会话 404、工厂抛错 409）—— 流一旦开始状态码就已经定死，之后任何失败都只能作为
+一条 SSE `error` 事件交给前端。两个端点**刻意给同一组码**，前端不必为同一件事写
+两套判断。
 """
 
 from __future__ import annotations
@@ -109,30 +116,24 @@ def _persist(
 ) -> str:
     """成功才落库：新建会话（如果还没有）+ 追加用户消息与助手回复。
 
-    两条消息经 `append_many` **同事务**写入 —— 否则第二条失败会留下「有问无答」
-    的半截对话，下次把失败那句当上下文再问一遍。
+    两条消息**同事务**写入 —— 否则第二条失败会留下「有问无答」的半截对话，下次把失败
+    那句当上下文再问一遍。新会话走 `create_with_messages`（会话行与首批消息也同事务，
+    见该方法的说明）：`create()` + `append_many()` 是**两个**事务，第二步失败会留下一段
+    点进去什么都没有的空会话。
     """
     conversation = store.get(conversation_id) if conversation_id else None
-    if conversation is None:
-        conversation = store.create(title=title[:40])
-    store.append_many(
-        conversation.id,
-        [
-            user_message,
-            Message(role=Role.ASSISTANT, content=_stored_reply(reply)),
-        ],
-    )
-    return conversation.id
-
-
-def _static_stream(events: list[dict[str, object]]) -> StreamingResponse:
-    """把「已经知道结果」的事件列表包成流（开流前的校验失败用）。"""
-
-    def generate() -> Iterator[str]:
-        for event in events:
-            yield _sse(event)
-
-    return StreamingResponse(generate(), media_type="text/event-stream", headers=SSE_HEADERS)
+    if conversation is None and conversation_id:
+        # 传了 id 却查不到 —— 与读端点同一语义（见 `_history_for`）。这里**不**静默
+        # 新建：那会让「拼错的 id」看起来在续一段对话。
+        raise KeyError(f"conversation not found: {conversation_id}")
+    stored = Message(role=Role.ASSISTANT, content=_stored_reply(reply))
+    if conversation_id:
+        # 会话已存在：只追加消息（**一个**事务，两条消息同生共死）。
+        store.append_many(conversation_id, [user_message, stored])
+        return conversation_id
+    # 新会话：会话行与首批消息**同事务**写入。原先分两步（`create` 一个事务、
+    # `append_many` 另一个），第二步失败就留下一段空会话 —— 侧栏里点进去什么都没有。
+    return store.create_with_messages(title=title[:40], messages=[user_message, stored]).id
 
 
 def _history_for(
@@ -224,8 +225,13 @@ def build_router(
             raise HTTPException(status_code=404, detail=f"会话不存在：{body.conversation_id}")
         history = store.messages(conversation.id, limit=history_limit) if conversation else []
         user_message = Message(role=Role.USER, content=text)
-        llm = llm_factory()
+        # `llm_factory()` 必须在 try **里面**：它在「模型未配置」时抛
+        # `ModelNotConfiguredError`，而下面那句 `except ModelNotConfiguredError: raise`
+        # 存在的唯一目的就是**别把它翻译成 422**。工厂放在 try 外时那条分支永远走不到，
+        # 成了一条「看起来处理了」的死代码（异常绕过它直达应用级处理器）。
+        llm: LLMProvider | None = None
         try:
+            llm = llm_factory()
             result: AssistantResult = run_turn(
                 llm=llm, registry=tools, messages=[*history, user_message]
             )
@@ -244,8 +250,10 @@ def build_router(
             # 不落库：失败的尝试不留会话（免得下次把失败那句当上下文）。
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         finally:
-            # 客户端每请求新建 —— 用完释放，别把连接池攒在进程里
-            llm.close()
+            # 客户端每请求新建 —— 用完释放，别把连接池攒在进程里。
+            # `llm` 可能仍是 None：工厂自己抛错时没有任何东西可关。
+            if llm is not None:
+                llm.close()
 
         conversation_id = _persist(
             store,
@@ -267,13 +275,13 @@ def build_router(
     def stream(body: StreamRequest) -> StreamingResponse:
         text = body.message.strip()
         if not text:
-            return _static_stream([{"type": "error", "message": "请输入内容后再发送。"}])
-        # 未知会话在**开流之前**就 404：此刻响应尚未开始，raise 会走 FastAPI 的
-        # 异常处理器，前端拿到的是一条标准的 404 JSON（与一次性端点、读端点一致）。
-        # 放到 generator 里就晚了 —— 那时响应已开始，只能作为一条 SSE error 事件发出，
-        # 前端得为同一契约写两套判断。
-        if body.conversation_id:
-            _history_for(store, body.conversation_id, history_limit)
+            # 与 `/assistant/turn` 用**同一个码**：同一种输入不合法，两个面给两种答复
+            # （这边原本是 200 + 一条 error 事件）会逼前端为同一件事写两套判断。
+            # 此刻响应尚未开始，raise 能走 FastAPI 的异常处理器，给出标准 422 JSON。
+            raise HTTPException(status_code=422, detail="请输入内容后再发送。")
+        # 校验与取历史都在**开流之前**，且历史**只取一次**（见 `_history_for` 的 404）。
+        # 响应一旦开始，之后任何失败都只能作为 SSE error 事件发出去。
+        history = _history_for(store, body.conversation_id, history_limit)
         llm = llm_factory()
         # 所有权交给 generator：真正的消费发生在响应体被读取时（端点这时早已返回），
         # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
@@ -285,7 +293,7 @@ def build_router(
                 tools=tools,
                 text=text,
                 conversation_id=body.conversation_id,
-                history_limit=history_limit,
+                history=history,
             ),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
@@ -301,15 +309,17 @@ def _stream_turn(
     tools: ToolRegistry,
     text: str,
     conversation_id: str,
-    history_limit: int,
+    history: list[Message],
 ) -> Iterator[str]:
     """跑一轮流式对话并把每个事件翻成 SSE。
 
     落库时机与一次性端点一致：**整轮跑完才写**。
+
+    `history` 由端点取好传进来（见 `stream`）：这里**不再查库** —— 再查一次既多一次
+    往返，又在两次查询之间留了个「校验通过后被删」的窗口，那时会拿着空历史把这一轮
+    写进一个已不存在的会话。
     """
     try:
-        conversation = store.get(conversation_id) if conversation_id else None
-        history = store.messages(conversation.id, limit=history_limit) if conversation else []
         user_message = Message(role=Role.USER, content=text)
 
         final: TurnDone | None = None

@@ -34,12 +34,17 @@ class ConversationStore:
     def delete(self, conversation_id: str) -> None:
         self._db.conversations().delete(conversation_id)
 
-    def append(self, conversation_id: str, message: Message) -> None:
-        self._db.conversations().append(conversation_id, message)
-
     def append_many(self, conversation_id: str, messages: Sequence[Message]) -> None:
         """原子追加一批消息（一轮对话的两条同事务落库，不留半截）。"""
         self._db.conversations().append_many(conversation_id, messages)
+
+    def create_with_messages(self, *, title: str, messages: Sequence[Message]) -> Conversation:
+        """同事务新建会话 + 首批消息（新会话的唯一正确开法）。
+
+        不要用 `create()` 再 `append_many()`：那是两个事务，第二步失败就留下一段
+        **空会话** —— 侧栏里点进去什么都没有，而且永远不会被填上。
+        """
+        return self._db.conversations().create_with_messages(title=title, messages=messages)
 
     def messages(
         self, conversation_id: str, *, limit: int | None = None, offset: int = 0
