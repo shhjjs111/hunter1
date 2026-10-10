@@ -101,6 +101,36 @@ describe("JobsPage", () => {
     // 投递入口已从 jobs 迁到 applications（投递记录本体归 applications 切片）
     expect((postCalls[0][0] as Request).url).toContain("/api/applications");
   });
+
+  it("评分成功后把模型的结论摆出来，而不是只说一句「已评分」", async () => {
+    // 模型算出来的三段文字（摘要 / 优势 / 差距）必须真的出现在界面上 ——
+    // 否则后端落库了、界面却不读，等于「换个地方躺着」，用户仍看不到为什么是这个分。
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      if (request.method === "POST") {
+        return jsonResponse({
+          job_id: "j1",
+          score: 88,
+          summary: "总体匹配",
+          advantages: "有 LLM 落地经验",
+          gaps: "缺大规模团队经验",
+          model: "fake",
+          prompt_version: "v3",
+          scored_at: null,
+        });
+      }
+      return jsonResponse(LIST_PAYLOAD);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "评分" }));
+
+    expect(await screen.findByText("有 LLM 落地经验")).toBeTruthy();
+    expect(screen.getByText("缺大规模团队经验")).toBeTruthy();
+    expect(screen.getByText("总体匹配")).toBeTruthy();
+    expect(screen.getByText("匹配分 88")).toBeTruthy();
+  });
 });
 
 describe("JobsPage 读取失败", () => {

@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { ErrorNotice, PageHeader, Pager, SuccessNotice } from "../../shared/ui";
 import { useScoreJob } from "../scoring/api";
+import { ScoreCard } from "../scoring/components/ScoreCard";
 import { useApplyToJob } from "../applications/api";
 import { useJobs } from "./api";
 import { JobsTable } from "./components/JobsTable";
@@ -89,7 +90,9 @@ export function JobsPage() {
       )}
       {score.isSuccess && (
         <div className="mt-2">
-          <SuccessNotice message="已评分并写回。" />
+          {/* 不再是「已评分并写回。」一句话：后端已经把模型的结论（摘要 / 优势 /
+              差距）随响应返回，这里把它摆出来 —— 用户才知道这个分是怎么来的。 */}
+          <ScoreCard card={score.data} />
         </div>
       )}
     </div>
