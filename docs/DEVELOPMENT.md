@@ -289,7 +289,7 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 | 来源 | 取值 | 用在哪 |
 |---|---|---|
 | `sys.platform` | `win32` / `darwin` / `linux` | 更新链：`cli._update` 传入、`asset_for()` 精确匹配、`build.py` 的 zip 名（`hunter1-win32.zip`） |
-| `paths.py` 的 `_platform_key` | `windows` / `macos` / `linux` | 仅数据目录（`user_data_dir`）。可执行文件后缀不在这里 —— 在 `build.py` 的 `_exe_name`（按 `os.name` 判） |
+| `paths.py` 的 `_platform_key` | `windows` / `macos` / `linux` | 仅数据目录（`user_data_dir`）。可执行文件后缀也不在这里 —— 在 `scripts/artifact.py` 的 `exe_name`（按 `platform` **前缀**判：`win32` / `cygwin` 带 `.exe`，其余无后缀）；`build.py` 的 `_exe_name` 只是转调它 |
 
 **manifest 的 `platform` 字段必须写 `win32`**（与 `asset_for` 的输入对齐）。
 写 `windows` 不会报错，只会让「有产物却永远匹配不上」——`asset_for` 是精确匹配、
