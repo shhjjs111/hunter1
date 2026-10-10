@@ -38,6 +38,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -202,6 +203,22 @@ class ApiError(PublishError):
         super().__init__(message)
 
 
+#: owner / repo 每段的字符白名单：以**字母数字开头**，其后只允许字母/数字/`.`/`_`/`-`。
+#: 与 release.sh 的入口校验同形。这条顺带挡掉 `.` / `..`（路径穿越形态会拼出可疑的
+#: URL，例如 `https://github.com/../x`），也挡掉 `a/b/c`（repo 里混进第二个斜杠）。
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _check_name(kind: str, value: str) -> str:
+    """校验 owner / repo 组件；不合法就抛可读错误（不把畸形值放进 URL）。"""
+    if not _NAME_RE.match(value):
+        raise PublishError(
+            f"{kind} 不是合法的 GitHub 名称：{value!r}"
+            "（只允许字母/数字与 . _ -，且必须以字母数字开头）"
+        )
+    return value
+
+
 def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
     """决定往哪个仓库发。
 
@@ -213,8 +230,11 @@ def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
         if "/" not in owner_repo:
             raise PublishError("owner/repo 格式不对（应形如 acme/hunter1）")
         head, tail = owner_repo.split("/", 1)
-        return head.strip(), tail.strip()
-    return owner.strip(), repo.strip()
+        return _check_name("owner", head.strip()), _check_name("repo", tail.strip())
+    owner_clean = owner.strip()
+    if owner_clean:
+        _check_name("owner", owner_clean)
+    return owner_clean, _check_name("repo", repo.strip())
 
 
 def verify_token(token: str) -> str | None:
@@ -257,7 +277,14 @@ def save_token(token: str) -> Path:
     path = DEFAULT_TOKEN_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(token, encoding="utf-8")
+    # 先收紧 umask 再落盘：临时文件在 `chmod` 之前的那一瞬，权限位由 umask 决定 ——
+    # 默认（022）下会短暂是 0644，同机其他用户可读。gh_setup.sh 用 `umask 077` 做了
+    # 同样的事（那边是 shell）；这里对应 os.umask。写完立刻还原，别影响本进程后续落盘。
+    previous_umask = os.umask(0o077)
+    try:
+        tmp.write_text(token, encoding="utf-8")
+    finally:
+        os.umask(previous_umask)
     tmp.replace(path)
     with contextlib.suppress(OSError):
         path.chmod(0o600)

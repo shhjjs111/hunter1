@@ -1106,3 +1106,46 @@ class TestFailedPublishRestoresAReopenedRelease:
         code, seen = self._run(monkeypatch, tmp_path, reopened=False)
         assert code == 1
         assert seen == [], "新建的草稿不该被公开 —— 半成品留在草稿态即可"
+
+
+class TestResolveTargetValidation:
+    """audit C17：owner/repo 也走字符白名单 —— 入口校验不能比 release.sh 更弱。"""
+
+    @pytest.mark.parametrize(
+        "owner_repo",
+        ["../repo", "a/..", "a/b/c", "-bad/repo", "/repo", "a/", "a b/repo"],
+    )
+    def test_malformed_owner_repo_is_rejected(self, owner_repo: str) -> None:
+        with pytest.raises(gh.PublishError):
+            gh.resolve_target(owner_repo, "", "")
+
+    def test_dot_dot_would_build_a_suspicious_url(self) -> None:
+        """`..` 会拼出 `https://github.com/../repo` 这类可疑地址 —— 入口就挡掉。"""
+        with pytest.raises(gh.PublishError):
+            gh.resolve_target("../x", "", "")
+
+    def test_owner_and_repo_flags_are_validated_too(self) -> None:
+        with pytest.raises(gh.PublishError):
+            gh.resolve_target("", "..", "hunter1")
+        with pytest.raises(gh.PublishError):
+            gh.resolve_target("", "acme", "../..")
+
+
+class TestSaveTokenUmask:
+    """audit C16：写令牌临时文件前要先收紧 umask（Linux 上短暂 0644）。"""
+
+    def test_sets_restrictive_umask_around_write(self, monkeypatch, tmp_path: Path) -> None:
+        target = tmp_path / ".tok"
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        seen: list[int] = []
+        real = os.umask
+
+        def spy(mask: int) -> int:
+            seen.append(mask)
+            return real(mask)
+
+        monkeypatch.setattr(gh.os, "umask", spy)
+        gh.save_token("secret-token-value")
+
+        assert seen and seen[0] == 0o077, f"写前未收紧 umask：{seen}"
+        assert target.read_text(encoding="utf-8") == "secret-token-value"
