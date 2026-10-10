@@ -52,6 +52,19 @@ def db(tmp_path: Path) -> Database:
     return database
 
 
+def _recording_client(db: Database, seen: list[LLMSettings]) -> Iterator[TestClient]:
+    """与 `_client` 同形，但把工厂收到的配置记下来 —— 断言「探测的是哪一份」。"""
+    app = FastAPI()
+
+    def factory(settings: LLMSettings) -> Any:  # 替身不必满足协议的全部成员
+        seen.append(settings)
+        return FakeLLM()
+
+    app.include_router(build_router(store=SettingsStore(db), llm_factory=factory), prefix="/api")
+    with TestClient(app) as test_client:
+        yield test_client
+
+
 def _client(db: Database, llm: FakeLLM | None = None) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(
@@ -164,21 +177,11 @@ class TestProbeUsesTheSubmittedForm:
 
     @staticmethod
     def _client(db: Database, seen: list[LLMSettings]) -> Iterator[TestClient]:
-        app = FastAPI()
-
-        def factory(settings: LLMSettings) -> Any:  # 与 `_boom_factory` 同形：替身不必满足协议
-            seen.append(settings)
-            return FakeLLM()
-
-        app.include_router(
-            build_router(store=SettingsStore(db), llm_factory=factory), prefix="/api"
-        )
-        with TestClient(app) as test_client:
-            yield test_client
+        yield from _recording_client(db, seen)
 
     def test_form_values_are_probed_not_the_saved_ones(self, db: Database) -> None:
         seen: list[LLMSettings] = []
-        for client in self._client(db, seen):
+        for client in _recording_client(db, seen):
             client.put("/api/settings", json=FORM)  # 先存一份**不同**的配置
             response = client.post(
                 "/api/settings/test",
@@ -195,7 +198,7 @@ class TestProbeUsesTheSubmittedForm:
     def test_blank_key_in_the_form_falls_back_to_the_saved_one(self, db: Database) -> None:
         """界面只回显掩码、读不到原值 —— 空 key 必须是「不改」，不是「拿空 key 去试」。"""
         seen: list[LLMSettings] = []
-        for client in self._client(db, seen):
+        for client in _recording_client(db, seen):
             client.put("/api/settings", json=FORM)
             client.post(
                 "/api/settings/test",
@@ -205,7 +208,7 @@ class TestProbeUsesTheSubmittedForm:
 
     def test_typed_key_is_used_when_given(self, db: Database) -> None:
         seen: list[LLMSettings] = []
-        for client in self._client(db, seen):
+        for client in _recording_client(db, seen):
             client.put("/api/settings", json=FORM)
             client.post(
                 "/api/settings/test",
@@ -220,7 +223,7 @@ class TestProbeUsesTheSubmittedForm:
     def test_bodyless_call_still_probes_the_saved_config(self, db: Database) -> None:
         """不带请求体（curl / 旧前端）退回原行为 —— 这是兼容性钉子。"""
         seen: list[LLMSettings] = []
-        for client in self._client(db, seen):
+        for client in _recording_client(db, seen):
             client.put("/api/settings", json=FORM)
             response = client.post("/api/settings/test")
             assert response.json()["ok"] is True
@@ -229,7 +232,7 @@ class TestProbeUsesTheSubmittedForm:
     def test_invalid_form_is_422_like_save(self, db: Database) -> None:
         """填的这份不合法 → 与 PUT 同一形状（422 + 字段级原因），而不是 200+ok:false。"""
         seen: list[LLMSettings] = []
-        for client in self._client(db, seen):
+        for client in _recording_client(db, seen):
             client.put("/api/settings", json=FORM)
             response = client.post(
                 "/api/settings/test",
@@ -336,6 +339,51 @@ class TestCorruptedConfigIsRepairable:
     def _corrupt(self, db: Database) -> None:
         """往配置键里塞一个 LLMSettings 校验不过的值（模拟数据损坏/旧版本遗留）。"""
         db.settings().set_raw(LLM_KEY, {"base_url": 123, "model": None})
+
+    def test_probe_with_a_form_ignores_a_broken_saved_config(self, db: Database) -> None:
+        """损坏的**已保存**配置不该挡住「探测我眼前这一份」。
+
+        回归护栏：这块原先在 `get_llm()` 抛 ValueError 时**无条件**提前返回 —— 用户
+        改好输入框点「测试连接」，收到的是「已保存的配置不可用」，于是会以为**自己
+        新填的**那份有问题。表单给了值就按表单探测，坏掉的只是旧配置。
+        """
+        self._corrupt(db)
+        seen: list[LLMSettings] = []
+        for client in _recording_client(db, seen):
+            response = client.post(
+                "/api/settings/test",
+                json={
+                    "base_url": "https://typed.example.com/v1",
+                    "model": "typed",
+                    "api_key": "sk-typed",
+                },
+            )
+            assert response.json()["ok"] is True
+            assert [item.base_url for item in seen] == ["https://typed.example.com/v1"]
+
+    def test_probe_without_a_key_says_the_key_is_missing(self, db: Database) -> None:
+        """空 key = 「用已保存的那把钥匙」，而配置坏了读不出来 —— 要说清是缺 key。
+
+        笼统地怪「已保存的配置」会让用户去改那份坏配置，而问题其实是他没填 Key。
+        """
+        self._corrupt(db)
+        seen: list[LLMSettings] = []
+        for client in _recording_client(db, seen):
+            response = client.post(
+                "/api/settings/test",
+                json={"base_url": "https://typed.example.com/v1", "model": "typed", "api_key": ""},
+            )
+            assert response.json()["ok"] is False
+            assert "API Key" in response.json()["message"]
+            assert seen == [], "没 key 不该真的发一次请求"
+
+    def test_bodyless_probe_still_reports_the_broken_config(self, db: Database) -> None:
+        """不带请求体（curl / 旧前端）时，仍然如实报「已保存的配置不可用」。"""
+        self._corrupt(db)
+        for client in _client(db):
+            response = client.post("/api/settings/test")
+            assert response.json()["ok"] is False
+            assert "已保存的配置不可用" in response.json()["message"]
 
     def test_get_returns_200_not_500(self, db: Database) -> None:
         self._corrupt(db)

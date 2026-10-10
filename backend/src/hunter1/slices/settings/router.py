@@ -132,6 +132,7 @@ def build_router(
         `api_key` 留空 = 「不改」：界面只回显掩码、读不到原值，所以用它探测时得拿
         已保存的那把钥匙 —— 与 PUT 的同名字段同一约定。
         """
+        broken: str | None = None
         try:
             settings = store.get_llm()
         except ValueError as exc:
@@ -139,14 +140,20 @@ def build_router(
             # 配置页是用户唯一的自救入口，探测也不例外（此前这里裸调 `get_llm()`，
             # 损坏时 `ValueError` 穿透成 500，而前端只显示一句「探测失败」，把原因吞掉）。
             #
-            # 保持端点的「报告形状」不变（与下面「配置不完整」同形：200 + `ok=False` +
-            # 可读原因），而不是抛 409：前端 `useTestConnection` 在出错分支只显示
-            # 「探测失败」，用一个统一的状态码换不回丢失的指引。
-            return ConnectionTestResponse(
-                ok=False,
-                message=f"已保存的配置不可用，请重新填写并保存后再测试：{exc}",
-            )
+            # 但也不能在这里无条件返回：那会让「表单给了值就探测表单这一份」的承诺失效
+            # —— 用户改好输入框再点「测试连接」，收到的却是「已保存的配置不可用」，
+            # 于是他会以为**自己新填的**那份有问题（正是这条注释下面那个 docstring
+            # 要避免的事）。所以记下原因、继续往下走，由下面按「有没有表单」分派。
+            settings = None
+            broken = str(exc)
         if form is not None:
+            if not form.api_key.strip() and settings is None:
+                # 空 key = 「用已保存的那把钥匙」，可这把钥匙读不出来（配置坏了）。
+                # 这时必须说清是**缺 key**，而不是笼统地怪「已保存的配置」。
+                return ConnectionTestResponse(
+                    ok=False,
+                    message="已保存的配置不可用，表单里也没填 API Key —— 请填上 Key 再测试。",
+                )
             key = form.api_key.strip() or (settings.api_key if settings else "")
             try:
                 candidate = LLMSettings(base_url=form.base_url, model=form.model, api_key=key)
@@ -155,6 +162,11 @@ def build_router(
                 # `apiErrorMessage` 对 4xx 会把 detail 显示出来，所以用户看得到原因。
                 raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
             settings = candidate
+        elif broken is not None:
+            return ConnectionTestResponse(
+                ok=False,
+                message=f"已保存的配置不可用，请重新填写并保存后再测试：{broken}",
+            )
         if settings is None or not settings.is_configured:
             return ConnectionTestResponse(
                 ok=False, message="配置不完整：base_url / 模型 / API Key 都要填。"
