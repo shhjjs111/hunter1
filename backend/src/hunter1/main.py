@@ -101,7 +101,6 @@ class AppContext:
     clock: Callable[[], datetime] = _now
     site_keys: list[str] | None = None
     assistant_history_limit: int = 20
-    page_size: int = 20
 
     def crawler_factory(self) -> list[Crawler]:
         """构造本轮要跑的抓取器（默认全部注册站点）。"""
