@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
@@ -72,7 +72,6 @@ async function fetchStatus(): Promise<CrawlStatus> {
  */
 export function useCrawlStatus() {
   const queryClient = useQueryClient();
-  const wasRunning = useRef(false);
   // 连续失败次数：后端不可达时据此退避（见 crawlPollInterval）。
   //
   // 为什么自己数而不用 react-query 的计数器：v5 里 `fetchFailureCount` 在**每次
@@ -84,9 +83,22 @@ export function useCrawlStatus() {
   const query = useQuery({
     queryKey: ["crawl", "status"],
     queryFn: async () => {
+      // 「一轮跑完 → 失效岗位库」的判定放在**取数路径**里，与**上一次缓存里的状态**
+      // 比较，而不是本组件的 ref + effect。
+      //
+      // 为什么：抓完一轮岗位库的内容已经变了，而 `["jobs"]` 的 staleTime 是 30 秒 ——
+      // 不失效的话，用户抓完立刻回岗位库看到的还是本轮之前的列表，看起来像「抓了但
+      // 没进来」。原先用组件内的 `wasRunning` ref 判定：抓取在**页面已卸载**期间结束
+      // （用户离开抓取页去看别处）时本组件不在场，那次 true→false 就漏掉了。
+      // 改判「缓存里的上一次状态 → 本次状态」，卸载/重挂之间也照样能判出来
+      // ——只要这个查询被再取一次（重挂、聚焦、别处 invalidate 都会触发）。
+      const previous = queryClient.getQueryData<CrawlStatus>(["crawl", "status"]);
       try {
         const snapshot = await fetchStatus();
         failures.current = 0;
+        if (previous?.running === true && snapshot.running === false) {
+          void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        }
         return snapshot;
       } catch (error) {
         failures.current += 1;
@@ -95,19 +107,6 @@ export function useCrawlStatus() {
     },
     refetchInterval: (query) => crawlPollInterval(query.state.data, failures.current),
   });
-
-  // 一轮抓取从「进行中」变成「结束」时失效岗位库。
-  //
-  // 抓完一轮岗位库的内容已经变了，而 `["jobs"]` 的 staleTime 是 30 秒：不失效的话，
-  // 用户抓完立刻回岗位库看到的还是本轮之前的列表 —— 看起来像「抓了但没进来」，
-  // 于是再抓一轮，白给站点添一次压力。
-  const running = query.data?.running ?? false;
-  useEffect(() => {
-    if (wasRunning.current && !running) {
-      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
-    }
-    wasRunning.current = running;
-  }, [running, queryClient]);
 
   return query;
 }

@@ -150,6 +150,37 @@ describe("CrawlPage", () => {
       { timeout: 5000 },
     );
   });
+
+  it("页面卸载期间抓取完成，之后再取到的状态也触发失效（不靠本组件观察 running→false）", async () => {
+    // 回归护栏：原先用组件内的 `wasRunning` ref 判定 true→false —— 用户离开抓取页
+    // 之后抓取才结束时，本组件不在场，那次翻转就漏掉，岗位库停在旧列表。改成与
+    // **上一次缓存状态**比较后，只要该查询再被取一次就能判出来。
+    let running = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ running, sites: [], total_fetched: 0, error: null })),
+    );
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30_000, retry: false } },
+    });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    const view = render(
+      <QueryClientProvider client={client}>
+        <CrawlPage />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("button", { name: /正在抓取/ }); // 缓存写入 running:true
+    view.unmount(); // 离开抓取页 —— 轮询随之停止
+
+    running = false; // 卸载期间抓取完成
+    // 之后的一次状态获取（重挂 / 窗口聚焦 / 别处 invalidate 都会触发）。
+    // type:"all" 把**未挂载**的查询也重取 —— 正是「页面已卸载」这一刻的形态。
+    await client.refetchQueries({ queryKey: ["crawl", "status"], type: "all" });
+
+    const keys = spy.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
+    expect(keys).toContain('["jobs"]');
+  });
 });
 
 describe("CrawlPage 读取失败", () => {
