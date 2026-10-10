@@ -289,18 +289,38 @@ class TestJobScoreIsolation:
         db.jobs().upsert_facts(_job(id="fresh"))
         assert db.jobs().get("fresh") is not None
 
-    def test_set_match_score_is_targeted(self, db: Database) -> None:
+    def test_set_score_is_targeted(self, db: Database) -> None:
         repo = db.jobs()
         repo.upsert(_job(title="原标题", city="北京"))
-        assert repo.set_match_score("j1", 88) is True
+        assert repo.set_score("j1", 88, summary="摘要", advantages="优势", gaps="差距") is True
         loaded = repo.get("j1")
         assert loaded is not None
         assert loaded.match_score == 88
+        assert (loaded.score_summary, loaded.score_advantages, loaded.score_gaps) == (
+            "摘要",
+            "优势",
+            "差距",
+        )
         assert loaded.title == "原标题"  # 其它列不被整行覆盖
         assert loaded.city == "北京"
 
-    def test_set_match_score_missing_job_returns_false(self, db: Database) -> None:
-        assert db.jobs().set_match_score("ghost", 50) is False
+    def test_set_score_overwrites_the_whole_conclusion(self, db: Database) -> None:
+        """重评一次就整组替换：不能留着上一次的「优势」配上这一次的分。"""
+        repo = db.jobs()
+        repo.upsert(_job())
+        repo.set_score("j1", 88, summary="旧摘要", advantages="旧优势", gaps="旧差距")
+        repo.set_score("j1", 42)  # 新一版模型没给文本
+        loaded = repo.get("j1")
+        assert loaded is not None
+        assert loaded.match_score == 42
+        assert (loaded.score_summary, loaded.score_advantages, loaded.score_gaps) == (
+            None,
+            None,
+            None,
+        )
+
+    def test_set_score_missing_job_returns_false(self, db: Database) -> None:
+        assert db.jobs().set_score("ghost", 50) is False
 
 
 class TestIllegalEnumValuesInDatabase:

@@ -72,6 +72,12 @@ class JobRow(Base):
     score_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     score_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     scored_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    # 评分的**结论文本**（优势 / 差距 / 摘要）。用 `Text` 而不是 `String(n)`：长度由
+    # 写入侧截断（见 `scoring.store` 的 `MAX_SCORE_TEXT_CHARS`），这里不重复定义上限。
+    # 与上面的溯源同因 —— 模型算出来的东西不能只在响应里闪一下就丢。
+    score_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    score_advantages: Mapped[str | None] = mapped_column(Text, nullable=True)
+    score_gaps: Mapped[str | None] = mapped_column(Text, nullable=True)
     capture_status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
     first_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True, index=True)

@@ -167,6 +167,10 @@ class Database:
                 "score_model": "VARCHAR(128)",
                 "score_prompt_version": "VARCHAR(64)",
                 "scored_at": "DATETIME",
+                # 评分的结论文本（优势 / 差距 / 摘要）
+                "score_summary": "TEXT",
+                "score_advantages": "TEXT",
+                "score_gaps": "TEXT",
             },
         }
         added: list[str] = []

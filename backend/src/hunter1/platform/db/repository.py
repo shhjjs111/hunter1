@@ -42,6 +42,12 @@ def _to_job(row: JobRow) -> Job:
         city=row.city,
         jd_raw=row.jd_raw,
         match_score=row.match_score,
+        score_summary=row.score_summary,
+        score_advantages=row.score_advantages,
+        score_gaps=row.score_gaps,
+        score_model=row.score_model,
+        score_prompt_version=row.score_prompt_version,
+        scored_at=row.scored_at,
         capture_status=restore_enum(
             CaptureStatus, row.capture_status, default=CaptureStatus.UNKNOWN, where="岗位抓取状态"
         ),
@@ -94,7 +100,8 @@ PREFIX_MATCH_LIMIT = 20
 def _assign_facts(row: JobRow, job: Job) -> None:
     """把岗位的**事实列**写进行对象（不含 match_score）。
 
-    match_score 由评分切片单独拥有（见 `set_match_score`），抓取路径不得在此写它。
+    match_score 由评分切片单独拥有（见 `set_score`），抓取路径不得在此写它
+    （评分那几列同理：结论文本与溯源同样只归评分切片所有）。
     """
     row.company_id = job.company_id
     row.title = job.title
@@ -166,7 +173,7 @@ class SqliteJobRepository:
             _assign_facts(row, job)
             session.commit()
 
-    def set_match_score(
+    def set_score(
         self,
         job_id: str,
         score: int,
@@ -174,6 +181,9 @@ class SqliteJobRepository:
         model: str | None = None,
         prompt_version: str | None = None,
         scored_at: datetime | None = None,
+        summary: str | None = None,
+        advantages: str | None = None,
+        gaps: str | None = None,
     ) -> bool:
         """只更新评分相关的几列；返回是否有行被更新（False = 岗位不存在）。
 
@@ -183,12 +193,19 @@ class SqliteJobRepository:
 
         溯源（model / prompt_version / scored_at）与分数同一次写入：分开写会出现
         「分数是新的、溯源是旧的」这种半截状态，而它的用途恰恰是回溯。
+
+        结论文本（summary / advantages / gaps）**无条件写入**（含写回 None）：它们是
+        这一版的结论，重评一次就该整组替换 —— 沿用上一次的「优势」配上这一次的分数
+        只会让人以为模型自相矛盾。
         """
         with self._db.session() as session:
             row = session.get(JobRow, job_id)
             if row is None:
                 return False
             row.match_score = score
+            row.score_summary = summary
+            row.score_advantages = advantages
+            row.score_gaps = gaps
             if model is not None:
                 row.score_model = model
             if prompt_version is not None:

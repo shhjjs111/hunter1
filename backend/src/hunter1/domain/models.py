@@ -87,6 +87,17 @@ class Job(_Model):
     city: str | None = None
     jd_raw: str | None = None
     match_score: int | None = Field(default=None, ge=0, le=100)
+    # 评分的**结论文本**：模型算出来的优势 / 差距 / 摘要。
+    # 原先它们只在 HTTP 响应里闪一下就没了（`advantages` / `gaps` 连响应都没进），
+    # 刷新页面即无据可查 —— 而模型已经为此花过钱。与 `match_score` 同属评分切片
+    # 拥有的列，抓取路径不写它们（见 `repository._assign_facts`）。
+    score_summary: str | None = None
+    score_advantages: str | None = None
+    score_gaps: str | None = None
+    # 溯源：这一版分是哪个模型、哪版提示词打的，以及什么时候打的。
+    score_model: str | None = None
+    score_prompt_version: str | None = None
+    scored_at: datetime | None = None
     capture_status: CaptureStatus = CaptureStatus.UNKNOWN
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None

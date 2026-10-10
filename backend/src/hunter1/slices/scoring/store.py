@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 
 from pydantic import ValidationError
@@ -23,6 +24,24 @@ PROFILE_KEY = "candidate_profile"
 #: match_score 的取值域，与 `Job.match_score` 的约束一致。
 SCORE_MIN = 0
 SCORE_MAX = 100
+
+#: 结论文本（优势 / 差距 / 摘要）的字符上限。
+#:
+#: 这是**外部模型给的文本**，长度不受控；而岗位行数没有上限，一段跑飞的长文会按行
+#: 复制进库。上限取得比任何正常的评分结论都宽松（一段话 vs 几千字），超过它基本是
+#: 模型跑飞，截断比写进库好 —— 但**不能静默**，所以截断时留痕（见 `_clip`）。
+MAX_SCORE_TEXT_CHARS = 2000
+
+
+def _clip(text: str | None) -> str | None:
+    """按上限截断结论文本；真截了就往 stderr 留一行。"""
+    if text is None or len(text) <= MAX_SCORE_TEXT_CHARS:
+        return text
+    print(
+        f"评分结论文本超过 {MAX_SCORE_TEXT_CHARS} 字符，已截断（原长 {len(text)}）。",
+        file=sys.stderr,
+    )
+    return text[:MAX_SCORE_TEXT_CHARS]
 
 
 class ScoreStore:
@@ -42,8 +61,11 @@ class ScoreStore:
         model: str | None = None,
         prompt_version: str | None = None,
         scored_at: datetime | None = None,
+        summary: str | None = None,
+        advantages: str | None = None,
+        gaps: str | None = None,
     ) -> Job | None:
-        """把分数写回岗位；岗位不存在时返回 None（调用方据此报 404）。
+        """把分数与**结论文本**写回岗位；岗位不存在时返回 None（调用方据此报 404）。
 
         **定向只写评分那几列**，不是整行读-改-写：否则抓取线程用它的旧快照
         整行回写时，会把这里刚打的分覆盖回 None（丢更新竞态）。代价是绕过 pydantic
@@ -52,11 +74,23 @@ class ScoreStore:
         `model` / `prompt_version` / `scored_at` 是**溯源**：`prompts.py` 说
         PROMPT_VERSION 就是为了「回溯这条分是哪版打出来的」，那就得真的落库
         （原先只在 HTTP 响应里回显，刷新页面即无据可查）。
+
+        `summary` / `advantages` / `gaps` 是模型**算出来的结论**。原先它们连响应都
+        没进全（`advantages`/`gaps` 只存在于领域模型里），落库后才有据可查 ——
+        模型不是白算的。写入前按 `MAX_SCORE_TEXT_CHARS` 截断：这是外部模型给的文本，
+        长度不受控，而每个岗位一行、行数没有上限。
         """
         if not (SCORE_MIN <= score <= SCORE_MAX):
             raise ValueError(f"match_score 越界：{score}（应在 {SCORE_MIN}..{SCORE_MAX}）")
-        if not self._db.jobs().set_match_score(
-            job_id, score, model=model, prompt_version=prompt_version, scored_at=scored_at
+        if not self._db.jobs().set_score(
+            job_id,
+            score,
+            model=model,
+            prompt_version=prompt_version,
+            scored_at=scored_at,
+            summary=_clip(summary),
+            advantages=_clip(advantages),
+            gaps=_clip(gaps),
         ):
             return None
         return self._db.jobs().get(job_id)

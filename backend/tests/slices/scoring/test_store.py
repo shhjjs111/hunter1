@@ -117,3 +117,21 @@ class TestProfileLoadDistinguishesStates:
         with pytest.raises(ValueError) as excinfo:
             store.load_profile()
         assert "画像" in str(excinfo.value)
+
+
+def test_overlong_conclusion_text_is_clipped_with_a_trace(
+    db: Database, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """外部模型给的文本长度不受控 —— 截断，但**不静默**。
+
+    一段跑飞的长文会按行复制进库（岗位行数没有上限），所以要截；而静默截断会让人
+    以为模型就写了这么点，所以要留痕。
+    """
+    from hunter1.slices.scoring.store import MAX_SCORE_TEXT_CHARS
+
+    db.jobs().upsert(_job())
+    stored = ScoreStore(db).save_score(JOB_ID, 70, summary="观" * (MAX_SCORE_TEXT_CHARS + 50))
+
+    assert stored is not None
+    assert len(stored.score_summary or "") == MAX_SCORE_TEXT_CHARS
+    assert "已截断" in capsys.readouterr().err
