@@ -199,8 +199,9 @@ class SqliteJobRepository:
         定向 `UPDATE ... SET match_score=?, score_model=?, ... WHERE id=?` ——
         不会像整行 upsert 那样把抓取线程同时更新的标题/城市/JD 回滚掉。
 
-        溯源（model / prompt_version / scored_at）与分数同一次写入：分开写会出现
-        「分数是新的、溯源是旧的」这种半截状态，而它的用途恰恰是回溯。
+        溯源（model / prompt_version / scored_at）与分数、与上面三段文本一样**无条件
+        写入**（含写回 None）：分开写会出现「分数是新的、溯源是旧的」这种半截状态，
+        而它的用途恰恰是回溯。不传就是不传 —— 留空是「不知道」，沿用旧值却是「说错了」。
 
         结论文本（summary / advantages / gaps）**无条件写入**（含写回 None）：它们是
         这一版的结论，重评一次就该整组替换 —— 沿用上一次的「优势」配上这一次的分数
@@ -214,12 +215,13 @@ class SqliteJobRepository:
             row.score_summary = summary
             row.score_advantages = advantages
             row.score_gaps = gaps
-            if model is not None:
-                row.score_model = model
-            if prompt_version is not None:
-                row.score_prompt_version = prompt_version
-            if scored_at is not None:
-                row.scored_at = scored_at
+            # 溯源**无条件**写入（含 None），与分数和上面三段文本同一次 UPDATE。
+            # 「只在非 None 时写」会留下「新分数 + 旧模型名」—— 而这几列的用途恰恰是
+            # 回溯「这条分是哪个模型、哪一版提示词打的」：留空是「不知道」，留着旧值是
+            # 「说错了」，后者更坏（调用方无从分辨）。
+            row.score_model = model
+            row.score_prompt_version = prompt_version
+            row.scored_at = scored_at
             session.commit()
             return True
 

@@ -322,6 +322,33 @@ class TestJobScoreIsolation:
     def test_set_score_missing_job_returns_false(self, db: Database) -> None:
         assert db.jobs().set_score("ghost", 50) is False
 
+    def test_rescoring_without_provenance_clears_it(self, db: Database) -> None:
+        """重评不传溯源 → 那三列**清空**，不留「新分数 + 旧模型名」。
+
+        与结论文本同一取舍（都是无条件写入）。留着旧值比留空更坏：这几列的用途是
+        回溯「这条分是哪个模型、哪一版提示词打的」—— 空是「不知道」，旧值是「说错了」，
+        而调用方从数据上分不出是哪一种。
+        """
+        repo = db.jobs()
+        repo.upsert(_job())
+        repo.set_score(
+            "j1",
+            80,
+            model="model-A",
+            prompt_version="v1",
+            scored_at=datetime(2026, 10, 5, tzinfo=UTC),
+        )
+        repo.set_score("j1", 90)  # 重评，不传溯源
+
+        loaded = repo.get("j1")
+        assert loaded is not None
+        assert loaded.match_score == 90
+        assert (loaded.score_model, loaded.score_prompt_version, loaded.scored_at) == (
+            None,
+            None,
+            None,
+        )
+
 
 class TestIllegalEnumValuesInDatabase:
     """库里的非法枚举值不能把整张列表拖成 500。
