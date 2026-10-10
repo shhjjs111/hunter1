@@ -58,51 +58,54 @@ def main(argv: list[str]) -> int:
     db = Database(db_path)
     db.initialize()
 
-    if offline:
-        print("[离线模式] 使用内联 HTML，不联网")
-        crawler: StaticHtmlCrawler = StaticHtmlCrawler(
-            company=f"{SITE.label}(离线)",
-            careers_url=TARGET_URL,
-            spec=SPEC,
-            fetcher=_OfflineFetcher(),
-        )
-        result = crawl_company(crawler, jobs=db.jobs())
-        fetcher = None
-    else:
-        print(f"[联网模式] 目标: {TARGET_URL}")
-        fetcher = HttpFetcher(timeout=20, retries=2)
-        crawler = StaticHtmlCrawler(
-            company=SITE.label, careers_url=TARGET_URL, spec=SPEC, fetcher=fetcher
-        )
-        try:
+    # 清理放进 `finally`：出错时的提前 `return` 此前会跳过 `db.dispose()` 与
+    # `fetcher.close()` —— 失败路径泄漏 SQLite 的 -wal/-shm 与 httpx 连接池。
+    fetcher: HttpFetcher | None = None
+    try:
+        if offline:
+            print("[离线模式] 使用内联 HTML，不联网")
+            crawler: StaticHtmlCrawler = StaticHtmlCrawler(
+                company=f"{SITE.label}(离线)",
+                careers_url=TARGET_URL,
+                spec=SPEC,
+                fetcher=_OfflineFetcher(),
+            )
             result = crawl_company(crawler, jobs=db.jobs())
-        except FetchError as exc:
-            print(f"[FAIL] 抓取失败: {exc.code} {exc.url}")
+        else:
+            print(f"[联网模式] 目标: {TARGET_URL}")
+            fetcher = HttpFetcher(timeout=20, retries=2)
+            crawler = StaticHtmlCrawler(
+                company=SITE.label, careers_url=TARGET_URL, spec=SPEC, fetcher=fetcher
+            )
+            try:
+                result = crawl_company(crawler, jobs=db.jobs())
+            except FetchError as exc:
+                print(f"[FAIL] 抓取失败: {exc.code} {exc.url}")
+                return 1
+
+        print(f"公司: {result.company}")
+        print(f"抓到: {result.fetched}  新增: {result.created}  更新: {result.updated}")
+        if result.error:
+            print(f"错误: {result.error}")
             return 1
 
-    print(f"公司: {result.company}")
-    print(f"抓到: {result.fetched}  新增: {result.created}  更新: {result.updated}")
-    if result.error:
-        print(f"错误: {result.error}")
-        return 1
+        jobs = db.jobs().list(limit=100)
+        print(f"库中岗位: {db.jobs().count()}")
+        print("--- 前 5 条 ---")
+        for job in jobs[:5]:
+            print(f"  [{job.capture_status.value}] {job.title[:44]}")
+            print(f"       {job.detail_url[:88]}")
+            print(f"       title_key={job.title_key[:30]}")
 
-    jobs = db.jobs().list(limit=100)
-    print(f"库中岗位: {db.jobs().count()}")
-    print("--- 前 5 条 ---")
-    for job in jobs[:5]:
-        print(f"  [{job.capture_status.value}] {job.title[:44]}")
-        print(f"       {job.detail_url[:88]}")
-        print(f"       title_key={job.title_key[:30]}")
-
-    db.dispose()
-    if fetcher is not None:
-        fetcher.close()
-
-    if not jobs:
-        print("[FAIL] 未抓到任何岗位")
-        return 1
-    print("PASS")
-    return 0
+        if not jobs:
+            print("[FAIL] 未抓到任何岗位")
+            return 1
+        print("PASS")
+        return 0
+    finally:
+        db.dispose()
+        if fetcher is not None:
+            fetcher.close()
 
 
 if __name__ == "__main__":

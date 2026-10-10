@@ -65,9 +65,13 @@ def main() -> int:
         return 1
     print("[OK] 归一化正确，且往返后模型完全相等")
 
-    # 实测文件确实落在磁盘上（存在且有内容）
-    on_disk = db_path.exists() and db_path.stat().st_size > 0
-    print(f"[OK] 数据已落盘: {on_disk}（{db_path.stat().st_size} 字节）")
+    # 实测文件确实落在磁盘上（存在且有内容）。
+    # 先判存在再 stat：文件没落盘时 `db_path.stat()` 会抛 FileNotFoundError，
+    # 把「校验没通过」变成一次崩溃 —— 校验脚本该给出结论，不是堆栈。
+    exists = db_path.is_file()
+    size = db_path.stat().st_size if exists else 0
+    on_disk = exists and size > 0
+    print(f"[OK] 数据已落盘: {on_disk}（{size} 字节）")
     if not on_disk:
         return 1
 
