@@ -101,6 +101,12 @@ else
 fi
 
 # 前端类型生成（前端就位后自动纳入）。
+#
+# 「未就位」时**必须说出来**：整段前端检查曾包在下面那个 `if -f package.json` 里，
+# 于是缺 `frontend/package.json` 时脚本照样打印「✓ 契约零漂移」并 exit 0 —— 一个
+# 自信的成功行底下少了一半门禁，且没有任何一行说「没查」（check.sh 早为此加了
+# SKIPPED 计数 + exit 3，这里当时没跟上）。现在缺前端 = 一行 ⚠ + 退出码 3。
+#
 # 生成器跑在**独立的依赖树**（tools/contract-codegen）里：openapi-typescript
 # 声明 peer typescript@^5.x，而主工程用 TS 6（为 typescript-eslint 从 TS 7 降下来的，
 # 见 docs/ARCHITECTURE.md）—— 两边都不在 5.x 范围内；生成器只产出 .d.ts 文本，
@@ -128,4 +134,14 @@ if [[ -f "$ROOT/frontend/package.json" ]]; then
     mv "$TMP_TS" "$GEN_TS"
     echo "✓ 前端类型已生成：$GEN_TS"
   fi
+else
+  echo "  ⚠ 未发现 frontend/package.json —— 前端类型漂移检查**未执行**（≠ 通过）。"
+  FRONTEND_SKIPPED=1
+fi
+
+# 「有检查没跑」不能喊零漂移：退出码 3 与「检查失败」（1）区分开 —— 这是「没查」，
+# 不是「查出错」（与 check.sh 的 SKIPPED 计数同一口径）。
+if [[ "${FRONTEND_SKIPPED:-0}" -eq 1 ]]; then
+  echo "== 有 1 项检查**未执行**（前端类型漂移）—— 这不等于通过 =="
+  exit 3
 fi

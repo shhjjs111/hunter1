@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,11 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECK_SH = ROOT / "scripts" / "check.sh"
 CONTRACTS_SH = ROOT / "scripts" / "contracts.sh"
 SNAPSHOT = ROOT / "contracts" / "openapi.json"
+
+#: 跑真的门禁脚本时要给它一个解释器：本机 python 不在 PATH 上（embeddable 版），
+#: `contracts.sh` 只在 `$ROOT/.tools/python` 存在时才用它 —— 临时树里没有那个目录。
+_PYTHON = ROOT / ".tools" / "python" / "python.exe"
+
 
 #: 假装参数写错 / 多给参数时，契约脚本必须拒绝执行
 UNKNOWN_FLAG_CASES = (["--chek"], ["--check", "extra"])
@@ -61,6 +69,44 @@ def test_contracts_sh_refuses_bad_arguments(argv: list[str]) -> None:
     out = proc.stdout + proc.stderr
     assert "未知参数" in out or "参数过多" in out
     assert _digest(SNAPSHOT) == before, "拒绝执行时快照被改写了"
+
+
+def test_contracts_sh_reports_a_skipped_frontend_check(tmp_path: Path) -> None:
+    """缺 `frontend/package.json` 时**必须说出来**，不能照喊「✓ 契约零漂移」。
+
+    整段前端类型检查原先包在 `if -f frontend/package.json` 里：缺这个文件时脚本照样
+    打印「✓ 契约零漂移」并 exit 0 —— 一个自信的成功行底下少了一半门禁，且没有任何
+    一行说「没查」。判据用**真跑**（在临时目录里复制一棵没有 `frontend/` 的树），
+    因为「退出码是不是 3」是源码级断言钉不住的那一半。
+    """
+    if not SNAPSHOT.is_file():
+        pytest.skip("快照不存在（契约尚未导出）")
+    python = str(_PYTHON) if _PYTHON.exists() else sys.executable
+
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy(CONTRACTS_SH, root / "scripts" / "contracts.sh")
+    shutil.copy(ROOT / "scripts" / "export_openapi.py", root / "scripts" / "export_openapi.py")
+    (root / "contracts").mkdir()
+    shutil.copy(SNAPSHOT, root / "contracts" / "openapi.json")
+    shutil.copytree(ROOT / "backend" / "src", root / "backend" / "src")
+    # 刻意**不**建 frontend/ —— 这就是要复现的场景
+
+    proc = subprocess.run(
+        ["bash", str(root / "scripts" / "contracts.sh"), "--check"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        cwd=root,
+        env={**os.environ, "PY": python},
+    )
+    out = proc.stdout + proc.stderr
+
+    assert proc.returncode == 3, f"应 exit 3（「没查」≠ 通过），实际 {proc.returncode}：\n{out}"
+    assert "未执行" in out, f"没有任何一行说「没查」：\n{out}"
+    assert "前端" in out, f"没点名是哪一项没跑：\n{out}"
 
 
 def test_check_sh_cannot_say_all_green_after_skipping() -> None:
