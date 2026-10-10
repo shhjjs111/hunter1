@@ -268,6 +268,34 @@ class TestStart:
         runner.run()
         assert runner.start() is True
 
+    def test_thread_construction_failure_also_rolls_back(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`Thread(...)` **构造**就炸（不是 `start()`）时同样必须收敛。
+
+        构造与启动对状态的后果一样：`running=True` 已经置位，而没有任何线程在跑。
+        原先构造在 try 外 —— 那条路径漏掉了。
+        """
+        import types
+
+        import hunter1.slices.crawl.runner as runner_module
+
+        class UnconstructableThread:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                raise RuntimeError("can't allocate thread")
+
+        runner = _runner(db, [FakeCrawler("甲")])
+        monkeypatch.setattr(
+            runner_module, "threading", types.SimpleNamespace(Thread=UnconstructableThread)
+        )
+
+        with pytest.raises(RuntimeError, match="can't allocate thread"):
+            runner.start()
+
+        snapshot = runner.snapshot()
+        assert snapshot.running is False, "线程都没构造出来却留着 running=True"
+        assert snapshot.error is not None
+
     def test_thread_start_failure_does_not_leave_it_running(
         self, db: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -90,8 +90,10 @@ class CrawlRunner:
             if self._state.running:
                 return False
             self._state = CrawlSnapshot(running=True, started_at=self._clock())
-        self._thread = threading.Thread(target=self._guarded_run, name="hunter1-crawl", daemon=True)
         try:
+            self._thread = threading.Thread(
+                target=self._guarded_run, name="hunter1-crawl", daemon=True
+            )
             self._thread.start()
         except BaseException as exc:
             # 线程起不来（`RuntimeError: can't start new thread` —— 线程/句柄耗尽）时
@@ -100,6 +102,9 @@ class CrawlRunner:
             # 这正是本模块开头那条「任何异常都要收敛」要防的情形，只是它发生在
             # **进入**线程之前，`_guarded_run` 里的 try 覆盖不到。所以在这里回滚置位，
             # 再把异常按原样抛出去（异常形状是开放集合，用 BaseException 一并兜住）。
+            # 线程的**构造**也在 try 里：`Thread(...)` 本身就会抛（线程/句柄耗尽、
+            # 或将来有人加了个会校验的参数）—— 构造失败与启动失败对状态的后果一样，
+            # 都得把 `running` 回滚掉。
             with self._lock:
                 self._state = CrawlSnapshot(running=False, error=f"线程启动失败：{exc}")
             raise
