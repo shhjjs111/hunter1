@@ -143,13 +143,18 @@ def _merge(existing: Job, raw: RawJob, timestamp: datetime) -> Job:
     合并走一次 `model_validate`，让领域不变量兜底。
     """
     payload = existing.model_dump(exclude_computed_fields=True)
+    # 公司名是「事实」不是「成果」：站点填错/改名后重抓要能纠正。**id 必须跟着名字走**
+    # —— 公司身份由公司名推导（见 `_company_id`），只改名字不改 id 会让同一家公司在库里
+    # 留下两个 id：历史岗位挂旧哈希、之后新抓的岗位挂新哈希，按 `company_id` 分组/关联
+    # 就此分裂。`_company_id` 只读 `company` 一个字段，所以这里不必伪造整个 RawJob。
+    company_name = raw.company or existing.company_name
     payload.update(
         {
             "title": raw.title,
             "detail_url": raw.detail_url,
             "city": raw.city or existing.city,
-            # 公司名是「事实」不是「成果」：站点填错/改名后重抓要能纠正
-            "company_name": raw.company or existing.company_name,
+            "company_name": company_name,
+            "company_id": _company_id(raw.model_copy(update={"company": company_name})),
             # 已有 JD 正文不被空值抹掉
             "jd_raw": raw.jd_raw or existing.jd_raw,
             # last_seen 只前进不倒退：时间源异常（时钟回拨/旧数据）时保持原值，

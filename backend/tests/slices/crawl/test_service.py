@@ -19,6 +19,7 @@ from hunter1.slices.crawl import ListPageSpec, StaticHtmlCrawler
 from hunter1.slices.crawl.service import (
     BatchCrawlResult,
     CrawlResult,
+    _company_id,
     crawl_all,
     crawl_company,
 )
@@ -101,6 +102,27 @@ class TestBatchLookup:
 
         assert (again.created, again.updated) == (1, 1)
         assert jobs.calls.count("get_many") == 1
+
+    def test_corrected_company_name_carries_the_id(self) -> None:
+        """公司名被纠正后 `company_id` 必须一起变 —— 否则同一家公司两个 id。
+
+        公司身份由公司名推导（`_company_id`）：只改名字不改 id，历史岗位挂旧哈希、
+        之后新抓的岗位挂新哈希，按 `company_id` 分组/关联就此分裂。
+        """
+        jobs = BatchOnlyJobs()
+        original = _raw("产品经理", "https://example.com/j/1", company="示例科技")
+        crawl_company(FakeCrawler("示例科技", [original]), jobs=jobs)  # type: ignore[arg-type]
+        job_id = next(iter(jobs.stored))
+        first_id = jobs.stored[job_id].company_id
+
+        renamed = _raw("产品经理", "https://example.com/j/1", company="示例科技有限公司")
+        result = crawl_company(FakeCrawler("示例科技", [renamed]), jobs=jobs)  # type: ignore[arg-type]
+
+        assert result.updated == 1
+        merged = jobs.stored[job_id]
+        assert merged.company_name == "示例科技有限公司"
+        assert merged.company_id != first_id, "名字改了 id 没跟着走"
+        assert merged.company_id == _company_id(renamed)
 
     def test_duplicate_in_one_page_counts_as_update(self) -> None:
         """同一页里重复出现的岗位：第二条按「更新」算 —— 与旧的逐条 `get` 行为一致。
