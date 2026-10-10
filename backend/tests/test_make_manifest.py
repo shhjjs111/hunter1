@@ -175,6 +175,17 @@ class TestAssetPlatformMatchesItsFilename:
         message = str(excinfo.value)
         assert "hunter1-linux.zip" in message and "win32" in message and "'linux'" in message
 
+    def test_uppercase_suffix_is_still_policed(self, tmp_path: Path) -> None:
+        """`.ZIP` 与 `.zip` 必须走同一道闸（audit n9）。
+
+        原先两处判定不一致：`asset_version_problem` 用 `path.suffix.lower()`，
+        而「产物名↔平台一致」这道检查用 `path.suffix == ".zip"`（大小写敏感）——
+        于是 `.ZIP` 能过版本核对、却绕过平台名一致性校验。统一成大小写不敏感。
+        """
+        path = self._zip(tmp_path, "hunter1-linux.ZIP")
+        with pytest.raises(make_manifest.ManifestError):
+            self._build(path, "win32")
+
     def test_other_shapes_are_not_policed(self, tmp_path: Path) -> None:
         """非约定命名（tar.gz、手搓的包）不套这条规则 —— 它们本来就没有平台约定。"""
         path = tmp_path / "hunter1-linux.tar.gz"

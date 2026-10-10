@@ -196,7 +196,7 @@ def build_manifest(
         # 只对符合命名约定的 `.zip` 检查：别的形态（tar.gz、手搓的测试包）没有这个约定。
         prefix = f"{_ZIP_ROOT}-"
         if (
-            path.suffix == ".zip"
+            path.suffix.lower() == ".zip"
             and path.stem.startswith(prefix)
             and path.stem != f"{prefix}{canonical}"
         ):
