@@ -57,7 +57,25 @@ export function useChangeStage() {
       }
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (data, input) => {
+      // 先把本轮结果**收敛进查询缓存**，再让组件撤掉乐观草稿 —— 组件的 per-call
+      // onSuccess 在本钩子的 onSuccess **之后**运行（@tanstack/react-query v5 的
+      // `Mutation.execute` 先 await `options.onSuccess`，再 dispatch 触发观察者回调）。
+      //
+      // 为什么必须收敛：只撤草稿不收敛的话，撤草稿那一刻 `select` 的取值会回落到
+      // 查询数据里**旧**的 `stage`（invalidate 触发的 refetch 还是异步的）——
+      // 下拉框先跳回旧值、再跳到新值，看起来像「系统把选择吞了又吐出来」。
+      // 把权威值写进缓存后再撤草稿，两者落在同一批更新里，中间帧不存在。
+      queryClient.setQueryData<ApplicationList>(["applications"], (prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((row) =>
+                row.id === input.applicationId ? { ...row, stage: data.stage } : row,
+              ),
+            }
+          : prev,
+      );
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
     },
   });

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import contract from "../../../../contracts/openapi.json";
 import { ApplicationsPage } from "./ApplicationsPage";
-import { STAGE_ORDER } from "./api";
+import { STAGE_ORDER, type ApplicationList } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -132,6 +132,52 @@ describe("ApplicationsPage 阶段乐观值", () => {
       await client.refetchQueries({ queryKey: ["applications"] });
     });
     expect(select.value).toBe("rejected");
+  });
+
+  it("撤草稿时下拉框不回弹到旧值（refetch 落地前保持新阶段）", async () => {
+    // 乐观草稿在成功时被撤掉，而 invalidate 触发的 refetch 是异步的 —— 若撤草稿
+    // 那一刻查询缓存里还是**旧** stage，下拉框会先跳回旧值（一闪）再跳到新值。
+    // 这里把 refetch 挂住：撤草稿之后、refetch 落地之前，显示的必须仍是新阶段。
+    let listCalls = 0;
+    let releaseRefetch!: () => void;
+    const refetchGate = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : (input as Request).url;
+        if (url.includes("/stage")) {
+          return jsonResponse({ application_id: "app1", stage: "interview" });
+        }
+        listCalls += 1;
+        if (listCalls >= 2) {
+          await refetchGate; // 挂住 invalidate 触发的 refetch
+        }
+        return jsonResponse(LIST); // 服务端仍是旧阶段 applied
+      }),
+    );
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ApplicationsPage />
+      </QueryClientProvider>,
+    );
+    const select = (await screen.findByLabelText(/投递阶段/)) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "interview" } });
+
+    // 等 refetch 真的发起（说明成功链已跑过），再冲干净撤草稿那一步
+    await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
+    await act(async () => {});
+
+    // 修复前：查询缓存仍是 applied，撤草稿后 select 回落到 applied（先跳回旧值）
+    expect(select.value).toBe("interview");
+    expect(
+      client.getQueryData<ApplicationList>(["applications"])?.items[0].stage,
+    ).toBe("interview");
+
+    releaseRefetch();
   });
 });
 
