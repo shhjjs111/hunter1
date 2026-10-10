@@ -420,6 +420,26 @@ class TestFailureCleanup:
         assert not (dest / "hunter1-0.2.0.zip").exists()
         assert not (dest / "0.2.0").exists()
 
+    def test_failed_retry_keeps_the_previously_extracted_version(self, tmp_path: Path) -> None:
+        """同一版本重下但被闸门拒绝：**不许**删掉上一次成功解压好的那份。
+
+        回归护栏：体积 / 条目数 / 膨胀比这几道闸门都在 `extractall` **之前**抛出 ——
+        目录根本没被碰过，而无差别 `rmtree` 会把用户等着覆盖过去的那份产物一起删掉
+        （数据丢失，不是「收拾干净」）。
+        """
+        dest = tmp_path / "updates"
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        assert (extracted / "hunter1" / "hunter1.exe").is_file()
+
+        bomb = FakeSource(manifest=_manifest("0.2.0"), payload=_bomb_bytes())
+        with pytest.raises(ValueError) as excinfo:
+            prepare_update(source=bomb, status=self._status(bomb), dest_dir=dest)
+
+        assert "膨胀比" in str(excinfo.value)
+        assert extracted.is_dir(), "上一次成功解压的版本目录被删了"
+        assert (extracted / "hunter1" / "hunter1.exe").is_file()
+
     def test_success_still_keeps_the_archive(self, tmp_path: Path) -> None:
         """成功路径**不许**被清理逻辑波及：包要留着（用户自己覆盖过去）。"""
         source = FakeSource(manifest=_manifest("0.2.0"))

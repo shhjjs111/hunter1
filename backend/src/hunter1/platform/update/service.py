@@ -125,6 +125,11 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     # 「已存在但残缺」的版本目录（调用方据此以为该版本已经就位），包也会一直占着
     # 磁盘。放在 `finally` 里而不是每个 handler 里，是为了让**所有**失败路径（含
     # 上面那串 catch-all，以及将来新加的形状）都必然收拾一遍，且不改变任何错误码。
+    # 记下**本次之前**它是否存在。体积 / 条目数 / 越界路径这几道闸门都在
+    # `extractall` **之前**抛出 —— 那时目录根本没被碰过，而最后一次成功下载的完整
+    # 产物可能就摆在那里（用户等着覆盖过去的那一份）。无差别 `rmtree` 会把它一并
+    # 删掉：那是数据丢失，不是「收拾干净」。失败清理只收拾**本次留下的**东西。
+    existed_before = extracted.exists()
     ok = False
     try:
         _extract_within(archive, extracted)
@@ -160,22 +165,28 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
         raise DownloadError("archive_corrupt", str(exc)) from exc
     finally:
         if not ok:
-            _discard_partial(archive, extracted)
+            _discard_partial(archive, extracted, keep_dir=existed_before)
     return extracted
 
 
-def _discard_partial(archive: Path, extracted: Path) -> None:
+def _discard_partial(archive: Path, extracted: Path, *, keep_dir: bool) -> None:
     """解压失败后的收拾：删掉半成品目录与下载下来的包。
 
     不清理的后果有两层：`dest_dir/<版本>/` 留下一个**残缺但存在**的目录，而
     「目录已存在」正是调用方判断「这个版本已经就位」的依据（见模块 docstring 的
     「解压即用」流程）；另外那个 zip 会一直占着磁盘，且用户看不出它已无用。
 
+    `keep_dir=True` 是必需的区分：解压**之前**那个目录就已经在（上一次成功下载的
+    完整产物），而所有闸门都在 `extractall` 之前抛出 —— 本次失败跟它毫无关系，
+    删掉它是数据丢失。此时只清下载包，并**留一句说明**（不静默）。
+
     **尽力而为**：失败原因本身可能就是磁盘满/权限不足，清理同样可能失败。清理失败
     只留一句说明到 stderr，绝不抛出 —— 调用方要的是「为什么更新失败」，把一个清理
     错误盖上去只会让真正的原因消失。
     """
-    for target in (extracted, archive):
+    if keep_dir:
+        print(f"[update] 保留此前已下载好的目录：{extracted}", file=sys.stderr)
+    for target in [archive] if keep_dir else [extracted, archive]:
         try:
             if target.is_dir():
                 shutil.rmtree(target, ignore_errors=True)
