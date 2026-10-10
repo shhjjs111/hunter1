@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -82,15 +83,19 @@ function stubApi(): void {
   );
 }
 
-function renderPage() {
+function renderPage({ strict = false }: { strict?: boolean } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { staleTime: 30_000, retry: false } },
   });
-  return render(
+  const tree = (
     <QueryClientProvider client={client}>
       <AssistantPage />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  // 严格模式（开发态默认）会对 effect 做 setup → cleanup → setup。这正是此前逃逸
+  // 的那条通路：任何「只在 cleanup 里置位、setup 不复位」的标记，第二次 setup 之后
+  // 就永久失效 —— 而下面的用例全部不包 StrictMode，于是全绿。
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
 afterEach(() => {
@@ -98,6 +103,25 @@ afterEach(() => {
 });
 
 describe("AssistantPage", () => {
+  it("严格模式下流式回答照常渲染，且「回复中…」会解除", async () => {
+    // 回归护栏：`alive` 标记只在卸载 cleanup 里置 false，effect 体内不复位 ——
+    // 严格模式的第二次 setup 之后它恒为 false，所有流式回调与续点被自己的闸门挡掉：
+    // 助手永远不回话、SSE 的 error 事件也看不见、按钮与输入框永久禁用（只能刷新）。
+    // 开发形态（`bash scripts/dev.sh`）正是严格模式，所以这是用户直接撞到的形状。
+    stubApi();
+    renderPage({ strict: true });
+
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), {
+      target: { value: "你好" },
+    });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    expect(await screen.findByText(REPLY)).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "发送" })).toBeDefined();
+    });
+  });
+
   it("对话结束后本轮消息只显示一次（live 清空，不与会话历史叠加）", async () => {
     stubApi();
     renderPage();

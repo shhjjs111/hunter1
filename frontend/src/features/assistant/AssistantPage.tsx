@@ -61,7 +61,15 @@ export function AssistantPage() {
   // —— 它们会继续对**已卸载**的组件 setState（React 18+ 静默忽略，但那是「碰巧
   // 不炸」，正确性不该建在库行为上），`done` 里还会顺带触发一次 assistant 重取。
   // 所以除了 abort，还要用 alive 标记兜住这些写入与副作用。
+  //
+  // **复位必须写在 effect 体内**：严格模式（开发态默认）对每个 effect 做
+  // 「setup → cleanup → setup」。只在 cleanup 里置 false 的话，第二次 setup 之后
+  // 标记永远是 false —— 所有流式回调与 `send()` 续点被自己的闸门挡掉：助手一个字
+  // 都不回、SSE 的 error 事件也看不见、按钮与输入框永久停在「回复中…」。而单测若不
+  // 包 StrictMode 就完全看不到（开发形态 `bash scripts/dev.sh` 正是严格模式）。
+  // 这也是这个标记的本意：它描述的是「**当前这次挂载**是否还活着」。
   useEffect(() => {
+    alive.current = true;
     return () => {
       alive.current = false;
       abortRef.current?.abort();
