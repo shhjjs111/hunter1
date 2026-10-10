@@ -58,6 +58,26 @@ class CrawlBlockedError(RuntimeError):
         self.url = url
 
 
+class CrawlEmptyPageError(RuntimeError):
+    """**首页**一个岗位都没解析出来。
+
+    与 `CrawlBlockedError` 同属「拿不到数据」那一类，但成因不同：没有命中拦截特征，
+    只是我们的选择器在这个页面上什么都没匹配到。可能是站点改版，也可能是这家公司
+    今天确实没有岗位 —— 两种情况的**处理动作是同一个**：不许当成「抓取成功，0 条」。
+
+    为什么要抛而不是返回 `[]`：解析器返回空列表时，上层看到的和「今天真没岗位」
+    一模一样，界面显示抓取成功。用户以为站点空了，而实际上是读不懂页面了，
+    **且永远不会知道**（同 guards 模块开头那个 BOSS 拦截页的教训）。
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(
+            f"empty_first_page: {url} —— 首页没有解析出任何岗位："
+            "要么站点今天确实没有岗位，要么页面结构变了（选择器失效）。请人工确认。"
+        )
+        self.url = url
+
+
 def detect_blocking(html: str) -> str | None:
     """命中拦截特征则返回信号名，否则 None。"""
     if not html:
@@ -101,6 +121,7 @@ __all__ = [
     "BLOCK_MARKUP_SIGNALS",
     "BLOCK_TITLE_SIGNALS",
     "CrawlBlockedError",
+    "CrawlEmptyPageError",
     "detect_blocking",
     "ensure_not_blocked",
 ]

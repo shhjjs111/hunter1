@@ -24,7 +24,7 @@ from bs4.element import Tag
 
 from hunter1.application.ports import TextFetcher
 from hunter1.domain.crawl import RawJob, normalize_detail_url
-from hunter1.slices.crawl.guards import ensure_not_blocked
+from hunter1.slices.crawl.guards import CrawlEmptyPageError, ensure_not_blocked
 
 
 class BaseCrawler:
@@ -224,6 +224,20 @@ def _item_company(item: Tag, spec: ListPageSpec, *, default: str) -> str:
     return _item_text(item, spec.company_selector) or default
 
 
+def _has_item_container(html: str, spec: ListPageSpec) -> bool:
+    """页面上还认得出「岗位条目容器」吗。
+
+    把两种「0 条」分开的唯一信号：
+
+    - 容器在、里面没有条目 → 真的是空列表页（今天没岗位）；
+    - 容器**根本没匹配到** → 我们读不懂这个页面了（改版 / 选择器失效），
+      必须报错，否则界面会显示「抓取成功，0 条」，用户以为站点空了。
+
+    只在「这一页解析出了 0 条」时才调用 —— 正常路径不会多解析一次。
+    """
+    return bool(BeautifulSoup(html, "lxml").select(spec.item_selector))
+
+
 class StaticHtmlCrawler(BaseCrawler):
     """按 `ListPageSpec` 抓取静态列表页的适配器。"""
 
@@ -252,6 +266,14 @@ class StaticHtmlCrawler(BaseCrawler):
             ensure_not_blocked(html, url=url)
             page_jobs = parse_list_page(html, self.spec, company=self.company, page_url=url)
             if not page_jobs:
+                # 两种「0 条」必须分开（见 guards 模块的原则）：
+                # - **条目容器根本没匹配到** → 我们读不懂这个页面了（改版 / 选择器失效）。
+                #   这正是原先的静默 bug：返回 [] 与「今天真没岗位」长得一模一样，
+                #   界面显示「抓取成功，0 条」，用户以为站点空了，且永远不会知道。
+                # - 容器在、只是里面没有条目 → 真的是空列表页，不报错（下面 break）。
+                # 只在首页这么判：后续页是空的才是真的「没有更多了」。
+                if page == 1 and not _has_item_container(html, self.spec):
+                    raise CrawlEmptyPageError(url)
                 break  # 空页 = 没有更多了
             for job in page_jobs:
                 if job.detail_url in seen:

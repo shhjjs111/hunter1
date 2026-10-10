@@ -13,6 +13,7 @@ from hunter1.slices.crawl.guards import (
     BLOCK_MARKUP_SIGNALS,
     BLOCK_TITLE_SIGNALS,
     CrawlBlockedError,
+    CrawlEmptyPageError,
     detect_blocking,
     ensure_not_blocked,
 )
@@ -525,7 +526,19 @@ class TestCrawlerRaisesOnChallenge:
         with pytest.raises(CrawlBlockedError):
             self._crawler(BOSS_CHALLENGE).fetch()
 
-    def test_genuinely_empty_page_returns_empty(self) -> None:
-        """真正没有岗位的空列表页仍然是「空结果」，不该报错。"""
+    def test_empty_list_page_reports_instead_of_succeeding_silently(self) -> None:
+        """**决策变更**：首页一条都没解析出来时不再返回空结果，而是报错。
+
+        原先这条断言「真正没有岗位的空列表页仍然是空结果，不该报错」。但页面上的
+        空 `<ul class='jobs'>` 与「选择器失效 / 站点改版」在 HTML 层面**无法区分**
+        （两种情况的 `select('li.job')` 都是空集）—— 于是「今天真没岗位」和「我们
+        读不懂这个页面了」在界面上一模一样：都显示「抓取成功，0 条」。
+
+        审查决定选前者：宁可让运维看一眼（错误文案里两种可能都写了、并请人工确认），
+        也不要让「读不懂页面」永远沉默 —— 后者用户永远不会知道。
+        """
         empty = "<html><head><title>招聘</title></head><body><ul class='jobs'></ul></body></html>"
-        assert self._crawler(empty).fetch() == []
+        with pytest.raises(CrawlEmptyPageError) as excinfo:
+            self._crawler(empty).fetch()
+        assert "empty_first_page" in str(excinfo.value)
+        assert "人工确认" in str(excinfo.value)

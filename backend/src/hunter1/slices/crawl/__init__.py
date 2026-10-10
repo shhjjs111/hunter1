@@ -18,7 +18,12 @@ from hunter1.slices.crawl.adapters import (
     StaticHtmlCrawler,
     parse_list_page,
 )
-from hunter1.slices.crawl.guards import CrawlBlockedError, detect_blocking, ensure_not_blocked
+from hunter1.slices.crawl.guards import (
+    CrawlBlockedError,
+    CrawlEmptyPageError,
+    detect_blocking,
+    ensure_not_blocked,
+)
 from hunter1.slices.crawl.router import build_router
 from hunter1.slices.crawl.runner import CrawlRunner, CrawlSnapshot, SiteProgress
 from hunter1.slices.crawl.service import (
@@ -41,6 +46,7 @@ __all__ = [
     "BaseCrawler",
     "BatchCrawlResult",
     "CrawlBlockedError",
+    "CrawlEmptyPageError",
     "CrawlResult",
     "CrawlRunner",
     "CrawlSnapshot",
