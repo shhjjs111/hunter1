@@ -31,6 +31,15 @@ from hunter1.domain.llm import LLMError, StreamComplete, TextDelta
 _DATA_PREFIX = "data:"
 _DONE_MARKER = "[DONE]"
 
+#: 单个 SSE 事件允许累积的最大字节数。
+#:
+#: 前提是**空行才是事件分隔符**。对端若从不发空行（或载荷根本不是事件流），
+#: `buffer` 就会一条 `data:` 接一条地累积、永不清空 —— 内存被无限撑大，而流看起来
+#: 一切正常（这也不是假想：见 `_event_payloads` 记录的不合规实现）。
+#: 1 MiB 远高于任何正常事件（最大的也就是工具参数的 JSON），超过它就不是「事件大」，
+#: 而是「根本没有事件边界」—— 那时继续攒下去只会撑爆内存。
+MAX_EVENT_BYTES = 1024 * 1024
+
 
 @dataclass
 class _ToolSlot:
@@ -117,6 +126,7 @@ def parse_sse_lines(
                             current_index = _absorb(slots, fragment, current_index)
 
     buffer: list[str] = []
+    buffered_bytes = 0
     for raw in lines:
         line = raw.strip()
         # 空行是事件分隔符；`:` 开头是注释（keep-alive ping）
@@ -124,6 +134,7 @@ def parse_sse_lines(
             if buffer:
                 yield from handle(buffer)
                 buffer = []
+                buffered_bytes = 0
             continue
         if line.startswith(":"):
             continue
@@ -137,8 +148,16 @@ def parse_sse_lines(
             if buffer:
                 yield from handle(buffer)
                 buffer = []
+                buffered_bytes = 0
             break
         buffer.append(piece)
+        buffered_bytes += len(piece)
+        if buffered_bytes > MAX_EVENT_BYTES:
+            raise LLMError(
+                "stream_event_too_large",
+                f"单个 SSE 事件累积超过 {MAX_EVENT_BYTES} 字节仍未见空行分隔符 —— "
+                "对端可能没按事件流发送（缺空行）。继续累积只会把内存撑爆。",
+            )
 
     if buffer:
         yield from handle(buffer)

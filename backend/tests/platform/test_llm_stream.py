@@ -895,3 +895,20 @@ class TestMidStreamDisconnect:
 
         with pytest.raises(LLMError):
             list(_client(handler).stream_with_tools(messages=[], tools=[]))
+
+
+def test_unterminated_event_hits_the_buffer_ceiling() -> None:
+    """从不发空行的对端不能把缓冲无限撑大。
+
+    空行才是 SSE 的事件分隔符；缺了它就一条条 `data:` 累积下去、永不清空 ——
+    流看起来一切正常，内存却被撑爆。超过上限时明确报错，而不是继续攒。
+
+    （正常流不受影响：本文件其它用例都是带空行的，它们照旧全绿。）
+    """
+    from hunter1.platform.llm.streaming import MAX_EVENT_BYTES
+
+    line = "data: " + "x" * 4096
+    lines = [line] * (MAX_EVENT_BYTES // 4096 + 2)
+    with pytest.raises(LLMError) as excinfo:
+        list(parse_sse_lines(lines))
+    assert excinfo.value.code == "stream_event_too_large"
