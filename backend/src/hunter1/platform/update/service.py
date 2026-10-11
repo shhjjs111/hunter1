@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hunter1.platform.update.client import DownloadError
-from hunter1.platform.update.ports import ReleaseSource
+from hunter1.platform.update.ports import ProgressCallback, ReleaseSource
 from hunter1.platform.update.rules import (
     MAX_DOWNLOAD_BYTES,
     MAX_ENTRIES,
@@ -79,11 +79,21 @@ def check_for_update(
     )
 
 
-def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Path) -> Path:
+def prepare_update(
+    *,
+    source: ReleaseSource,
+    status: UpdateStatus,
+    dest_dir: Path,
+    on_progress: ProgressCallback | None = None,
+) -> Path:
     """下载并解压到 `dest_dir/<版本>/`，返回解压目录。
 
     下载由端口负责（含 sha256 校验）；这里只管落位与解压，
     并且对压缩包做**越界路径检查** —— 宁可拒绝一个可疑包，也不要它写到目录外。
+
+    `on_progress` 直通给 `source.download_asset`（契约本就带它，见
+    `update.ports.ReleaseSource`）—— 此前这里从不传，于是 43MB 的包在 CLI 上是
+    **静默等待**（报告次要项）。没有进度回调时行为不变。
 
     失败词汇只有两种，且都是调用方（CLI）已经认识的：
     - `ValueError`：没有可更新的版本、产物声明体积超限、包里有越界路径 / 解压后
@@ -100,6 +110,13 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     if not status.available or status.asset is None or status.latest is None:
         raise ValueError("没有可用的更新")
 
+    # 目录先建出来：磁盘预检与下载都需要它存在（原先这步在下面的 try 里与下载绑在
+    # 一起，拆开是为了让预检能在**发起下载之前**给出结论）。
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise DownloadError("write_failed", str(exc)) from exc
+
     # 清单里声明的体积先挡一道：比下载完再发现超限便宜，也让「这个包不对劲」
     # 在落盘之前就被说清楚。
     if status.asset.size is not None and status.asset.size > MAX_DOWNLOAD_BYTES:
@@ -107,10 +124,12 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
             f"产物声明体积超限，已拒绝：{status.asset.size} 字节 > 上限 {MAX_DOWNLOAD_BYTES}"
         )
 
+    # 磁盘剩余空间预检（报告次要项）：下载 + 解压都要落盘。
+    _ensure_free_space(dest_dir, status.asset.size)
+
     try:
-        dest_dir.mkdir(parents=True, exist_ok=True)
         archive = dest_dir / f"hunter1-{status.latest}.zip"
-        source.download_asset(status.asset, archive)
+        source.download_asset(status.asset, archive, on_progress=on_progress)
     except (DownloadError, ValueError):
         raise
     except OSError as exc:
@@ -129,6 +148,16 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
     # `extractall` **之前**抛出 —— 那时目录根本没被碰过，而最后一次成功下载的完整
     # 产物可能就摆在那里（用户等着覆盖过去的那一份）。无差别 `rmtree` 会把它一并
     # 删掉：那是数据丢失，不是「收拾干净」。失败清理只收拾**本次留下的**东西。
+    #
+    # 已知取舍（报告次要项，**刻意保留行为**）：目标目录**已存在**时不会先清空，
+    # 于是包里没有、而旧目录里有的文件会残留下来 —— 目录内容因此不等于「这一版
+    # 发布包的精确内容」，被篡改过的旧文件也不会在本次校验里被发现。sha256 校验的是
+    # **下载下来的 zip**（`.part` → 改名链），它不覆盖解压后的目录树。
+    # 之所以不改：正常流程是新版本 → **新目录**（版本号不同），残留只可能出现在
+    # 「重复下载同一版本」或「目录被外力污染」这两种情形；而先清空再解压会把
+    # 「发布者上传了坏包」变成「用户既没有新版本、也没了原来那份」——用一次数据丢失
+    # 换一点点目录纯净度，不划算。真要精确比对，应当走「解压到临时目录 + 成功后原子
+    # 替换」，那是另一次改动。
     existed_before = extracted.exists()
     ok = False
     try:
@@ -167,6 +196,30 @@ def prepare_update(*, source: ReleaseSource, status: UpdateStatus, dest_dir: Pat
         if not ok:
             _discard_partial(archive, extracted, keep_dir=existed_before)
     return extracted
+
+
+def _ensure_free_space(dest_dir: Path, needed: int | None) -> None:
+    """落盘前看一眼目标目录所在卷的剩余空间（报告次要项）。
+
+    需要多少：下载的压缩包**加上**解压后的体积。解压后体积未知（上限见
+    `MAX_EXTRACTED_BYTES`），所以用「压缩包的 2 倍」作**保守下界** —— 估得太高会
+    拒绝一次本来能成功的更新（压缩率高的包实际占用远低于 2×），而真估低了也没关系：
+    下面的写入路径仍会以 `write_failed` 优雅失败。
+
+    `needed is None`（清单没声明体积）时跳过：那种情况下它多半是拿不到的，
+    不如让写入路径去报真正的原因。
+    """
+    if needed is None:
+        return
+    try:
+        free = shutil.disk_usage(dest_dir).free
+    except OSError as exc:  # pragma: no cover - 取不到剩余空间就不拦
+        print(f"[update] 无法读取磁盘剩余空间（{exc}），跳过预检。", file=sys.stderr)
+        return
+    if free < needed * 2:
+        raise ValueError(
+            f"磁盘剩余空间不足：约需 {needed * 2} 字节（压缩包 + 解压），可用 {free} 字节"
+        )
 
 
 def _discard_partial(archive: Path, extracted: Path, *, keep_dir: bool) -> None:

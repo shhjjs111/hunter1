@@ -58,6 +58,7 @@ class FakeSource:
         self.fail_download = fail_download
         self.requested: list[str] = []
         self.downloaded_to: list[Path] = []
+        self.progress_cb: Any = None
         self.payload = payload if payload is not None else _zip_bytes(extract)
 
     def fetch_manifest(self, url: str) -> ReleaseManifest:
@@ -72,6 +73,7 @@ class FakeSource:
         *,
         on_progress: Any = None,
     ) -> Path:
+        self.progress_cb = on_progress
         if self.fail_download is not None:
             raise self.fail_download
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -231,6 +233,48 @@ class TestPrepareUpdate:
             source=source, status=self._status(source), dest_dir=tmp_path / "updates"
         )
         assert extracted.parent.joinpath("hunter1-0.2.0.zip").is_file()
+
+    def test_forwards_progress_callback(self, tmp_path: Path) -> None:
+        """`on_progress` 必须真的传到端口（报告次要项）。
+
+        此前 `prepare_update` 从不传它 —— 端口契约里有这个参数，但调用方不用，
+        于是几十 MB 的包在 CLI 上是**静默等待**。
+        """
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        calls: list[tuple[int, int | None]] = []
+        prepare_update(
+            source=source,
+            status=self._status(source),
+            dest_dir=tmp_path / "updates",
+            on_progress=lambda received, total: calls.append((received, total)),
+        )
+        assert source.progress_cb is not None, "进度回调没有传到端口"
+
+    def test_refuses_before_downloading_when_disk_is_full(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """磁盘空间不足时在**发起下载之前**就拒绝（报告次要项）。
+
+        半途 ENOSPC 虽然也会优雅失败（write_failed），但「下到一半才失败」比
+        「一开始就说清楚」差得多，而且会留下一个 `.part`。
+        """
+        from hunter1.platform.update import service as update_service
+
+        source = FakeSource(manifest=ReleaseManifest(version="0.2.0", assets=[_asset(size=10_000)]))
+        real_usage = __import__("shutil").disk_usage
+        monkeypatch.setattr(
+            update_service.shutil,
+            "disk_usage",
+            lambda path: real_usage(path)._replace(free=1),
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            prepare_update(
+                source=source, status=self._status(source), dest_dir=tmp_path / "updates"
+            )
+
+        assert "磁盘剩余空间不足" in str(excinfo.value)
+        assert source.downloaded_to == [], "预检失败就不该发起下载"
 
     def test_refuses_when_nothing_available(self, tmp_path: Path) -> None:
         source = FakeSource(manifest=_manifest("0.0.1"))

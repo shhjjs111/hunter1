@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from sqlalchemy.exc import DatabaseError
@@ -236,6 +236,24 @@ def _crawl(args: argparse.Namespace) -> int:
     return 0 if batch.ok else 1
 
 
+def _progress_reporter(expected: int | None) -> Callable[[int, int | None], None]:
+    """下载进度回调 —— 几十 MB 的包不该在 CLI 上静默等待（报告次要项）。
+
+    单行刷新（`\\r` + 不换行的 `print`）：包会按 MB 分块回调几十次，逐行打印会刷屏。
+    主体输出前由调用方补一个换行（见 `_update` 里的 `print(f"\\n已下载…")`）。
+    """
+
+    def report(received: int, total: int | None) -> None:
+        span = total or expected
+        if span:
+            percent = min(100, received * 100 // span)
+            print(f"\r下载中 {percent}%（{received // 1024} KB）…", end="", flush=True)
+        else:
+            print(f"\r已下载 {received // 1024} KB…", end="", flush=True)
+
+    return report
+
+
 def _update(args: argparse.Namespace) -> int:
     """检查更新；`--download` 时把新版本解压到本机。
 
@@ -283,12 +301,20 @@ def _update(args: argparse.Namespace) -> int:
             return 0
 
         try:
-            extracted = prepare_update(source=source, status=status, dest_dir=dest)
+            extracted = prepare_update(
+                source=source,
+                status=status,
+                dest_dir=dest,
+                on_progress=_progress_reporter(
+                    status.asset.size if status.asset is not None else None
+                ),
+            )
         except (DownloadError, ValueError) as exc:
-            print(f"下载失败：{exc}")
+            # 前导换行：进度用的是单行刷新（`\r`），不换行会把错误顶掉一半。
+            print(f"\n下载失败：{exc}")
             return 1
 
-    print(f"已下载并解压到：{extracted}")
+    print(f"\n已下载并解压到：{extracted}")
     print("关闭本程序后，用该目录里的内容覆盖程序目录即可完成更新。")
     return 0
 

@@ -44,6 +44,12 @@ def _discard(part: Path) -> None:
 
 _CHUNK = 1024 * 1024
 
+#: 版本清单的体积上限。清单是一份 JSON，正常只有几 KB —— 但它是**外部输入**：
+#: 恶意（或配错的）源可以拿它当注入点。原先 `fetch_manifest` 用 `self._client.get(url)`，
+#: 会把整个响应先缓冲进内存，几百 MB 的「清单」就能把内存吃满（报告次要项）。
+#: 上限让它在读的时候就停，1MB 对一份清单已极为宽松。
+MAX_MANIFEST_BYTES = 1024 * 1024
+
 
 class DownloadError(RuntimeError):
     """下载或校验最终失败。`code` 是稳定的机器可读标识。"""
@@ -51,6 +57,24 @@ class DownloadError(RuntimeError):
     def __init__(self, code: str, message: str = "") -> None:
         super().__init__(f"{code}{': ' + message if message else ''}")
         self.code = code
+
+
+def _read_capped(response: httpx.Response, limit: int, url: str) -> bytes:
+    """把响应体读进内存，但设上限；超限抛 `DownloadError("too_large")`。
+
+    先看声明的 `Content-Length`（能省一次读），没有或撒谎就在边读边累计的过程中挡。
+    """
+    declared = response.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise DownloadError("too_large", f"{url}：声明 {declared} 字节 > 上限 {limit}")
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_bytes(_CHUNK):
+        size += len(chunk)
+        if size > limit:
+            raise DownloadError("too_large", f"{url}：已接收超过上限 {limit} 字节")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def file_sha256(path: Path) -> str:
@@ -109,6 +133,16 @@ def download_verified(
         # 它裸穿到调用方（CLI 只捕 DownloadError / ValueError）→ 裸 traceback。
         _discard(part)
         raise DownloadError("invalid_url", f"{url}：{exc}") from exc
+    except httpx.TimeoutException as exc:
+        # 超时与「连不上」在排障上是两件事：前者多半是对方慢 / 网络差，后者是地址
+        # 不通或 DNS 解析不了。原先一律归 `transport_failed`，排障只能读异常文本猜
+        # （报告次要项）。注意顺序：`ConnectTimeout` 同时是 TimeoutException 与
+        # ConnectError 的子类，放在前面才不会被「连不上」吞掉。
+        _discard(part)
+        raise DownloadError("timeout", f"{url}：{exc}") from exc
+    except httpx.ConnectError as exc:
+        _discard(part)
+        raise DownloadError("connect_failed", f"{url}：{exc}") from exc
     except httpx.HTTPError as exc:
         _discard(part)
         raise DownloadError("transport_failed", str(exc)) from exc
@@ -161,15 +195,26 @@ class ReleaseClient:
         self.close()
 
     def fetch_manifest(self, url: str) -> ReleaseManifest:
-        """取并解析版本清单。任何一步不对都抛 `DownloadError`。"""
+        """取并解析版本清单。任何一步不对都抛 `DownloadError`。
+
+        用**流式**读取并设体积上限（见 `MAX_MANIFEST_BYTES`）：清单是外部输入，
+        不能因为「它通常很小」就把 `get()` 的整段缓冲交给一个不受控的对端。
+        """
         try:
-            response = self._client.get(url)
+            with self._client.stream("GET", url) as response:
+                if response.status_code >= 400:
+                    raise DownloadError(f"http_{response.status_code}", url)
+                body = _read_capped(response, MAX_MANIFEST_BYTES, url)
+        except DownloadError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise DownloadError("timeout", str(exc)) from exc
+        except httpx.ConnectError as exc:
+            raise DownloadError("connect_failed", str(exc)) from exc
         except httpx.HTTPError as exc:
             raise DownloadError("transport_failed", str(exc)) from exc
-        if response.status_code >= 400:
-            raise DownloadError(f"http_{response.status_code}", url)
         try:
-            return ReleaseManifest.model_validate_json(response.text)
+            return ReleaseManifest.model_validate_json(body)
         except ValidationError as exc:
             raise DownloadError("manifest_invalid", str(exc)) from exc
 
@@ -186,4 +231,10 @@ class ReleaseClient:
         )
 
 
-__all__ = ["DownloadError", "ReleaseClient", "download_verified", "file_sha256"]
+__all__ = [
+    "MAX_MANIFEST_BYTES",
+    "DownloadError",
+    "ReleaseClient",
+    "download_verified",
+    "file_sha256",
+]

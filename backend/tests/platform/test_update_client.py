@@ -114,7 +114,25 @@ class TestDownloadVerified:
                 tmp_path / "a.zip",
                 expected_sha256=PAYLOAD_SHA,
             )
-        assert excinfo.value.code == "transport_failed"
+        # 错误类别细分（报告次要项）：「连不上」与「超时」在排障上是两件事，
+        # 原先一律 transport_failed，只能靠读异常文本猜。
+        assert excinfo.value.code == "connect_failed"
+
+    def test_timeout_error_is_classified_separately(self, tmp_path: Path) -> None:
+        """超时单独成码 —— 与「连不上」区分开。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("too slow")
+
+        with _http(handler) as client, pytest.raises(DownloadError) as excinfo:
+            download_verified(
+                client,
+                "https://example.com/a.zip",
+                tmp_path / "a.zip",
+                expected_sha256=PAYLOAD_SHA,
+            )
+        assert excinfo.value.code == "timeout"
+        assert not (tmp_path / "a.zip").exists(), "失败不该留下半包"
 
     def test_invalid_url_is_wrapped_not_leaked(self, tmp_path: Path) -> None:
         """清单里的 URL 非法 → DownloadError，而不是裸的 httpx.InvalidURL。
@@ -315,7 +333,26 @@ class TestFetchManifest:
 
         with _client(handler) as client, pytest.raises(DownloadError) as excinfo:
             client.fetch_manifest("https://example.com/manifest.json")
-        assert excinfo.value.code == "transport_failed"
+        assert excinfo.value.code == "connect_failed"
+
+    def test_oversized_manifest_is_rejected_without_buffering(self) -> None:
+        """清单也有体积上限（报告次要项）—— 它是**外部输入**，不能整段缓冲。
+
+        原先 `fetch_manifest` 用 `self._client.get(url)`：一个几百 MB 的「清单」
+        会先被完整读进内存。上限让它在读的时候就停。
+        """
+        from hunter1.platform.update.client import MAX_MANIFEST_BYTES
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=b"{}",
+                headers={"Content-Length": str(MAX_MANIFEST_BYTES + 1)},
+            )
+
+        with _client(handler) as client, pytest.raises(DownloadError) as excinfo:
+            client.fetch_manifest("https://example.com/manifest.json")
+        assert excinfo.value.code == "too_large"
 
 
 class TestDownloadAsset:
