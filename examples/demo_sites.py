@@ -6,7 +6,7 @@
     ./.tools/python/python.exe examples/demo_sites.py --offline   # 用快照，不联网
 
 演示 M2 的完整链路：`slices.crawl`（站点表）→ `HttpFetcher`
-（主机限流 + 重试 + UA 轮换）→ `StaticHtmlCrawler`（声明式选择器）
+（主机限流 + 重试 + UA 按主机固定）→ `StaticHtmlCrawler`（声明式选择器）
 → `crawl_all`（批量 upsert，单站失败不中断）→ SQLite。
 
 合规：只抓公开列表页，不做登录、不由程序投递；`max_pages` 已压低。

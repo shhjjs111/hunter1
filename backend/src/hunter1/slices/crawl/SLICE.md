@@ -49,7 +49,7 @@
 
 | 机制 | 装配取值 | 为什么 |
 |---|---|---|
-| 每主机请求间隔 | `min_interval=1.0` | UA 轮换 + 自动重试会放大请求密度 |
+| 每主机请求间隔 | `min_interval=1.0` | UA 按主机固定 + 自动重试会放大请求密度 |
 | 遵守 `robots.txt` | `respect_robots=True` | 站点明确禁止 → `FetchError("robots_disallowed")`，不重试、不计主机故障 |
 | 单响应体积上限 | `max_bytes`（默认 8MB，**始终开**） | 重定向落到大文件会吃满内存；超限报 `too_large`，刻意**不静默截断**（半截 HTML 会产出看起来正常的残缺列表） |
 
