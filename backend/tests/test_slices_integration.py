@@ -476,6 +476,25 @@ class TestHostHeaderGuard:
         status, _body = _raw_asgi_get(test_client.app, "/api/settings", host="testserver")
         assert status == 200
 
+    def test_env_var_can_widen_the_allowlist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`HUNTER1_TRUSTED_HOSTS` 能把额外主机放进白名单。
+
+        为什么必须有这个口子：README 文档化了 `--host 0.0.0.0`（临时演示）的用法，
+        那种部署的请求 Host 既不是 `127.0.0.1` 也不是 `localhost` —— 没有环境变量的话，
+        整个用法会被 Host 校验**全线挡成 400**，等于把一个文档化的能力悄悄废掉。
+        """
+        monkeypatch.setenv("HUNTER1_TRUSTED_HOSTS", "127.0.0.1,localhost,testserver,192.168.1.5")
+        app = _production_context(tmp_path, "env-hosts.db")
+        try:
+            with TestClient(app) as test_client:
+                status, _body = _raw_asgi_get(test_client.app, "/api/settings", host="192.168.1.5")
+        finally:
+            app.state.context.db.dispose()
+
+        assert status == 200, f"白名单没吃到环境变量（实得 {status}）"
+
 
 def _production_context(tmp_path: Path, name: str) -> Any:
     """按 **cli.py 的生产装配方式** 构造 app：只给 db_path 与 site_keys。

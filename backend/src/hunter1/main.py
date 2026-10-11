@@ -83,6 +83,31 @@ def _current_api_key(context: AppContext) -> str:
     return settings.api_key if settings is not None else ""
 
 
+#: 默认允许的 Host 白名单（`AppContext.trusted_hosts` 的默认值）。
+#:
+#: 只含**回环**形态 —— 与默认监听地址（127.0.0.1）一致。`testserver` 是 Starlette
+#: `TestClient` 的默认 Host：它是不可公网解析的单标签名，保留它让测试装配无需逐个
+#: 改 `base_url`，而 DNS rebinding 的攻击者无法让浏览器发出 `Host: testserver`。
+DEFAULT_TRUSTED_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost", "testserver")
+
+#: 覆盖 Host 白名单的环境变量（逗号分隔）。
+#:
+#: 为什么需要它：README 的「只绑本机」一节文档化了 `--host 0.0.0.0`（临时演示用），
+#: 而那种部署下的请求 Host 既不是 127.0.0.1 也不是 localhost —— 不加这个口子的话，
+#: 该用法会被 Host 校验**全线挡成 400**，等于把一个文档化的能力悄悄废掉。
+#: 默认值保持不变（只允许回环），要对外提供就得显式配置，风险自负。
+TRUSTED_HOSTS_ENV = "HUNTER1_TRUSTED_HOSTS"
+
+
+def _trusted_hosts_from_env() -> tuple[str, ...]:
+    """Host 白名单：环境变量有值时用它，否则用回环默认。"""
+    raw = os.environ.get(TRUSTED_HOSTS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_TRUSTED_HOSTS
+    hosts = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return hosts or DEFAULT_TRUSTED_HOSTS
+
+
 def _usable_dist(candidate: Path) -> Path | None:
     """这个目录能不能真的伺服 SPA —— 判据是 `index.html` 在不在。
 
@@ -130,9 +155,8 @@ class AppContext:
     site_keys: list[str] | None = None
     assistant_history_limit: int = 20
     #: 允许的 Host 头（DNS rebinding 防线，理由见 `create_app` 里的说明）。
-    #: 默认含 Starlette `TestClient` 的 `testserver` —— 它是不可公网解析的单标签名，
-    #: 保留它让测试装配无需逐个改 `base_url`，且攻击者无法据此绕过（同样见 create_app）。
-    trusted_hosts: tuple[str, ...] = ("127.0.0.1", "localhost", "testserver")
+    #: 默认见 `DEFAULT_TRUSTED_HOSTS`；生产装配可用 `HUNTER1_TRUSTED_HOSTS` 覆盖。
+    trusted_hosts: tuple[str, ...] = DEFAULT_TRUSTED_HOSTS
 
     def crawler_factory(self) -> list[Crawler]:
         """构造本轮要跑的抓取器（默认全部注册站点）。"""
@@ -167,6 +191,10 @@ class AppContext:
             db=database,
             fetcher=fetcher,
             site_keys=site_keys,
+            # 生产装配读 `HUNTER1_TRUSTED_HOSTS`：`--host 0.0.0.0`（README 文档化的
+            # 临时演示用法）必须能把实际使用的主机名 / IP 放进白名单，否则会被
+            # Host 校验全线挡成 400。默认仍是只允许回环。
+            trusted_hosts=_trusted_hosts_from_env(),
         )
 
 
