@@ -739,5 +739,6 @@ __all__ = [
     "OpenAICompatibleClient",
     "ProviderPreset",
     "clear_rejected_modes",
+    "parse_sse_lines",
     "resolve_preset",
 ]

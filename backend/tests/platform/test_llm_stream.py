@@ -18,8 +18,19 @@ import httpx
 import pytest
 
 from hunter1.domain.llm import LLMError, StreamComplete, TextDelta
-from hunter1.platform.llm import OpenAICompatibleClient
-from hunter1.platform.llm.streaming import parse_sse_lines
+from hunter1.platform.llm import OpenAICompatibleClient, parse_sse_lines
+
+
+def test_parse_sse_lines_is_on_the_public_face() -> None:
+    """`parse_sse_lines` 要出现在包的公开面（`__all__`）。
+
+    它本来就在 `hunter1.platform.llm` 的命名空间里（`__init__.py` 有 import），
+    只是没进 `__all__` —— 于是消费者以为只能深链 `hunter1.platform.llm.streaming`，
+    而深链正是「换实现时炸得到处都是」的入口。
+    """
+    import hunter1.platform.llm as llm_package
+
+    assert "parse_sse_lines" in llm_package.__all__
 
 
 def _client(handler: Any, **kwargs: Any) -> OpenAICompatibleClient:
