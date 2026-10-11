@@ -250,6 +250,21 @@ class TestConversationsEndpoints:
         for client in _client(db, ScriptedLLM()):
             assert client.get("/api/assistant/conversations/nope").status_code == 404
 
+    def test_extreme_offset_is_422_not_500(self, db: Database) -> None:
+        """超出 int64 的 offset 必须在校验层被挡成 422。
+
+        它会一路进到仓储、在绑参时抛 `OverflowError` —— 那不是 `ValueError`，
+        会以 500 穿透，报错形状与「参数不合法」的语义不符。
+        """
+        for client in _client(db, ScriptedLLM()):
+            client.post("/api/assistant/turn", json={"message": "有哪些产品岗？"})
+            conversation_id = client.get("/api/assistant/conversations").json()["items"][0]["id"]
+            response = client.get(
+                f"/api/assistant/conversations/{conversation_id}",
+                params={"offset": 2**63},
+            )
+            assert response.status_code == 422
+
     def test_messages_after_turn(self, db: Database) -> None:
         for client in _client(db, ScriptedLLM()):
             client.post("/api/assistant/turn", json={"message": "有哪些产品岗？"})

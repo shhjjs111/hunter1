@@ -89,6 +89,14 @@ MAX_PAGE = 10_000
 MAX_MESSAGE_LIMIT = 200
 DEFAULT_MESSAGE_LIMIT = MAX_MESSAGE_LIMIT
 
+#: `offset` 的技术上界（绑进 SQL 的整数是 int64）。
+#:
+#: `offset` 是「往回数多少条」，业务上远不会到这个量级；但它在 HTTP 层是一个裸
+#: int（只有 `ge=0`，没有上界），极端值会一路进到仓储、在绑参时抛 `OverflowError`
+#: —— 那不是 `ValueError`，穿透成 500，而不是「参数不合法」的 422。加上界让它
+#: 落回校验层，报错形状与其它越界参数一致。
+MAX_MESSAGE_OFFSET = 2**63 - 1
+
 FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
 
 
@@ -198,7 +206,7 @@ def build_router(
     def conversation_messages(
         conversation_id: str,
         limit: int = Query(DEFAULT_MESSAGE_LIMIT, ge=1, le=MAX_MESSAGE_LIMIT),
-        offset: int = Query(0, ge=0),
+        offset: int = Query(0, ge=0, le=MAX_MESSAGE_OFFSET),
     ) -> list[ConversationMessageView]:
         """一段对话的消息，按时间正序；窗口**从最新往回数**。
 
