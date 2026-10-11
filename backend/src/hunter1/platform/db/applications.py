@@ -164,6 +164,9 @@ class SqliteApplicationRepository:
         """
         if not prefix:
             return []
+        # 同 list 的守卫：仓储是所有入口的最后一道防线（`limit=-1` 在 SQLite 是
+        # 不限量，前缀路径此前漏了它 —— 与 jobs 的 get_by_prefix 同族缺口）。
+        check_page(limit=limit, offset=0)
         escaped = escape_like(prefix)
         with self._db.session() as session:
             statement = (

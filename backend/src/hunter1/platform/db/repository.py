@@ -259,6 +259,10 @@ class SqliteJobRepository:
         """
         if not prefix:
             return []
+        # 与 list / search 同一道守卫：`limit=-1` 在 SQLite 是**不限量**，正是本模块
+        # 文档要挡的那件事。此前这条前缀路径漏了 check_page —— 同族里唯一的缺口，
+        # 而「仓储是最后一道防线」的承诺覆盖所有入口，不分精确还是前缀。
+        check_page(limit=limit, offset=0)
         escaped = escape_like(prefix)
         with self._db.session() as session:
             statement = (

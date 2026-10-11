@@ -149,7 +149,11 @@ class Database:
 
             # 新列：`create_all` 只对**新表**生效，老库补不上列（与上面的索引同因）。
             # SQLite 的 ADD COLUMN 没有 IF NOT EXISTS，先查 PRAGMA 再补。
-            self._add_missing_columns(connection)
+            # 补了列要留痕：它与上面两处数据修复同属「改了用户的老库」，会改动结构却
+            # 不出声，将来排查「这个列什么时候出现的」就没有任何线索（返回值本就为此设）。
+            added_columns = self._add_missing_columns(connection)
+            if added_columns:
+                print(f"已为老库补列：{', '.join(added_columns)}", file=sys.stderr)
 
     @staticmethod
     def _add_missing_columns(connection: Connection) -> list[str]:

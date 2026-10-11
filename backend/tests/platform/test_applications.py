@@ -303,3 +303,6 @@ def test_negative_limit_is_rejected(db: Database) -> None:
         db.applications().list(limit=-1, offset=0)
     with pytest.raises(ValueError):
         db.applications().list(limit=10, offset=-1)
+    # 前缀查询是同一族入口，此前漏了 check_page（与 jobs 的 get_by_prefix 同族）
+    with pytest.raises(ValueError):
+        db.applications().by_job_prefix("d", limit=-1)

@@ -13,9 +13,21 @@
 
 from __future__ import annotations
 
+#: 绑进 SQL 的整数上界（SQLite 是 int64）。超过它的 `limit` / `offset` 会被
+#: sqlite3 绑参抛 `OverflowError` —— 那是 `Exception` 直系，**不是** `ValueError`，
+#: 于是既不被这里的判据拦住、也不被只认 ValueError 的调用方接住，最终以 500 穿透。
+#: 与「拒绝而不是钳制」同一取向：宁可当场说清「这个值不合法」。
+SQLITE_INT_MAX = 2**63 - 1
+
 
 def check_page(*, limit: int, offset: int) -> None:
-    """拒绝负数的 `limit` / `offset`。`limit == 0` 合法（= 不要任何行）。"""
+    """拒绝越界的 `limit` / `offset`。`limit == 0` 合法（= 不要任何行）。
+
+    两条轴：**负数**（SQLite 里 `LIMIT -1` 是不限量、负偏移无定义）与**上界**
+    （超出 int64 会在绑参时以 `OverflowError` 穿透成 500）。两者都不是「钳制一下
+    就好」—— 钳制会把「调用方算错了」变成「悄悄换了个窗口」，而窗口悄悄变化的
+    表现是漏行 / 重行，比直接报错难查得多。
+    """
     if limit < 0:
         raise ValueError(
             f"limit 不能为负（收到 {limit}）：SQLite 的 `LIMIT -1` 是**不限量**，"
@@ -23,6 +35,10 @@ def check_page(*, limit: int, offset: int) -> None:
         )
     if offset < 0:
         raise ValueError(f"offset 不能为负（收到 {offset}）：负偏移没有定义。")
+    if limit > SQLITE_INT_MAX:
+        raise ValueError(f"limit 超出 int64 上界（收到 {limit}）：绑进 SQL 会抛 OverflowError。")
+    if offset > SQLITE_INT_MAX:
+        raise ValueError(f"offset 超出 int64 上界（收到 {offset}）：绑进 SQL 会抛 OverflowError。")
 
 
-__all__ = ["check_page"]
+__all__ = ["SQLITE_INT_MAX", "check_page"]

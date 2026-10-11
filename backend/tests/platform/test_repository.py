@@ -407,3 +407,25 @@ def test_negative_limit_is_rejected(db: Database) -> None:
         db.jobs().list(offset=-1)
     with pytest.raises(ValueError):
         db.jobs().search(keyword="产品", limit=-1)
+
+
+def test_prefix_lookup_is_guarded_too(db: Database) -> None:
+    """`get_by_prefix` 与 list / search 走同一道守卫。
+
+    它曾是同族里唯一漏掉 `check_page` 的入口 —— 而 `limit` 恰恰是它最重要的参数
+    （单字符前缀会命中整表），`limit=-1` 会静默变成「取整库」。
+    """
+    with pytest.raises(ValueError):
+        db.jobs().get_by_prefix("j", limit=-1)
+
+
+def test_page_bounds_reject_beyond_int64(db: Database) -> None:
+    """超出 int64 的 limit / offset 必须在这里拦住。
+
+    它们是绑进 SQL 的整数：超界时 sqlite3 抛 `OverflowError`（不是 `ValueError`），
+    会一路穿透成 500 —— 而不是「参数不合法」的清晰报错。
+    """
+    with pytest.raises(ValueError):
+        db.jobs().list(limit=10, offset=2**63)
+    with pytest.raises(ValueError):
+        db.jobs().get_by_prefix("j", limit=2**63)
