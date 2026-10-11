@@ -170,11 +170,40 @@ class TestStatusEndpoint:
         assert "boom" in payload["sites"][1]["error"]
         assert payload["total_fetched"] == 2
 
-    def test_status_is_json_serializable(self, client: TestClient) -> None:
-        client.post("/api/crawl")
+    def test_partial_snapshot_mid_run_is_json_serializable(self) -> None:
+        """抓取**进行中**的部分结算快照也要能序列化 —— 前端每秒都在取它。
+
+        原先这里是「POST 后固定 `sleep(0.3)` 再取快照」：慢 CI 上抓取可能还没结束、
+        也可能已经结束（结果随之漂移），而且它没有断言任何「进行中」的语义 ——
+        恰恰漏掉了协议里最需要验证的那一刻（有站点已结算、有的还没）。
+        改用慢抓取器把状态**钉在跑着的那一刻**（报告测试薄弱点）。
+        """
         import time
 
-        time.sleep(0.3)
-        payload = client.get("/api/crawl/status").json()
-        assert isinstance(payload["total_created"], int)
-        assert isinstance(payload["sites"], list)
+        from hunter1.slices.crawl.runner import CrawlRunner
+
+        class SlowCrawler(FakeCrawler):
+            def fetch(self) -> list[RawJob]:
+                time.sleep(0.6)
+                return super().fetch()
+
+        with TemporaryDirectory() as workspace:
+            database = Database(Path(workspace) / "partial.db")
+            database.initialize()
+            runner = CrawlRunner(
+                crawler_factory=lambda: [SlowCrawler("慢站")],
+                jobs=database.jobs(),
+                clock=lambda: NOW,
+            )
+            app = FastAPI()
+            app.include_router(build_router(runner=runner), prefix="/api")
+            with TestClient(app) as test_client:
+                assert test_client.post("/api/crawl").json() == {"started": True}
+
+                # 抓取确实还在跑（SlowCrawler sleep 0.6s）—— 这才是这条用例要覆盖的时刻
+                payload = test_client.get("/api/crawl/status").json()
+                assert payload["running"] is True
+                assert payload["sites"], "已开跑的站点应出现在进行中的快照里"
+                assert isinstance(payload["total_created"], int)
+                assert isinstance(payload["sites"], list)
+            database.dispose()

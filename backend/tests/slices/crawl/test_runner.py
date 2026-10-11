@@ -76,6 +76,27 @@ class TestRun:
         assert "boom" in (snapshot.sites[0].error or "")
         assert snapshot.total_fetched == 1
 
+    def test_result_callback_failure_settles_instead_of_hanging(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """进度回调抛异常时整轮要**收敛**（报告测试薄弱点）。
+
+        进度上报是给界面看的旁路 —— 它出问题不该让状态永远停在「正在抓取」
+        （那会逼用户重启进程）。`_guarded_run` 的兜底必须接住它。
+        """
+        runner = _runner(db, [FakeCrawler("甲")])
+
+        def exploding(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("进度上报失败")
+
+        monkeypatch.setattr(runner, "_record", exploding)
+        runner.run()
+
+        snapshot = runner.snapshot()
+        assert snapshot.running is False, "回调抛异常后状态卡在 running"
+        assert snapshot.error is not None, "失败原因没有被记下来"
+        assert "RuntimeError" in snapshot.error
+
     def test_same_label_sites_are_tracked_separately(self, db: Database) -> None:
         """两个站点恰好同名时进度不能串行 —— 关联用 key，显示才用 label。
 

@@ -432,8 +432,6 @@ class TestDetectBlocking:
             "cf_chl_opt",
             "geetest",
             "/verify-slider",
-            "grecaptcha",
-            "hcaptcha",
         }
         assert set(BLOCK_TITLE_SIGNALS) >= {
             "安全验证",
@@ -473,6 +471,34 @@ class TestDetectBlocking:
 
     def test_normal_page_is_not_flagged(self) -> None:
         assert detect_blocking(NORMAL_PAGE) is None
+
+    def test_low_signal_vendor_names_are_excluded(self) -> None:
+        """零判别力的验证码库名**刻意不在**词表里（报告次要项）。
+
+        `grecaptcha` / `hcaptcha` 是 reCAPTCHA / hCaptcha 的 JS 全局对象名：任何用了
+        这两家服务、并在页面上放了验证码组件的**正常页面**（登录弹窗、评论框）都会在
+        脚本里出现它们 —— 命中即误报，正常列表页被判成拦截页。
+
+        这条断言是**反向**的：有人重新把它们加回去时它会红，提醒先读 `guards.py`
+        里记下的取舍。
+        """
+        assert "grecaptcha" not in BLOCK_MARKUP_SIGNALS
+        assert "hcaptcha" not in BLOCK_MARKUP_SIGNALS
+
+    def test_recaptcha_login_widget_does_not_trigger_a_false_positive(self) -> None:
+        """带 reCAPTCHA 登录组件的**正常**列表页不该被判成拦截页。
+
+        这是上面那条名单取舍的**行为**证据（光断言名单不含它，证明不了误报真的消失）。
+        """
+        html = (
+            "<html><head><title>实习僧 - 职位列表</title>"
+            '<script src="https://www.google.com/recaptcha/api.js"></script></head>'
+            '<body><ul class="jobs"><li class="job">'
+            '<a class="t" href="/j/1">产品经理</a></li></ul>'
+            "<script>grecaptcha.render('login', {});</script>"
+            "</body></html>"
+        )
+        assert detect_blocking(html) is None
 
     def test_job_title_mentioning_verification_is_not_flagged(self) -> None:
         """岗位标题里出现「安全验证」不是拦截 —— 只看标题，不看正文。"""

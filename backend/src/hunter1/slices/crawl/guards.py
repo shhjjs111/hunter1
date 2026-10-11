@@ -36,14 +36,18 @@ BLOCK_TITLE_SIGNALS: tuple[str, ...] = (
 )
 
 # 挑战页常见的结构性标记（比标题文本更稳定，且不会出现在正常内容里）。
+#
+# ⚠ `grecaptcha` / `hcaptcha` **刻意不在**这里：它们是 reCAPTCHA / hCaptcha 的 JS
+# 全局对象名，任何用了这两家服务、并在页面上放了验证码组件的**正常页面**（登录弹窗、
+# 评论框）都会在脚本里出现它们 —— 那不是「弱信号」，是**噪声**：一命中就是误报，
+# 把正常列表页判成拦截页（用户看到「被拦截」，而站点一切正常）。报告次要项。
+# 漏检风险由标题信号与 `CrawlEmptyPageError`（首页零结果必抛）兜底。
 BLOCK_MARKUP_SIGNALS: tuple[str, ...] = (
     "challenge-platform",
     "cf-challenge",
     "cf_chl_opt",
     "geetest",
     "/verify-slider",
-    "grecaptcha",
-    "hcaptcha",
 )
 
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
