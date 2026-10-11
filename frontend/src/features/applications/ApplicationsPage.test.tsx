@@ -333,3 +333,54 @@ describe("ApplicationsPage 读取失败", () => {
     expect(screen.queryByText("加载中…")).toBeNull();
   });
 });
+
+describe("ApplicationsPage 备注 / 阶段的写入互不踩踏", () => {
+  // 端点 `POST /applications/{id}/stage` 是「整份状态」的写面（一次收 stage + note）。
+  // 页面有两个独立的写入口（阶段下拉、备注框），若各自把**自己看到的旧值**一起提交，
+  // 就会互相覆盖：先填备注再改阶段 → 备注被陈旧值抹掉 / 阶段被陈旧值打回。
+  function stubPostCapture() {
+    const posts: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (methodOf(input, init) === "POST") {
+          const raw =
+            typeof input === "string"
+              ? String(init?.body ?? "")
+              : await (input as Request).clone().text();
+          posts.push(JSON.parse(raw));
+          return jsonResponse({ application_id: "app1", stage: "interview" });
+        }
+        // 列表里这一行已有备注 —— 才能看出「改阶段是否把它抹掉」
+        return jsonResponse({ ...LIST, items: [{ ...LIST.items[0], note: "旧备注" }] });
+      }),
+    );
+    return posts;
+  }
+
+  it("改阶段**不**提交备注字段（不覆盖用户刚填的备注）", async () => {
+    const posts = stubPostCapture();
+    renderPage();
+
+    const select = (await screen.findByLabelText(/投递阶段/)) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "interview" } });
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    // 省略 note 字段＝后端保留原备注；带上（哪怕是缓存旧值）就会覆盖
+    expect(posts[0]).not.toHaveProperty("note");
+    expect(posts[0]).toMatchObject({ stage: "interview" });
+  });
+
+  it("清空备注时提交空串（后端据此真正清掉，而不是把 null 当「保留」）", async () => {
+    const posts = stubPostCapture();
+    renderPage();
+
+    const input = (await screen.findByLabelText(/的备注/)) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    // 传 null 会被后端解释为「保留原备注」→ 清空变成空操作。空串才是「清掉」。
+    expect(posts[0]).toMatchObject({ note: "" });
+  });
+});

@@ -106,7 +106,9 @@ export function ApplicationsPage() {
     }
     latestNote.current[item.id] = note;
     saveNote.mutate(
-      { applicationId: item.id, stage: item.stage, note },
+      // 带上**最新**阶段草稿：用户可能刚在下拉里改了阶段（请求还在飞），此时
+      // `item.stage` 仍是查询缓存里的旧值 —— 拿它提交会把刚选的阶段打回旧值。
+      { applicationId: item.id, stage: stageDraft[item.id] ?? item.stage, note },
       {
         onSuccess: () => {
           if (latestNote.current[item.id] === note) {
@@ -170,7 +172,6 @@ export function ApplicationsPage() {
                             {
                               applicationId: item.id,
                               stage,
-                              note: item.note ?? undefined,
                             },
                             {
                               // 成功：这条草稿已经等于服务端真值 → 交还给查询数据。

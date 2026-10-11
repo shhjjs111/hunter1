@@ -174,6 +174,34 @@ class TestStageEndpoint:
         response = client.post("/api/applications/zzzz/stage", json={"stage": "interview"})
         assert response.status_code == 404
 
+    def test_empty_note_clears_it(
+        self, client: TestClient, store: ApplicationStore, seed: SqliteApplicationRepository
+    ) -> None:
+        """空串＝清掉备注（存 NULL）。
+
+        前端备注框被清空并提交时发的是空串 —— 后端若把它当普通字符串原样存下 `""`，
+        列表里就仍是一条「空备注」，而用户的本意是抹掉它；不规范化成 NULL 的话，
+        「清空备注」这个动作在**每一层**都没有真正实现（前端以为传 null 后端清空，
+        后端却把 null 当保留，空串又被原样存下）。
+        """
+        seed.upsert(_application(id="a1", note="内推"))
+        response = client.post("/api/applications/a1/stage", json={"stage": "applied", "note": ""})
+        assert response.status_code == 200
+        loaded = store.get("a1")
+        assert loaded is not None
+        assert loaded.note is None
+
+    def test_omitted_note_is_kept(
+        self, client: TestClient, store: ApplicationStore, seed: SqliteApplicationRepository
+    ) -> None:
+        """不带 `note` 字段＝保留原备注 —— 改阶段不该顺手抹掉用户写的备注。"""
+        seed.upsert(_application(id="a1", note="内推"))
+        response = client.post("/api/applications/a1/stage", json={"stage": "interview"})
+        assert response.status_code == 200
+        loaded = store.get("a1")
+        assert loaded is not None
+        assert loaded.note == "内推"
+
     def test_deleted_mid_flight_is_not_resurrected(
         self,
         client: TestClient,

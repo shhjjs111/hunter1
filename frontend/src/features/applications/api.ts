@@ -54,12 +54,17 @@ export function useApplications() {
 export function useChangeStage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { applicationId: string; stage: string; note?: string }) => {
+    mutationFn: async (input: { applicationId: string; stage: string }) => {
       const { data, error, response } = await api.POST("/api/applications/{application_id}/stage", {
         params: { path: { application_id: input.applicationId } },
+        // 只提交 `stage`，**刻意不带 `note`**：这个端点是整份状态的写面，带上 note
+        // 就会拿查询缓存里的旧值覆盖用户在备注框里刚写的内容（同一行「先填备注、
+        // 再改阶段」时必现 —— blur 先发一条备注请求，紧接着这里又把陈旧 note 发一遍）。
+        // 省略 note 字段＝后端保留原备注（见 `service.change_stage` 的三种取值语义）。
+        //
         // `<select>` 的值天生是 string，在**这里**收窄为契约枚举即可 ——
         // 调用方的类型不必被 DOM 的宽 string 污染。
-        body: { stage: input.stage as ApplicationStage, note: input.note ?? null },
+        body: { stage: input.stage as ApplicationStage },
       });
       if (error || !data) {
         throw new Error(apiErrorMessage(error, "改阶段失败", response));
@@ -103,14 +108,15 @@ export function useSaveNote() {
   return useMutation({
     mutationFn: async (input: {
       applicationId: string;
-      stage: ApplicationStage;
+      stage: string;
       note: string;
     }) => {
       const { data, error, response } = await api.POST("/api/applications/{application_id}/stage", {
         params: { path: { application_id: input.applicationId } },
-        // 空串按「清掉备注」提交（后端存 null，界面回到「—」）—— 否则留一个空字符串，
-        // 展示层 `note ?? "—"` 兜不住它，看起来像「有备注但是空的」。
-        body: { stage: input.stage, note: input.note || null },
+        // 备注**原样**提交：空串＝清掉（后端把它规范化为 NULL，界面回到空框）。
+        // 这里**不能**把空串转成 `null` —— `null` 在后端是「保留原备注」的意思，
+        // 那样「清空备注」会变成一次静默的空操作（框清空了、提交后旧备注又回来）。
+        body: { stage: input.stage as ApplicationStage, note: input.note },
       });
       if (error || !data) {
         throw new Error(apiErrorMessage(error, "保存备注失败", response));

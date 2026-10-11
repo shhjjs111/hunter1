@@ -61,18 +61,25 @@ def change_stage(
     now: datetime,
     note: str | None = None,
 ) -> Application:
-    """推进到新阶段；`note` 不传则保留原备注。
+    """推进到新阶段；`note` 的三种取值对应三种语义：
+
+    - **不传**（`None`）→ 保留原备注（改阶段不该顺手抹掉用户写的备注）；
+    - **空串** → 清掉备注（存 `NULL`）—— 「清空」需要一个能被表达的取值：否则
+      前端把备注框清空再提交时，`""` 会被当成普通字符串原样存下，那一列看起来
+      仍是「有一条空备注」而不是「没有备注」；
+    - **非空串** → 覆盖备注。
 
     刻意不走 `model_copy(update=...)`：pydantic v2 的 `model_copy` **不重跑校验器**，
     那样「把更新时间设到投递之前」这种非法状态会被静默造出来。这里走一次
     `model_validate`，让领域不变量仍然兜底。
     """
     payload = application.model_dump()
+    resolved_note = application.note if note is None else (note or None)
     payload.update(
         {
             "stage": stage,
             "updated_at": now,
-            "note": application.note if note is None else note,
+            "note": resolved_note,
         }
     )
     return Application.model_validate(payload)
