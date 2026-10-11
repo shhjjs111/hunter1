@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { JobsPage } from "./JobsPage";
@@ -130,6 +130,36 @@ describe("JobsPage", () => {
     expect(screen.getByText("缺大规模团队经验")).toBeTruthy();
     expect(screen.getByText("总体匹配")).toBeTruthy();
     expect(screen.getByText("匹配分 88")).toBeTruthy();
+  });
+
+  it("换关键词后清掉上一次的评分结果（卡片不与新列表错配）", async () => {
+    // 评分卡不显示岗位名。翻页/换词后仍留着它，用户会以为它属于当前列表里的某一行。
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      if (request.method === "POST") {
+        return jsonResponse({
+          job_id: "j1",
+          score: 88,
+          summary: "总体匹配",
+          advantages: null,
+          gaps: null,
+          model: "fake",
+          prompt_version: "v3",
+          scored_at: null,
+        });
+      }
+      return jsonResponse(LIST_PAYLOAD);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "评分" }));
+    expect(await screen.findByText("匹配分 88")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("按岗位名搜索"), { target: { value: "产品" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+
+    await waitFor(() => expect(screen.queryByText("匹配分 88")).toBeNull());
   });
 });
 

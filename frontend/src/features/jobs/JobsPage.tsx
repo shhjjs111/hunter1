@@ -42,6 +42,11 @@ export function JobsPage() {
         onSearch={(value) => {
           setKeyword(value);
           setPage(1);
+          // 换关键词＝换了一批岗位：上一次的投递/评分结果属于**旧上下文**。
+          // 评分卡不显示岗位名（见 ScoreCard），留在屏上会与当前列表错配 ——
+          // 用户无从判断那个分数属于谁。与 SettingsPage 对 probe/save 的处理同一取舍。
+          apply.reset();
+          score.reset();
         }}
       />
 
@@ -68,7 +73,12 @@ export function JobsPage() {
         page={page}
         hasNext={jobs.data?.has_next ?? false}
         busy={jobs.isPlaceholderData}
-        onPageChange={setPage}
+        onPageChange={(next) => {
+          // 翻页同上：清掉属于上一页的投递/评分结果，不与新一页错配
+          setPage(next);
+          apply.reset();
+          score.reset();
+        }}
       />
 
       {apply.isError && (
