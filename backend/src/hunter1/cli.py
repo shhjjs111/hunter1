@@ -22,6 +22,8 @@ import webbrowser
 from collections.abc import Sequence
 from pathlib import Path
 
+from sqlalchemy.exc import DatabaseError
+
 from hunter1 import __version__
 from hunter1.main import AppContext
 from hunter1.paths import data_dir, default_db_path
@@ -334,6 +336,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 而不是把 traceback 砸到用户脸上。
         print(f"数据库位置不可用：{exc}")
         print("换一个可写的位置（--db ./hunter1.db），或检查该文件是否被占用/损坏。")
+        return 2
+    except DatabaseError as exc:
+        # 连得上、只是结构不成立（补列撞名 / 建索引失败 / schema 漂移）。
+        # **换路径修不好它** —— 照搬上面那两句会把用户引向错误的方向，
+        # 所以这里刻意给不同的话术。
+        print(f"数据库初始化失败（结构性错误，换 --db 路径没有用）：{exc}")
+        print("这更像实现或数据迁移缺陷；请把上面这行原文附在问题里。")
         return 2
     parser.print_help()
     return 1

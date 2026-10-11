@@ -16,11 +16,13 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from hunter1.domain.models import Job
 from hunter1.platform.db import BUSY_TIMEOUT_MS, Database
@@ -306,3 +308,91 @@ class TestSchemaExports:
         assert {"ApplicationRow", "Base", "CompanyRow", "JobRow", "UtcDateTime"} <= set(
             schema.__all__
         )
+
+
+#: 造一个 SQLAlchemy 的 `OperationalError`（带 sqlite3 原始异常），
+#: 用来模拟 `initialize()` 阶段的两类失败。
+def _operational(message: str) -> OperationalError:
+    return OperationalError("stmt", {}, sqlite3.OperationalError(message))
+
+
+class TestInitializeFailureClassification:
+    """`initialize()` 的失败分类：环境问题翻译成人话，结构问题原样抛。
+
+    两者混为一类会把自救方向指错 —— CLI 照着「位置不可用」的话术让用户换
+    `--db` 路径，而换路径对「补列撞名 / 建索引失败」毫无作用。
+    """
+
+    def test_schema_failure_is_not_masked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = Database(tmp_path / "schema-fail.db")
+
+        def boom() -> None:
+            raise _operational("duplicate column name: score_model")
+
+        monkeypatch.setattr(db, "_initialize_schema", boom)
+        with pytest.raises(OperationalError):
+            db.initialize()
+
+    def test_environment_failure_is_translated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = Database(tmp_path / "env-fail.db")
+
+        def boom() -> None:
+            raise _operational("unable to open database file")
+
+        monkeypatch.setattr(db, "_initialize_schema", boom)
+        with pytest.raises(DatabaseLocationError) as info:
+            db.initialize()
+        assert "unable to open database file" in str(info.value)
+
+    def test_classification_is_what_makes_the_difference(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """对照：把分类判据关掉，同一条结构失败就**变回**被伪装的位置错误。
+
+        这条是上面那条的「回滚验证」：它证明结果确实由分类逻辑决定，
+        而不是碰巧（若哪天有人删掉分流，本用例会红）。
+        """
+        db = Database(tmp_path / "control.db")
+
+        def boom() -> None:
+            raise _operational("duplicate column name: score_model")
+
+        monkeypatch.setattr(db, "_initialize_schema", boom)
+        monkeypatch.setattr(
+            "hunter1.platform.db.database._is_schema_failure", lambda _message: False
+        )
+        with pytest.raises(DatabaseLocationError):
+            db.initialize()
+
+
+class TestSchemaFailureHints:
+    """反向枚举的安全性：环境错误的形态远多于结构错误，别误伤。"""
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "unable to open database file",
+            "attempt to write a readonly database",
+            "database is locked",
+            "database or disk is full",
+            "file is not a database",
+            "disk I/O error",
+        ],
+    )
+    def test_environment_messages_are_not_classified_as_schema(self, message: str) -> None:
+        from hunter1.platform.db.database import _is_schema_failure
+
+        assert _is_schema_failure(message) is False
+
+    @pytest.mark.parametrize(
+        "message",
+        ["duplicate column name: x", "no such column: y", "syntax error near SELECT"],
+    )
+    def test_schema_messages_are_classified(self, message: str) -> None:
+        from hunter1.platform.db.database import _is_schema_failure
+
+        assert _is_schema_failure(message) is True

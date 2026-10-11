@@ -46,6 +46,27 @@ class DatabaseLocationError(RuntimeError):
         self.cause = cause
 
 
+#: 明确属于**结构/实现**的失败特征（不是「库位置不可用」）。
+#:
+#: 判据按**反向枚举**：只列结构类信号，其余一律仍算环境问题。环境错误的形态
+#: （只读、被锁、磁盘满、路径不可写、根本不是 SQLite 文件……）远多于结构错误 ——
+#: 正向枚举环境错误漏掉一个，就会把一个本该给「人话」的场景变成裸 traceback。
+#: 宁可少归类，也不误伤。
+_SCHEMA_FAILURE_HINTS = (
+    "duplicate column name",
+    "has no column named",
+    "no such column",
+    "no such table",
+    "syntax error",
+)
+
+
+def _is_schema_failure(message: str) -> bool:
+    """这条 DBAPI 失败是结构/实现问题，而不是「库位置不可用」？"""
+    lowered = message.lower()
+    return any(hint in lowered for hint in _SCHEMA_FAILURE_HINTS)
+
+
 class Database:
     """一个 SQLite 数据库的入口。只负责装配，不含业务规则。"""
 
@@ -81,15 +102,19 @@ class Database:
         try:
             self._initialize_schema()
         except DatabaseError as exc:
-            # 连接/建表期的 DBAPI 失败同样是**环境问题**：库文件不可读、被别的进程
-            # 独占锁着、磁盘满、或根本不是 SQLite 文件（实测：后者抛的是
+            original = str(getattr(exc, "orig", None) or exc)
+            if _is_schema_failure(original):
+                # 连得上、只是 DDL 不成立 —— 那是**结构/实现**问题，不是「位置不可用」。
+                # 译成 `DatabaseLocationError` 会把自救方向指错：CLI 会让用户换个
+                # `--db` 路径、检查文件是否损坏，而换路径对「补列撞名 / 建索引失败」
+                # 毫无作用。原样抛，让它响亮地失败（而不是被环境话术掩盖）。
+                raise
+            # 其余都是**环境问题**：库文件不可读、被别的进程独占锁着、磁盘满、
+            # 或根本不是 SQLite 文件（实测：后者抛的是
             # `DatabaseError("file is not a database")`，**不是** OperationalError）。
             # 翻译成人话，让 CLI 的 `except DatabaseLocationError` 接得住 ——
-            # 否则用户看到的是一段 traceback。原始信息一并带上，免得把实现 bug
-            # 也伪装成环境问题。
-            raise DatabaseLocationError(
-                self.path, reason=str(getattr(exc, "orig", None) or exc)
-            ) from exc
+            # 否则用户看到的是一段 traceback。
+            raise DatabaseLocationError(self.path, reason=original) from exc
 
     def _initialize_schema(self) -> None:
         Base.metadata.create_all(self.engine)
