@@ -71,7 +71,11 @@ def refresh(key: str, http: HttpFetcher) -> tuple[int, int]:
     path = FIXTURES / f"{key}.html"
     before = path.stat().st_size if path.exists() else 0
     FIXTURES.mkdir(parents=True, exist_ok=True)
-    path.write_text(pruned, encoding="utf-8")
+    # newline="\n"：产物行尾不该由平台决定（与 export_openapi.py / make_manifest.py /
+    # build.py 同一约定）。快照会入库，Windows 上默认写 CRLF 会让工作树与 git blob
+    # 长期不一致（.gitattributes 是 eol=lf），且这份快照不在 test_artifact_line_endings
+    # 的守卫清单里 —— 漏了 newline 就没有任何一层会发现。
+    path.write_text(pruned, encoding="utf-8", newline="\n")
     return before, path.stat().st_size
 
 
