@@ -396,3 +396,43 @@ class TestSchemaFailureHints:
         from hunter1.platform.db.database import _is_schema_failure
 
         assert _is_schema_failure(message) is True
+
+
+class TestConcurrentInitialization:
+    """并发 `initialize()` 同一个库（报告测试薄弱点）。
+
+    「双进程同启一个库」是便携工具的真实场景：用户双击两次、或定时任务与手动启动
+    重叠。建表 / 补列是**幂等**的，但并发下会撞「table already exists」——
+    而 `initialize()` 的分类逻辑会把这类消息当成**结构性错误**报出来。
+    并发路径此前只有串行测试覆盖，这里把它钉住：要么都成功，要么失败方式一致可读。
+    """
+
+    def test_four_threads_initialize_the_same_db(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "concurrent.db"
+        errors: list[Exception] = []
+        barrier = threading.Barrier(4, timeout=10)
+
+        def initialize() -> None:
+            database = Database(db_path)
+            try:
+                barrier.wait()  # 让四个线程尽可能同时进入
+                database.initialize()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                database.dispose()
+
+        threads = [threading.Thread(target=initialize) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+
+        assert not errors, f"并发 initialize 失败：{errors}"
+
+        # 库确实建好了：再初始化一次应当无事发生
+        check = Database(db_path)
+        try:
+            check.initialize()
+        finally:
+            check.dispose()

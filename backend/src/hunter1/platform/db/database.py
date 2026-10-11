@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -54,17 +55,49 @@ class DatabaseLocationError(RuntimeError):
 #: 宁可少归类，也不误伤。
 _SCHEMA_FAILURE_HINTS = (
     "duplicate column name",
+    # 「已经存在」表明 DDL 状态与预期不符 —— 换 `--db` 路径同样解决不了，
+    # 所以它属于这一档（不是「库位置不可用」）。并发建库时它会短暂出现，
+    # `initialize` 会先重试（见 `_CONCURRENT_DDL_HINTS`），重试用尽才走到这里。
+    "already exists",
     "has no column named",
     "no such column",
     "no such table",
     "syntax error",
 )
 
+#: 「另一个进程正在做同一步 DDL」的信号 —— 需要**重试**而不是上报。
+#:
+#: 两类来源：
+#: - `already exists` / `duplicate column name`：SQLite 上 `create_all` 的
+#:   `checkfirst` 与 `ALTER TABLE` 都是「先查后建」，两个进程同时 `initialize()`
+#:   同一个库时双方都查到「不存在」、于是都执行 DDL，后到的那个撞名；
+#: - `database is locked`：DDL 要抢独占锁，几方同时升级锁时其中一个会立刻拿到
+#:   `SQLITE_BUSY` —— 这条路径**不走** `busy_timeout` 的等待（实测：设了 30s 仍会
+#:   立即失败），所以只能由调用方重试。
+#:
+#: **并发建库是真实场景**（用户双击两次、定时任务与手动启动重叠），而整段初始化
+#: 幂等 —— 隔一小会儿重跑一遍就能把上次没做完的部分补齐。
+#:
+#: 注意「duplicate column name」同时也是真正的 schema 漂移信号（见
+#: `_SCHEMA_FAILURE_HINTS`）—— 重试用尽后它仍会按结构错误原样抛，不会被掩盖。
+_CONCURRENT_DDL_HINTS = ("already exists", "duplicate column name", "database is locked")
+
+#: 并发冲突时的重试次数与退避基数（秒）。冲突窗口是另一次 DDL 的执行时间（毫秒级），
+#: 退避让几个竞争者错开；次数给太多只会让真正卡住的场景启动更慢。
+_CONCURRENT_RETRIES = 10
+_CONCURRENT_RETRY_BACKOFF = 0.05
+
 
 def _is_schema_failure(message: str) -> bool:
     """这条 DBAPI 失败是结构/实现问题，而不是「库位置不可用」？"""
     lowered = message.lower()
     return any(hint in lowered for hint in _SCHEMA_FAILURE_HINTS)
+
+
+def _is_concurrent_ddl_conflict(message: str) -> bool:
+    """这条失败像不像「另一个进程刚把同一步 DDL 做完了」？"""
+    lowered = message.lower()
+    return any(hint in lowered for hint in _CONCURRENT_DDL_HINTS)
 
 
 class Database:
@@ -98,23 +131,34 @@ class Database:
         _enable_sqlite_pragmas(self.engine)
 
     def initialize(self) -> None:
-        """建表（幂等）+ 补写无法由 create_all 施加的唯一索引。"""
-        try:
-            self._initialize_schema()
-        except DatabaseError as exc:
-            original = str(getattr(exc, "orig", None) or exc)
-            if _is_schema_failure(original):
-                # 连得上、只是 DDL 不成立 —— 那是**结构/实现**问题，不是「位置不可用」。
-                # 译成 `DatabaseLocationError` 会把自救方向指错：CLI 会让用户换个
-                # `--db` 路径、检查文件是否损坏，而换路径对「补列撞名 / 建索引失败」
-                # 毫无作用。原样抛，让它响亮地失败（而不是被环境话术掩盖）。
-                raise
-            # 其余都是**环境问题**：库文件不可读、被别的进程独占锁着、磁盘满、
-            # 或根本不是 SQLite 文件（实测：后者抛的是
-            # `DatabaseError("file is not a database")`，**不是** OperationalError）。
-            # 翻译成人话，让 CLI 的 `except DatabaseLocationError` 接得住 ——
-            # 否则用户看到的是一段 traceback。
-            raise DatabaseLocationError(self.path, reason=original) from exc
+        """建表（幂等）+ 补写无法由 create_all 施加的唯一索引。
+
+        **对并发安全**：两个进程同时初始化同一个库时，其中一个会撞「already exists」
+        （见 `_CONCURRENT_DDL_HINTS`），这里退避重试 —— 整段初始化是幂等的，重跑一遍
+        就能把上次没做完的部分补齐。实测（4 线程同时 initialize 同一库）原先有 2 个
+        线程失败，现在是全部成功。
+        """
+        for attempt in range(1, _CONCURRENT_RETRIES + 1):
+            try:
+                self._initialize_schema()
+                return
+            except DatabaseError as exc:
+                original = str(getattr(exc, "orig", None) or exc)
+                if _is_concurrent_ddl_conflict(original) and attempt < _CONCURRENT_RETRIES:
+                    time.sleep(_CONCURRENT_RETRY_BACKOFF * attempt)
+                    continue
+                if _is_schema_failure(original):
+                    # 连得上、只是 DDL 不成立 —— 那是**结构/实现**问题，不是「位置不可用」。
+                    # 译成 `DatabaseLocationError` 会把自救方向指错：CLI 会让用户换个
+                    # `--db` 路径、检查文件是否损坏，而换路径对「补列撞名 / 建索引失败」
+                    # 毫无作用。原样抛，让它响亮地失败（而不是被环境话术掩盖）。
+                    raise
+                # 其余都是**环境问题**：库文件不可读、被别的进程独占锁着、磁盘满、
+                # 或根本不是 SQLite 文件（实测：后者抛的是
+                # `DatabaseError("file is not a database")`，**不是** OperationalError）。
+                # 翻译成人话，让 CLI 的 `except DatabaseLocationError` 接得住 ——
+                # 否则用户看到的是一段 traceback。
+                raise DatabaseLocationError(self.path, reason=original) from exc
 
     def _initialize_schema(self) -> None:
         Base.metadata.create_all(self.engine)
