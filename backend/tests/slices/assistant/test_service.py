@@ -62,6 +62,41 @@ def _tool_call(name: str, args: dict, call_id: str = "c1") -> LLMResponse:
     )
 
 
+class TestToolLoopBudget:
+    """工具循环的轮次预算与末轮行为（报告指出的「白跑」）。"""
+
+    def test_last_iteration_does_not_execute_tools(self) -> None:
+        """最后一轮不再执行工具 —— 结果已不可能回灌给模型，执行纯属浪费。
+
+        修复前：末轮照常 `registry.invoke(...)`（白跑一次数据库查询 —— 助手工具
+        全是只读查询），只是那段结果再也不会被送进模型。这条用**执行计数**钉住它：
+        计数大于「轮数 - 1」即说明末轮又被执行了一次。
+        """
+        executed: list[str] = []
+
+        def counting_search(keyword: str = "") -> str:
+            """搜索岗位。"""
+            executed.append(keyword)
+            return "找到 0 条"
+
+        registry = ToolRegistry([tool(counting_search, name="search_jobs")])
+        # 每一轮都只调工具、不给结论 → 必然走满 max_iterations
+        llm = ScriptedLLM(
+            [_tool_call("search_jobs", {"keyword": f"k{index}"}, f"c{index}") for index in range(4)]
+        )
+
+        result = run_turn(
+            llm=llm,
+            registry=registry,
+            messages=[Message(Role.USER, "找岗位")],
+            max_iterations=3,
+        )
+
+        assert result.truncated is True
+        # 3 轮里只有前 2 轮的结果有机会回到模型；第 3 轮是末轮，不该执行
+        assert len(executed) == 2, f"末轮不该执行工具，实际执行了 {len(executed)} 次"
+
+
 class TestDirectAnswer:
     def test_returns_text_without_tools(self) -> None:
         llm = ScriptedLLM([_text("你好！我可以帮你查岗位。")])

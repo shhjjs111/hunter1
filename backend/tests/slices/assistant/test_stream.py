@@ -103,10 +103,20 @@ class StreamingLLM:
         raise AssertionError("流式路径不该调用非流式方法")
 
 
-def _stream_text(*parts: str, degraded: bool = False, model: str = "fake") -> list[Any]:
+def _stream_text(
+    *parts: str,
+    degraded: bool = False,
+    model: str = "fake",
+    finish_reason: str | None = None,
+) -> list[Any]:
     return [
         *[TextDelta(part) for part in parts],
-        StreamComplete(content="".join(parts), model=model, degraded=degraded),
+        StreamComplete(
+            content="".join(parts),
+            model=model,
+            degraded=degraded,
+            finish_reason=finish_reason,
+        ),
     ]
 
 
@@ -262,6 +272,20 @@ class TestToolStreaming:
 
 
 class TestSafetyAndDegradation:
+    def test_length_truncation_notice_is_streamed_immediately(self) -> None:
+        """token 上限截断的提示要**立刻随流上屏**（报告指出的静默窗口）。
+
+        修复前提示只进 `done.reply`（那是落库用的文本）—— 流式过程中屏幕上就是一段
+        戛然而止的回答，用户得等 `done` 之后的历史刷新才看得到它。
+        """
+        llm = StreamingLLM([_stream_text("半截回答", finish_reason="length")])
+        events = _run(llm, messages=[Message(Role.USER, "问")])
+
+        streamed = "".join(event.text for event in events if isinstance(event, TextDelta))
+        assert "截断" in streamed, f"提示没有随流发出：{streamed!r}"
+        # 落库文本同源 —— 否则刷新前后看到的内容不一样
+        assert "截断" in events[-1].reply
+
     def test_truncates_after_max_iterations(self) -> None:
         llm = StreamingLLM([_stream_tool("search_jobs", {}, f"c{i}") for i in range(10)])
         events = _run(llm, messages=[Message(Role.USER, "循环")], max_iterations=3)

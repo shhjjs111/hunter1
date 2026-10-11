@@ -145,6 +145,12 @@ def run_turn(
                 output_tokens=output_tokens,
             )
 
+        # 最后一轮**不再执行工具**：结果已经不可能回灌给模型（循环随即结束），
+        # 执行它纯属浪费 —— 白跑一次数据库查询（助手工具全是只读查询），
+        # 还会往 `tool_results` 里塞一条调用方拿不到用处的记录。
+        if iteration == max_iterations:
+            break
+
         conversation.append(
             Message(role=Role.ASSISTANT, content=response.content, tool_calls=response.tool_calls)
         )
@@ -153,10 +159,6 @@ def run_turn(
             result = registry.invoke(call.name, call.arguments, call_id=call.id)
             tool_results.append(result)
             conversation.append(result.as_message())
-
-        # 模型只调工具、不说结论时，把「请给出结论」再推一把（最后一轮）
-        if iteration == max_iterations:
-            break
 
     return AssistantResult(
         reply=_TRUNCATED_REPLY,
@@ -223,7 +225,14 @@ def run_turn_stream(
             if completion.finish_reason == "length":
                 # 被 token 上限截断：回答是**半截的**，外观却与完整回答无异。
                 # 不说出来的话用户会以为助手就此说完 —— 属于「静默截断」。
-                reply = f"{reply}\n\n{_LENGTH_TRUNCATED_NOTICE}"
+                #
+                # 提示**既进 `reply`（落库、历史回看）也作为增量文本发出去**：
+                # 只进 reply 的话，用户要等 `done` 之后的历史刷新才看得到 ——
+                # 在那之前屏幕上就是一段戛然而止的回答。两个面必须同源，
+                # 否则刷新前后的内容会不一样。
+                notice = f"\n\n{_LENGTH_TRUNCATED_NOTICE}"
+                reply = f"{reply}{notice}"
+                yield TextDelta(notice)
             yield TurnDone(
                 reply=reply,
                 tool_results=tool_results,
@@ -247,6 +256,10 @@ def run_turn_stream(
             )
             conversation.append(result.as_message())
 
+        # 与 `run_turn` 不同：这里**最后一轮也执行工具**。两个端点本就是「同一资源的
+        # 两个面」、语义同源，差异只在**介质** —— 流式版要把模型的每次工具调用如实
+        # 发出去（前端据此显示「正在调用 X…」），跳过执行等于对用户隐瞒模型做过的事。
+        # 非流式版没有观众，末轮白跑一次查询才是纯浪费（见那边的说明）。
         if iteration == max_iterations:
             break
 
