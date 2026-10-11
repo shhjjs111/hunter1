@@ -62,7 +62,9 @@ echo "读到 ${#TOKEN} 个字符，正在向 GitHub 校验…"
 # 同因问题见 check.sh:50-58。有 cygpath 才转（Linux/CI 本就是宿主形式）。
 TMP_DIR="$(mktemp -d)"
 # `|| true`：EXIT trap 的最后一条命令失败会覆盖脚本退出码 —— 清理失败不该改变结论。
-trap 'command rm -rf "$TMP_DIR" 2>/dev/null || true' EXIT
+# 也清 `$TOKEN_FILE.tmp`：落盘走「先写 .tmp 再 mv」，若在两步之间中断（Ctrl-C /
+# 崩溃），它会留在仓库外、含令牌明文 —— 只清 TMP_DIR 覆盖不到这个写在 $HOME 的半成品。
+trap 'command rm -rf "$TMP_DIR" 2>/dev/null || true; command rm -f "$TOKEN_FILE.tmp" 2>/dev/null || true' EXIT
 TMP_AUTH="$TMP_DIR/auth"
 TMP_WHO="$TMP_DIR/who.json"
 
