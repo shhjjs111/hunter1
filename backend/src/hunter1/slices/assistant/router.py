@@ -34,6 +34,7 @@ SSE 的两条硬约定（沿用旧界面的实现教训）：
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable, Iterator
 
 from fastapi import APIRouter, HTTPException, Query
@@ -41,7 +42,7 @@ from fastapi.responses import StreamingResponse
 
 from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
 from hunter1.domain.assistant import Message, Role
-from hunter1.domain.llm import LLMError, TextDelta
+from hunter1.domain.llm import LLMError, TextDelta, describe_llm_error
 from hunter1.slices.assistant.schemas import (
     ConversationListResponse,
     ConversationMessageView,
@@ -223,7 +224,16 @@ def build_router(
 
     # ---- 一次性对话（无流式能力的调用方 / 脚本用）----
 
-    @router.post("/assistant/turn", response_model=TurnResponse, summary="跑一轮对话（一次性返回）")
+    @router.post(
+        "/assistant/turn",
+        response_model=TurnResponse,
+        summary="跑一轮对话（一次性返回）",
+        responses={
+            409: {
+                "description": "模型未配置 / 配置不可用 —— 去「配置」页填好模型后再试",
+            },
+        },
+    )
     def turn(body: StreamRequest) -> TurnResponse:
         text = body.message.strip()
         if not text:
@@ -291,7 +301,18 @@ def build_router(
 
     # ---- 流式对话（SSE）----
 
-    @router.post("/assistant/stream", summary="流式对话（SSE）")
+    @router.post(
+        "/assistant/stream",
+        summary="流式对话（SSE）",
+        responses={
+            409: {
+                "description": (
+                    "模型未配置 / 配置不可用（开流前校验）—— 去「配置」页填好模型后再试。"
+                    "注意开流**之后**的失败只能作为 SSE `error` 事件交出去"
+                ),
+            },
+        },
+    )
     def stream(body: StreamRequest) -> StreamingResponse:
         text = body.message.strip()
         if not text:
@@ -302,7 +323,14 @@ def build_router(
         # 校验与取历史都在**开流之前**，且历史**只取一次**（见 `_history_for` 的 404）。
         # 响应一旦开始，之后任何失败都只能作为 SSE error 事件发出去。
         history = _history_for(store, body.conversation_id, history_limit)
-        llm = llm_factory()
+        # 与 `/turn` 同一语义：工厂抛 `LLMError` 时给 **422**（同一切片的两个端点对
+        # 同一故障必须同码，见模块 docstring 的错误语义表）。`ModelNotConfiguredError`
+        # 刻意不在此捕获 —— 交给应用级处理器映射为 409 + 指引；其余异常（实现 bug）
+        # 照旧响亮地 500。报告次要项指出的正是这处不对称。
+        try:
+            llm = llm_factory()
+        except LLMError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         # 所有权交给 generator：真正的消费发生在响应体被读取时（端点这时早已返回），
         # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
         # 会 close 这个 generator，finally 同样会跑到。
@@ -377,13 +405,37 @@ def _stream_turn(
                 "degraded": bool(final and final.degraded),
             }
         )
+    except KeyError:
+        # 会话在流期间被删（`_persist` 对未知会话抛 KeyError）。一次性端点在同场景给
+        # 404，流式这边响应已开始、只能作为事件交出去 —— 但要说**可读的原因**，
+        # 而不是把 KeyError 的 repr 甩到界面上。
+        yield _sse({"type": "error", "message": "会话不存在：本轮内容未保存。"})
     except Exception as exc:
-        # 响应已经开始，没法再重定向 —— 失败必须作为事件交出去
-        yield _sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+        # 响应已经开始，没法再重定向 —— 失败必须作为事件交出去。
+        #
+        # 但**不把实现细节原样甩给 UI**（报告次要项）：`{type}：{exc}` 会把内部异常
+        # 类名与实现相关的消息（库内部状态、参数）泄露到界面。LLMError 走可读中文
+        # （`describe_llm_error`），其余记 stderr + 给通用文案 —— 与 settings 切片的
+        # `_failure_text` 同一考量（那里也保留原文，但那是**只读探测**的场景、且过了
+        # `_redact`；对话流不该把 traceback 细节交给用户）。
+        yield _sse({"type": "error", "message": _stream_error_message(exc)})
     finally:
         # 本 generator 拥有这个客户端（见 `stream` 端点的注释）：正常结束、出错、
         # 或客户端断开（GeneratorExit）—— 三条路径都要把连接池释放掉。
         llm.close()
+
+
+def _stream_error_message(exc: Exception) -> str:
+    """流式失败对外的 `error` 事件文案 —— 可读原因交用户，实现细节进 stderr。
+
+    与 settings 切片的 `_failure_text` 同一取舍：`LLMError` 走人工维护的可行动中文
+    （`describe_llm_error`），其它异常只给一句通用文案、原文写 stderr 供排障。
+    区别在于对话流是**用户界面**，把 traceback 细节印上去既没用也不安全。
+    """
+    if isinstance(exc, LLMError):
+        return describe_llm_error(exc)
+    print(f"[assistant] 流式对话失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+    return "生成回复时出错（本轮内容未保存），请重试。"
 
 
 __all__ = [

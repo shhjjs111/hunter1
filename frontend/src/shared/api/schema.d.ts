@@ -792,6 +792,13 @@ export interface operations {
                     "application/json": components["schemas"]["ApplyResponse"];
                 };
             };
+            /** @description id 前缀至少匹配到两条岗位，无法唯一确定（请给更长的 id） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -855,6 +862,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["StageUpdateResponse"];
                 };
+            };
+            /** @description 这条投递刚被别处改过（乐观锁：阶段或备注已变），请刷新后重试 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -956,6 +970,13 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
+            /** @description 模型未配置 / 配置不可用（开流前校验）—— 去「配置」页填好模型后再试。注意开流**之后**的失败只能作为 SSE `error` 事件交出去 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -989,6 +1010,13 @@ export interface operations {
                     "application/json": components["schemas"]["TurnResponse"];
                 };
             };
+            /** @description 模型未配置 / 配置不可用 —— 去「配置」页填好模型后再试 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1018,6 +1046,13 @@ export interface operations {
                     "application/json": components["schemas"]["StartCrawlResponse"];
                 };
             };
+            /** @description 抓取线程启动失败（服务器资源问题）—— `detail` 含原因。区别于 500：500 意为「实现坏了」，这里是「这台机器忙不过来」 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     crawl_status_api_crawl_status_get: {
@@ -1043,7 +1078,7 @@ export interface operations {
     list_jobs_api_jobs_get: {
         parameters: {
             query?: {
-                /** @description 关键词（标题归一化匹配；空 = 列最近） */
+                /** @description 关键词（标题归一化匹配；空 = 列最近；最长 200 字符） */
                 q?: string;
                 /** @description 页码（1 起） */
                 page?: number;
@@ -1094,6 +1129,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["JobDetail"];
                 };
+            };
+            /** @description id 前缀至少匹配到两条岗位，无法唯一确定（请给更长的 id） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -1209,6 +1251,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ScoreView"];
                 };
+            };
+            /** @description 服务端状态未就绪：候选人画像未配置/不可用，或模型未配置 —— `detail` 给出修复指引（去「配置」页补齐） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

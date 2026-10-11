@@ -21,7 +21,13 @@ def build_router(*, store: JobStore) -> APIRouter:
 
     @router.get("/jobs", response_model=schemas.JobListResponse, summary="岗位列表（搜索+分页）")
     def list_jobs(
-        q: str = Query("", description="关键词（标题归一化匹配；空 = 列最近）"),
+        q: str = Query(
+            "",
+            max_length=service.MAX_KEYWORD_CHARS,
+            description=(
+                f"关键词（标题归一化匹配；空 = 列最近；最长 {service.MAX_KEYWORD_CHARS} 字符）"
+            ),
+        ),
         # `le=service.MAX_PAGE` 与 `page_size` 的 `le` 对称：服务层虽有 `min(max(...))`
         # 兜底，但那会让 page=999999 静默变成第 10000 页、响应里 `page` 却是 10000，
         # 而调用方从契约（OpenAPI 的 description 只是字符串）读不到任何上限。边界处
@@ -39,7 +45,14 @@ def build_router(*, store: JobStore) -> APIRouter:
         )
 
     @router.get(
-        "/jobs/{job_id}", response_model=schemas.JobDetail, summary="岗位详情（全 id 或唯一前缀）"
+        "/jobs/{job_id}",
+        response_model=schemas.JobDetail,
+        summary="岗位详情（全 id 或唯一前缀）",
+        responses={
+            409: {
+                "description": "id 前缀至少匹配到两条岗位，无法唯一确定（请给更长的 id）",
+            },
+        },
     )
     def job_detail(job_id: str) -> schemas.JobDetail:
         job, ambiguous = service.find_job(store, job_id)

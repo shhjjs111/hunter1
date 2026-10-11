@@ -61,7 +61,10 @@ def build_router(
             200: {
                 "model": schemas.ApplyResponse,
                 "description": "该岗位已有投递记录（幂等命中）—— 返回既有记录的 id",
-            }
+            },
+            409: {
+                "description": "id 前缀至少匹配到两条岗位，无法唯一确定（请给更长的 id）",
+            },
         },
     )
     def create_application(
@@ -85,6 +88,11 @@ def build_router(
         "/applications/{application_id}/stage",
         response_model=schemas.StageUpdateResponse,
         summary="推进投递阶段",
+        responses={
+            409: {
+                "description": "这条投递刚被别处改过（乐观锁：阶段或备注已变），请刷新后重试",
+            },
+        },
     )
     def update_stage(
         application_id: str, body: schemas.StageUpdateRequest

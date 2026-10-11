@@ -38,6 +38,7 @@ from pydantic import ValidationError
 
 from hunter1.application.ports import LLMProvider
 from hunter1.domain.models import Job
+from hunter1.platform.text import redact_secret
 from hunter1.slices.scoring.models import (
     MAX_PROFILE_DIRECTIONS,
     MAX_PROFILE_ITEM_CHARS,
@@ -107,12 +108,32 @@ def _first_reason(exc: Exception) -> str:
     return str(exc)
 
 
+def _redact(message: str, api_key_provider: Callable[[], str] | None) -> str:
+    """把评分失败文案里可能出现的 API Key 抹掉。
+
+    与 settings 切片的 `_failure_text` → `_redact` 同一课（报告次要项：那边做了、
+    这边漏了）：厂商的 4xx/5xx 体常把 `Authorization` 原样回显，而这段文案要显示给
+    用户、也可能被贴给维护者 —— 它绝不能含完整密钥。
+
+    模型客户端在源头已抹过一次（见 `platform.llm`），这里是**切片这一层**的兜底：
+    脱敏点越靠近显示端越可靠，代价只是读一次配置。
+    """
+    if api_key_provider is None:
+        return message
+    try:
+        key = api_key_provider()
+    except Exception:  # pragma: no cover - 读不到 key 就不抹，别让错误路径再炸一次
+        return message
+    return redact_secret(message, key)
+
+
 def build_router(
     *,
     store: ScoreStore,
     llm_factory: Callable[[], LLMProvider],
     profile_provider: Callable[[], CandidateProfile | None],
     clock: Callable[[], datetime] | None = None,
+    api_key_provider: Callable[[], str] | None = None,
 ) -> APIRouter:
     """构造 scoring 的 APIRouter（依赖由组装处注入）。
 
@@ -166,7 +187,18 @@ def build_router(
         store.save_profile(profile)
         return ProfileView(profile=profile)
 
-    @router.post("/scoring/{job_id}", summary="给一个岗位评分并写回")
+    @router.post(
+        "/scoring/{job_id}",
+        summary="给一个岗位评分并写回",
+        responses={
+            409: {
+                "description": (
+                    "服务端状态未就绪：候选人画像未配置/不可用，或模型未配置 —— "
+                    "`detail` 给出修复指引（去「配置」页补齐）"
+                ),
+            },
+        },
+    )
     def score(job_id: str) -> ScoreView:
         profile = _load_profile_or_409()
         if profile is None:
@@ -180,7 +212,9 @@ def build_router(
         try:
             card = score_job(job=job, profile=profile, llm=llm)
         except ScoringError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=422, detail=_redact(str(exc), api_key_provider)
+            ) from exc
         finally:
             # 客户端是每请求新建的 —— 用完即释放，别把连接池攒在进程里
             llm.close()

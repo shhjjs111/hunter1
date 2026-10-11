@@ -22,7 +22,19 @@ def build_router(*, runner: CrawlRunner) -> APIRouter:
     """构造 crawl 的 APIRouter（依赖由组装处注入）。"""
     router = APIRouter()
 
-    @router.post("/crawl", response_model=StartCrawlResponse, summary="启动一轮抓取")
+    @router.post(
+        "/crawl",
+        response_model=StartCrawlResponse,
+        summary="启动一轮抓取",
+        responses={
+            503: {
+                "description": (
+                    "抓取线程启动失败（服务器资源问题）—— `detail` 含原因。"
+                    "区别于 500：500 意为「实现坏了」，这里是「这台机器忙不过来」"
+                ),
+            },
+        },
+    )
     def start_crawl() -> StartCrawlResponse:
         # 已在跑时 `start()` 返回 False —— 那不是错误，调用方按 `started` 分支处理。
         #
