@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 from collections.abc import Iterable
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -26,6 +28,14 @@ from hunter1.platform.fetch.robots import ROBOTS_MAX_BYTES, RobotsCache
 #: 单个响应体的上限。限流器管的是「同时打几个请求」，管不到「一个响应有多大」——
 #: 一次重定向落到大文件（或站点返了个巨型日志页）就能把内存吃满。
 DEFAULT_MAX_BYTES = 8 * 1024 * 1024
+
+#: 一次抓取最多跟随的重定向跳数。超过即 `FetchError("too_many_redirects")`。
+#: httpx 默认 20；招聘站的重定向链通常 1-2 跳，10 已很宽松 —— 收紧只是让打转的
+#: 重定向更快地失败，而不是无限跟随。
+MAX_REDIRECTS = 10
+
+#: 需要跟随的状态码（与 httpx 的集合一致）。
+_REDIRECT_STATUS = frozenset({301, 302, 303, 307, 308})
 
 DEFAULT_USER_AGENTS: tuple[str, ...] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -147,6 +157,18 @@ def _read_capped(response: httpx.Response, limit: int, url: str) -> bytes:
     return b"".join(chunks)
 
 
+def _resolve_redirect(current: str, location: str) -> str | None:
+    """把 `Location` 解析成绝对 URL；非 http(s) 目标返回 None。
+
+    只允许 http(s) 是安全边界：一个 3xx 不该把抓取器引导去读 `file://` / `data:`
+    之类 —— 那与「抓取网页」的语义无关，也可能成为本地文件读取的入口。
+    """
+    target = urljoin(current, location.strip())
+    if urlsplit(target).scheme not in ("http", "https"):
+        return None
+    return target
+
+
 class HttpFetcher:
     """带重试与主机治理的 HTTP 客户端。可注入 transport 以便离线测试。"""
 
@@ -172,12 +194,20 @@ class HttpFetcher:
         self.user_agents = tuple(user_agents)
         self.max_bytes = max(1, int(max_bytes))
         self._owns_client = client is None
+        # `follow_redirects=False` 是**刻意**的：让 httpx 在传输层静默跟随重定向会
+        # 绕过 robots 与限速 —— 它们此前都只按**原始** URL 做一次，跨主机重定向的
+        # 目标主机于是从未被读过 robots、也不占它的限速配额。跟随改由 `get` 逐跳编排，
+        # 每一跳都重新过这两道闸（见 `get` 与 `_fetch_once`）。
         self._client = client or httpx.Client(
             timeout=self.timeout,
             transport=transport,
-            follow_redirects=True,
+            follow_redirects=False,
         )
         self._robots = RobotsCache(self._fetch_robots_text) if respect_robots else None
+        # 每个主机固定一个 UA（见 `_user_agent_for`）：UA 决定 robots 的组选择，
+        # 同主机翻页/多跳时若 UA 漂移，同一份 robots.txt 会被选出不同的规则组。
+        self._ua_lock = threading.Lock()
+        self._ua_by_host: dict[str, str] = {}
 
     def close(self) -> None:
         if self._owns_client:
@@ -220,19 +250,46 @@ class HttpFetcher:
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
         request_headers = {
-            "User-Agent": random.choice(self.user_agents),
+            "User-Agent": self._user_agent_for(url),
             "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
         if headers:
             request_headers.update(headers)
 
-        if self._robots is not None and not self._robots.allows(
-            url, user_agent=request_headers["User-Agent"]
-        ):
-            # 站点明确说不许抓 → 不重试、也不记成主机失败（它不是故障）
-            raise FetchError("robots_disallowed", url)
+        # **逐跳**跟随重定向：每一跳都重新过 robots 与限速（见 `__init__` 里
+        # `follow_redirects=False` 的说明）。跨主机重定向时，目标主机因此**也会**
+        # 被读 robots、并占用它自己的限速配额 —— 与「对站点礼貌」的定位一致，
+        # 也堵住「一个 3xx 就绕开全部治理」的缺口（报告 M1）。
+        current = url
+        for _hop in range(MAX_REDIRECTS + 1):
+            if self._robots is not None and not self._robots.allows(
+                current, user_agent=request_headers["User-Agent"]
+            ):
+                # 站点明确说不许抓 → 不重试、也不记成主机失败（它不是故障）
+                raise FetchError("robots_disallowed", current)
 
+            response = self._fetch_once(current, request_headers)
+
+            location = response.headers.get("location")
+            if response.status_code in _REDIRECT_STATUS and location:
+                target = _resolve_redirect(current, location)
+                if target is None:
+                    # Location 指向非 http(s)（file:// / data: …）—— 拒绝，别让一个
+                    # 3xx 把抓取器引导去读本地文件。
+                    raise FetchError("invalid_redirect", current)
+                current = target
+                continue
+            return response
+
+        raise FetchError("too_many_redirects", url)
+
+    def _fetch_once(self, url: str, request_headers: dict[str, str]) -> httpx.Response:
+        """对**单个** URL 发一次请求（含限速与重试），返回响应 —— 不跟随重定向。
+
+        重定向的编排在 `get`：这里只管「把一次请求打出去并处理重试/状态分类」，
+        于是每一跳都复用同一套重试与限速语义，不必在跳与重试之间写两遍。
+        """
         last_code = "transport_failed"
         for attempt in range(1, self.retries + 1):
             try:
@@ -288,11 +345,31 @@ class HttpFetcher:
 
         raise FetchError(last_code, url)
 
+    def _user_agent_for(self, url: str) -> str:
+        """该 URL 所属主机固定使用的 UA（首次遇到时随机选定并记住）。
+
+        为什么按主机固定而不是每请求重选：UA 决定 robots 的**组选择**（见
+        `fetch.robots._select_group`），也影响站点的风控画像。同主机翻页 / 多跳时
+        UA 漂移会让同一份 robots.txt 被选出不同规则组，也让「同一个爬虫」在对方
+        眼里变成好几个 —— 固定它既稳 robots，也稳风控观感（报告次要项）。
+        """
+        host = (urlsplit(url).hostname or "").lower()
+        if not host:
+            # 解析不出主机：不给共享桶（免得所有畸形 URL 挤同一个 UA），直接随机
+            return random.choice(self.user_agents)
+        with self._ua_lock:
+            agent = self._ua_by_host.get(host)
+            if agent is None:
+                agent = random.choice(self.user_agents)
+                self._ua_by_host[host] = agent
+            return agent
+
 
 __all__ = [
     "DEFAULT_ACCEPT_LANGUAGE",
     "DEFAULT_MAX_BYTES",
     "DEFAULT_USER_AGENTS",
+    "MAX_REDIRECTS",
     "FetchError",
     "HttpFetcher",
 ]

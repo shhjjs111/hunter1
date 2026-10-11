@@ -97,3 +97,53 @@ class TestCache:
         cache = RobotsCache(fetch)
         assert cache.allows("https://a.com/private", user_agent="ua") is False
         assert cache.allows("https://b.com/private", user_agent="ua") is True
+
+    def test_failure_is_not_cached_forever(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """读不到 robots 只**短**缓存（报告次要项）。
+
+        原先失败结果被永久记住：一次瞬时故障（DNS 抖动、连接超时）会让该主机在
+        **进程剩余生命周期**里一直按「未声明限制」处理 —— 站点恢复、甚至补写了
+        `Disallow` 之后我们都不会再读。
+        """
+        calls: list[str] = []
+        state = {"ok": False}
+
+        def fetch(url: str) -> str | None:
+            calls.append(url)
+            return "User-agent: *\nDisallow: /private" if state["ok"] else None
+
+        now = {"t": 0.0}
+        cache = RobotsCache(fetch, clock=lambda: now["t"], failure_ttl=60.0)
+
+        assert cache.allows("https://a.com/private", user_agent="ua") is True  # 读不到 → 放行
+        assert len(calls) == 1
+
+        now["t"] = 59.0  # 失败缓存未过期 → 不重取
+        assert cache.allows("https://a.com/private", user_agent="ua") is True
+        assert len(calls) == 1
+
+        state["ok"] = True  # 站点恢复
+        now["t"] = 61.0  # 失败缓存过期
+        assert cache.allows("https://a.com/private", user_agent="ua") is False
+        assert len(calls) == 2
+        capsys.readouterr()
+
+    def test_successful_rules_are_cached_for_their_ttl(self) -> None:
+        """成功的结果缓存久（`cache_ttl`）—— 别为一份 robots 反复打站点。"""
+        calls: list[str] = []
+
+        def fetch(url: str) -> str | None:
+            calls.append(url)
+            return "User-agent: *\nDisallow: /private"
+
+        now = {"t": 0.0}
+        cache = RobotsCache(fetch, clock=lambda: now["t"], cache_ttl=3600.0)
+
+        assert cache.allows("https://a.com/private", user_agent="ua") is False
+        now["t"] = 3599.0
+        assert cache.allows("https://a.com/x", user_agent="ua") is True
+        assert len(calls) == 1, "TTL 内不该重取"
+
+        now["t"] = 3601.0
+        assert cache.allows("https://a.com/y", user_agent="ua") is True
+        assert len(calls) == 2, "TTL 过后应重取"

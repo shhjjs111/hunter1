@@ -515,3 +515,106 @@ class TestResourceTimeout:
         # 本地限流器排不上队**不是**站点的错：不该记进主机的失败统计
         # （记了会触发冷却，把「本机太忙」变成「这个站点不可用」）。
         assert Saturated.records == 0
+
+
+class TestRedirects:
+    """重定向治理（M1）：逐跳跟随，且每一跳都重新过 robots 与限速。
+
+    修复前 `httpx.Client(follow_redirects=True)` 在**传输层**静默跟随，而 robots
+    判定与限速配额都只按**原始** URL 做一次 —— 跨主机重定向时，目标主机的 robots
+    从未被读过、也不占它的限速配额。「对站点礼貌」的定位因此有个后门。
+    """
+
+    def test_follows_redirect_to_final(self, clock: FakeClock) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/old":
+                return httpx.Response(302, headers={"Location": "https://a.com/new"})
+            return httpx.Response(200, text="<html>final</html>")
+
+        assert _fetcher(clock, handler).get_text("https://a.com/old") == "<html>final</html>"
+
+    def test_relative_location_is_resolved(self, clock: FakeClock) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/a":
+                return httpx.Response(302, headers={"Location": "/b"})
+            return httpx.Response(200, text="B")
+
+        assert _fetcher(clock, handler).get_text("https://a.com/a") == "B"
+
+    def test_cross_host_redirect_rechecks_target_robots(self, clock: FakeClock) -> None:
+        """跨主机重定向 → **目标**主机的 robots 必须被读到（而不是当作没限制）。"""
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            if request.url.path == "/robots.txt":
+                if request.url.host == "b.com":
+                    return httpx.Response(200, text="User-agent: *\nDisallow: /")
+                return httpx.Response(404)  # a.com 未声明限制
+            if request.url.host == "a.com":
+                return httpx.Response(302, headers={"Location": "https://b.com/secret"})
+            return httpx.Response(200, text="<html>b</html>")
+
+        fetcher = _fetcher(clock, handler, respect_robots=True, retries=1)
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://a.com/start")
+
+        assert excinfo.value.code == "robots_disallowed"
+        assert excinfo.value.url == "https://b.com/secret", "被拦的应是**目标** URL"
+        assert "https://b.com/robots.txt" in calls, "目标主机的 robots 没被读 —— 又绕开了"
+        assert "https://b.com/secret" not in calls, "被目标主机禁止的路径不该真的发出请求"
+
+    def test_cross_host_redirect_charges_target_limiter(self, clock: FakeClock) -> None:
+        """跨主机重定向 → 目标主机的失败要记进**它自己**的冷却桶。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "a.com":
+                return httpx.Response(302, headers={"Location": "https://b.com/x"})
+            return httpx.Response(503)
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        with pytest.raises(FetchError):
+            fetcher.get_text("https://a.com/start")
+
+        assert fetcher.limiter.cooldown_remaining("b.com") > 0
+        assert fetcher.limiter.cooldown_remaining("a.com") == 0.0, "不该把源主机的桶也拖下水"
+
+    def test_redirect_loop_fails_fast(self, clock: FakeClock) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"Location": "https://a.com/loop"})
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://a.com/loop")
+        assert excinfo.value.code == "too_many_redirects"
+
+    def test_non_http_redirect_is_rejected(self, clock: FakeClock) -> None:
+        """Location 指向 `file://` 之类 → 拒绝，别把抓取器引导去读本地文件。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"Location": "file:///etc/passwd"})
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://a.com/x")
+        assert excinfo.value.code == "invalid_redirect"
+
+
+class TestUserAgentStability:
+    """同主机固定 UA：UA 决定 robots 的组选择，漂移会让同一份 robots 选出不同规则组。"""
+
+    def test_same_host_keeps_one_user_agent(self, clock: FakeClock) -> None:
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers.get("user-agent", ""))
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(clock, handler)
+        # 多打几次：旧实现每请求重选 UA，随机三次「恰好全同」的概率是 1/9 ——
+        # 次数太少会让这条回归用例偶发假绿。8 次把偶然通过压到 (1/3)^7。
+        for index in range(8):
+            fetcher.get_text(f"https://a.com/{index}")
+
+        assert len(set(seen)) == 1, f"同主机 UA 漂移了：{seen}"
+        assert seen[0], "UA 不该为空"

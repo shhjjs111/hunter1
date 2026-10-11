@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -29,6 +30,18 @@ _RULE_LINE = re.compile(r"^(allow|disallow)\s*:\s*(.*)$", re.IGNORECASE)
 
 #: robots.txt 自身的体积上限（它不该很大；超了当读不到处理）。
 ROBOTS_MAX_BYTES = 512 * 1024
+
+#: **成功**解析出的规则缓存多久（秒）。站点改 robots 罕见，缓存久一点省请求。
+DEFAULT_CACHE_TTL = 3600.0
+
+#: **读不到** robots.txt 时的缓存时长（秒）—— 刻意短。
+#:
+#: 为什么失败也缓存、但不永久缓存：站点读不到自己的 robots 是它的问题，不该让本工具
+#: 一轮抓取全停（所以仍按「未声明限制」放行）。但一次**瞬时故障**（DNS 抖动、连接
+#: 超时、上游 502）若被永久记住，该主机在**进程剩余生命周期**里会一直按「未声明限制」
+#: 处理 —— 站点恢复之后、甚至真的补写了一份 `Disallow`，我们都不会再读。
+#: 短 TTL 让瞬时故障自己过期，代价只是故障期间多打几次 robots.txt。
+DEFAULT_FAILURE_TTL = 60.0
 
 
 @dataclass
@@ -122,16 +135,30 @@ def _matches(path: str, pattern: str) -> bool:
 
 
 class RobotsCache:
-    """按主机缓存 robots.txt 的判定器。
+    """按主机缓存 robots.txt 的判定器（成功与失败各自带 TTL）。
 
     `fetch_text` 是取原文的回调；取不到时应返回 None（4xx / 5xx / 网络错误 / 过大），
     此时按**未声明限制**处理并在 stderr 留一行 —— 站点读不到自己的 robots 是它的
     问题，不该让本工具一轮抓取全停，但也不能不声不响。
+
+    两类结果**分别**缓存：成功的用 `cache_ttl`（长），失败的用 `failure_ttl`（短）——
+    为什么失败不能永久缓存，见 `DEFAULT_FAILURE_TTL`。
     """
 
-    def __init__(self, fetch_text: Callable[[str], str | None]) -> None:
+    def __init__(
+        self,
+        fetch_text: Callable[[str], str | None],
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        cache_ttl: float = DEFAULT_CACHE_TTL,
+        failure_ttl: float = DEFAULT_FAILURE_TTL,
+    ) -> None:
         self._fetch_text = fetch_text
-        self._by_host: dict[str, RobotsRules] = {}
+        self._clock = clock
+        self._cache_ttl = cache_ttl
+        self._failure_ttl = failure_ttl
+        #: host → (规则, 过期时刻)；时刻由注入的 `clock` 计（测试可推进）。
+        self._by_host: dict[str, tuple[RobotsRules, float]] = {}
 
     def allows(self, url: str, *, user_agent: str = "*") -> bool:
         split = urlsplit(url)
@@ -139,22 +166,43 @@ class RobotsCache:
             return True  # 非 http(s)（畸形 URL / file://）不适用 robots
         host = f"{split.scheme}://{split.netloc.lower()}"
 
-        rules = self._by_host.get(host)
-        if rules is None:
-            rules = self._load(host)
-            self._by_host[host] = rules
+        rules = self._rules_for(host)
 
         path = split.path or "/"
         if split.query:
             path = f"{path}?{split.query}"
         return rules.allows(path, user_agent=user_agent)
 
-    def _load(self, host: str) -> RobotsRules:
+    def _rules_for(self, host: str) -> RobotsRules:
+        """取该主机的规则；缓存过期（或不存在）时重新拉取。"""
+        now = self._clock()
+        cached = self._by_host.get(host)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+        rules, loaded_ok = self._load(host)
+        ttl = self._cache_ttl if loaded_ok else self._failure_ttl
+        self._by_host[host] = (rules, now + ttl)
+        return rules
+
+    def _load(self, host: str) -> tuple[RobotsRules, bool]:
+        """拉取并解析 robots.txt；返回 (规则, **是否真的读到了**)。
+
+        第二个返回值决定缓存时长（见 `_rules_for`）—— 「读到了一份没有规则的
+        robots」与「压根没读到」必须分开，前者是站点在声明「不限制」，后者只是
+        这一次没拿到。
+        """
         text = self._fetch_text(f"{host}/robots.txt")
         if text is None:
             print(f"警告：读不到 {host}/robots.txt，本轮按「未声明限制」处理。", file=sys.stderr)
-            return RobotsRules()
-        return parse_robots(text)
+            return RobotsRules(), False
+        return parse_robots(text), True
 
 
-__all__ = ["ROBOTS_MAX_BYTES", "RobotsCache", "RobotsRules", "parse_robots"]
+__all__ = [
+    "DEFAULT_CACHE_TTL",
+    "DEFAULT_FAILURE_TTL",
+    "ROBOTS_MAX_BYTES",
+    "RobotsCache",
+    "RobotsRules",
+    "parse_robots",
+]
