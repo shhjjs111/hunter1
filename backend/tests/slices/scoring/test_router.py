@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from hunter1.domain.models import CaptureStatus, Job
 from hunter1.platform.db import Database
 from hunter1.platform.llm import LLMError, LLMResponse
-from hunter1.slices.scoring.models import MAX_PROFILE_KEYWORDS, CandidateProfile
+from hunter1.slices.scoring.models import MAX_PROFILE_KEYWORDS, CandidateProfile, ScoringError
 from hunter1.slices.scoring.prompts import PROMPT_VERSION
 from hunter1.slices.scoring.router import build_router
 from hunter1.slices.scoring.store import ScoreStore
@@ -64,7 +64,11 @@ def db(tmp_path: Path) -> Database:
 
 
 def _client(
-    db: Database, llm: FakeLLM, *, profile: CandidateProfile | None = PROFILE
+    db: Database,
+    llm: FakeLLM,
+    *,
+    profile: CandidateProfile | None = PROFILE,
+    api_key: str | None = None,
 ) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(
@@ -72,11 +76,58 @@ def _client(
             store=ScoreStore(db),
             llm_factory=lambda: llm,
             profile_provider=lambda: profile,
+            api_key_provider=(lambda: api_key) if api_key is not None else None,
         ),
         prefix="/api",
     )
     with TestClient(app) as test_client:
         yield test_client
+
+
+class TestFailureMessageIsRedacted:
+    """评分失败的文案要抹掉 API Key（报告次要项：settings 做了、scoring 漏了）。
+
+    厂商的 4xx 体常把 `Authorization` 原样回显 —— 而这段文案会显示给用户、
+    也可能被用户贴给维护者。
+    """
+
+    def test_key_in_failure_message_is_redacted(
+        self, db: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import hunter1.slices.scoring.router as router_module
+
+        secret = "sk-super-secret-value"
+
+        def leaking_score_job(**_kwargs: Any) -> Any:
+            raise ScoringError(f"upstream rejected key {secret}")
+
+        monkeypatch.setattr(router_module, "score_job", leaking_score_job)
+
+        for client in _client(db, FakeLLM(), api_key=secret):
+            response = client.post(f"/api/scoring/{JOB_ID}")
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert secret not in detail, "完整密钥泄露到了响应里"
+        assert "***" in detail, "应当以掩码替代"
+
+    def test_message_without_key_is_untouched(self, db: Database) -> None:
+        """没配 key 时文案原样透出 —— 脱敏不该把原因也抹掉。"""
+        import hunter1.slices.scoring.router as router_module
+
+        def failing_score_job(**_kwargs: Any) -> Any:
+            raise ScoringError("模型返回了空内容")
+
+        original = router_module.score_job
+        router_module.score_job = failing_score_job
+        try:
+            for client in _client(db, FakeLLM(), api_key=""):
+                response = client.post(f"/api/scoring/{JOB_ID}")
+        finally:
+            router_module.score_job = original
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "模型返回了空内容"
 
 
 class TestScoreEndpoint:

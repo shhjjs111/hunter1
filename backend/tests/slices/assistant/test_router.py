@@ -114,6 +114,20 @@ class MidStreamFailureLLM:
         raise LLMError("stream_error", "Insufficient Balance")
 
 
+class _ExplodingLLM:
+    """流中抛**非契约异常**（实现 bug）—— 界面不该看到类名与实现细节。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    def stream_with_tools(self, **_kw: Any) -> Iterator[Any]:
+        raise RuntimeError("内部实现细节：connection pool at 0x7f00")
+        yield  # pragma: no cover - 只为让它成为生成器函数
+
+
 class ConversationDeletingLLM(ScriptedLLM):
     """在模型调用**期间**把会话删掉 —— 复现「存在性检查通过后、落库之前」的真实竞态。
 
@@ -396,6 +410,50 @@ class TestStreamEndpoint:
             assert response.status_code == 422
             assert "请输入内容" in response.json()["detail"]
             assert db.conversations().list() == []
+
+    def test_non_contract_failure_does_not_leak_internals(self, db: Database) -> None:
+        """流中抛**非契约异常** → 通用文案 + 原文进 stderr，不把实现细节甩到界面。
+
+        原先直接把 `{type(exc).__name__}: {exc}` 交给前端 —— 内部异常类名与实现消息
+        （库内部状态、参数）都会显示给用户，既无用也泄露实现（报告次要项）。
+        `LLMError` 仍走可读中文（见 `test_model_failure_becomes_error_event`）。
+        """
+        for client in _client(db, _ExplodingLLM()):
+            events = _parse_sse(client.post("/api/assistant/stream", json={"message": "在吗"}).text)
+
+        assert [event["type"] for event in events] == ["error"]
+        message = events[0]["message"]
+        assert message, "必须有可读文案"
+        assert "RuntimeError" not in message, "内部异常类名不该泄露到界面"
+        assert "connection pool" not in message, "实现细节不该泄露到界面"
+
+
+class TestStreamFactoryFailureMatchesTurn:
+    """`/stream` 的工厂抛 `LLMError` 时给 **422**，与 `/turn` 同码（报告次要项）。
+
+    `/turn` 把 `LLMError` 映成 422、`ModelNotConfiguredError` 留给应用级处理器
+    （409）；`/stream` 原先裸调工厂 —— 同一个上游故障在两个端点给出不同的结果，
+    前端就得为同一件事写两套判断。
+    """
+
+    def test_factory_llm_error_becomes_422(self, db: Database) -> None:
+        def failing_factory() -> Any:
+            raise LLMError("upstream_failed", "工厂就炸了")
+
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                store=ConversationStore(db),
+                llm_factory=failing_factory,
+                tools=build_tools(jobs=db.jobs(), applications=db.applications()),
+            ),
+            prefix="/api",
+        )
+        with TestClient(app) as client:
+            response = client.post("/api/assistant/stream", json={"message": "你好"})
+
+        assert response.status_code == 422, f"实得 {response.status_code}：{response.text[:120]}"
+        assert "upstream_failed" in response.json()["detail"]
 
 
 class TestLlmClientIsReleased:

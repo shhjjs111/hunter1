@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 from hunter1.slices.scoring.models import CandidateProfile
@@ -21,10 +23,43 @@ from hunter1.slices.scoring.prompts import (
 PROFILE = CandidateProfile(keywords=["后端", "Python"], directions=["基础设施"], summary="三年经验")
 
 
+#: 提示词资产的指纹（`SYSTEM_PROMPT` + `SCORE_SCHEMA` + `build_user_prompt` 的渲染结果）。
+#:
+#: 改提示词**必须**同时升 `PROMPT_VERSION` 并更新这个值 —— 否则库里会出现「两版提示词
+#: 打出的分数共用一个版本号」，「这条分是哪版打的」这条回溯线索断掉。测试不锁「每个字」
+#: （改措辞是常态），但锁住「改动被察觉」：动了内容而没动指纹就是红灯。
+_PROMPT_FINGERPRINT = "231f147a96c8ee4a2cf51b15afde607d1f8c3579a6a27663bf4e405a9a97c712"
+
+
+def _prompt_fingerprint() -> str:
+    """提示词内容的 sha256 —— 覆盖系统提示、结构化 schema 与用户提示的渲染结果。"""
+    sample = build_user_prompt(
+        title="示例岗位",
+        company="示例公司",
+        jd_text="示例 JD",
+        profile=CandidateProfile(keywords=["k"], directions=["d"], summary="s"),
+    )
+    blob = "\n---\n".join(
+        [SYSTEM_PROMPT, json.dumps(SCORE_SCHEMA, sort_keys=True, ensure_ascii=False), sample]
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
 class TestPromptVersion:
     def test_version_is_present_and_versioned(self) -> None:
         """版本号必须存在且带形态（scoring-vN）—— 它是「这条分是哪版打的」的唯一线索。"""
         assert re.fullmatch(r"scoring-v\d+", PROMPT_VERSION)
+
+    def test_changing_prompt_requires_a_version_bump(self) -> None:
+        """改提示词必须升 `PROMPT_VERSION` —— 指纹是这条纪律的执行机构。
+
+        没有它时，「改提示词忘了升版本」不会被任何检查发现（`PROMPT_VERSION` 只写进
+        store，没有任何地方比对它），库里于是混着两版口径的分数、共用一个版本号。
+        """
+        assert _prompt_fingerprint() == _PROMPT_FINGERPRINT, (
+            "评分提示词的内容变了：请升 `PROMPT_VERSION` 并更新 `_PROMPT_FINGERPRINT`"
+            "（两条一起改才算完成一次「换代」）。"
+        )
 
     def test_system_prompt_defines_a_scale(self) -> None:
         """口径必须说清「多少分算什么」—— 否则模型各打各的分。"""

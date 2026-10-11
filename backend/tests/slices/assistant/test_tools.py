@@ -107,6 +107,20 @@ class TestToolRegistry:
         assert "缺少必填参数" in (result.error or "")
         assert "job_id" in (result.error or "")
 
+    def test_raw_arguments_report_invalid_json(self) -> None:
+        """工具参数 JSON 解析失败（`parse_tool_calls` 塞的 `__raw__`）要点明**JSON 不合法**。
+
+        否则它会被当成「多了一个不认识的参数 `__raw__`」报给模型 —— 模型据此无从修正
+        （它以为自己发的是合法 JSON），也让「模型输出退化/被截断」与「工具实现 bug」
+        混在一起（报告次要项）。
+        """
+        registry = ToolRegistry([tool(_detail)])
+        result = registry.invoke("_detail", {"__raw__": "{不是合法json"}, call_id="c1")
+        assert not result.ok
+        error = result.error or ""
+        assert "JSON" in error, f"要说明是 JSON 的问题，实际：{error}"
+        assert "__raw__" not in error, f"不该把内部哨兵键甩给模型，实际：{error}"
+
     def test_duplicate_registration_rejected(self) -> None:
         registry = ToolRegistry([tool(_search)])
         with pytest.raises(ValueError):

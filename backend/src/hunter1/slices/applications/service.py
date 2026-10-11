@@ -85,9 +85,7 @@ def change_stage(
     return Application.model_validate(payload)
 
 
-def apply_to_job(
-    *, store: ApplicationStore, job: Job, now: datetime, note: str | None = None
-) -> ApplyOutcome:
+def apply_to_job(*, store: ApplicationStore, job: Job, now: datetime) -> ApplyOutcome:
     """记录一条投递（公司名与标题快照下来）。
 
     **幂等**：同一岗位已投递过则返回既有记录，不新建 —— 重复点击不该堆出多条
@@ -97,12 +95,16 @@ def apply_to_job(
     请求都读到空、各插一条）。所以写入走 `store.insert_for_job` —— 它由数据库的
     `UNIQUE(job_id)` 兜底，撞了就返回先落库的那条。这里保留先读只是快速路径
     （绝大多数请求是重复点击，一次查询就能返回）。
+
+    新建的投递**不带备注**：契约（`CreateApplicationRequest`）只暴露 `job_id`，
+    此前这里有个 `note` 形参却无任何调用方传值 —— 是条死路径，读代码的人会以为
+    「投递时可以带备注」。备注归 `change_stage`（`POST .../stage` 收 `note`）。
     """
     existing = store.by_job(job.id)
     if existing:
         return ApplyOutcome(application=existing[0], created=False)
 
-    candidate = new_application(job=job, now=now, note=note)
+    candidate = new_application(job=job, now=now)
     stored = store.insert_for_job(candidate)
     # 落库回来的若不是我们构造的那条，说明并发下别人先插了 —— 那次不算「新建」。
     return ApplyOutcome(application=stored, created=stored.id == candidate.id)

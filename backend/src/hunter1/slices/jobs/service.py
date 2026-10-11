@@ -18,6 +18,13 @@ from hunter1.slices.jobs.store import JobStore
 # 前面所有行才能定位）。真实使用没人会翻到第 10000 页，但「无限」由此变「有界」。
 MAX_PAGE = 10_000
 MAX_PAGE_SIZE = 100
+#: 搜索关键词的长度上限。
+#:
+#: 无上限时一个超长 `q` 会在 `LIKE` 上做全表扫描（关键词进的是 `LIKE %…%`），
+#: 而同一模块的 page / page_size 都有界 —— 只有最贵的那个参数敞开（报告次要项）。
+#: 200 足够容纳任何真实关键词；越界由 422 拒绝，**不静默截断**（悄悄改语义会让
+#: 调用方从响应里看不出入参被改过）。
+MAX_KEYWORD_CHARS = 200
 
 
 @dataclass
@@ -72,4 +79,4 @@ def find_job(store: JobStore, job_id: str, *, limit: int = 20) -> tuple[Job | No
     return None, 0
 
 
-__all__ = ["MAX_PAGE", "MAX_PAGE_SIZE", "JobPage", "find_job", "list_jobs"]
+__all__ = ["MAX_KEYWORD_CHARS", "MAX_PAGE", "MAX_PAGE_SIZE", "JobPage", "find_job", "list_jobs"]

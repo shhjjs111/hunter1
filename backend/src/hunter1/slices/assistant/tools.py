@@ -150,6 +150,15 @@ def _validate_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> st
     一次把「缺什么」和「多什么」都报出来 —— 让模型一轮就能改对，
     而不是修完一个再撞下一个。
     """
+    # 工具参数的 JSON 解析失败时，`parse_tool_calls`（domain.assistant）会把原文塞进
+    # `__raw__`。这里必须**先**认出来 —— 否则它会被当成「多了一个不认识的参数
+    # `__raw__`」报给模型，而模型据此无从修正（它以为自己发的是合法 JSON，看到的是
+    # 一句莫名其妙的「不认识的参数」）。点明「原文不是合法 JSON」，才能把「模型输出
+    # 被截断/退化」与「工具实现 bug」分开（报告次要项）。
+    if "__raw__" in arguments:
+        raw = str(arguments["__raw__"])
+        return f"工具参数不是合法 JSON（模型输出可能被截断或退化）：{raw[:200]}"
+
     properties = schema.get("properties", {})
     required = schema.get("required", [])
 

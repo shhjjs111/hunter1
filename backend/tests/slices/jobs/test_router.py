@@ -85,10 +85,15 @@ def _seed(db: Database) -> None:
 
 
 @pytest.fixture()
-def store(tmp_path: Path) -> JobStore:
-    db = Database(tmp_path / "jobs-api.db")
-    db.initialize()
-    _seed(db)
+def db(tmp_path: Path) -> Database:
+    database = Database(tmp_path / "jobs-api.db")
+    database.initialize()
+    _seed(database)
+    return database
+
+
+@pytest.fixture()
+def store(db: Database) -> JobStore:
     return JobStore(db)
 
 
@@ -129,6 +134,16 @@ class TestListEndpoint:
     def test_out_of_range_params_rejected(self, client: TestClient) -> None:
         assert client.get("/api/jobs", params={"page_size": 101}).status_code == 422
 
+    def test_overlong_keyword_is_rejected(self, client: TestClient) -> None:
+        """关键词也要有长度上限 —— 它进的是 `LIKE %…%`，超长会走全表扫描。
+
+        同端点的 `page` / `page_size` 早有界，只有**最贵**的那个参数（搜索词）敞开。
+        越界由 422 拒绝，**不静默截断**（悄悄改语义会让调用方看不出入参被改过）。
+        """
+        assert client.get("/api/jobs", params={"q": "x" * 201}).status_code == 422
+        # 边界值本身仍然可用
+        assert client.get("/api/jobs", params={"q": "x" * 200}).status_code == 200
+
     def test_page_upper_bound_is_rejected_not_silently_clamped(self, client: TestClient) -> None:
         """页码同样要有上界，且越界由 **422** 拒绝 —— 不静默改成第 10000 页。
 
@@ -163,3 +178,38 @@ class TestDetailEndpoint:
 
     def test_missing_is_404(self, client: TestClient) -> None:
         assert client.get("/api/jobs/zzzz").status_code == 404
+
+    def test_missing_jd_serializes_as_explicit_null(self, client: TestClient) -> None:
+        """没抓到 JD 的岗位要给 `jd_raw: null`，而不是**省略字段**（报告测试薄弱点）。
+
+        契约里它是 `string | null`；字段缺失与 `null` 在前端是两种形状
+        （`"jd_raw" in data` 为假 vs 为真）。省略与否取决于 pydantic 的序列化配置
+        （`exclude_none` 一旦被打开就静默变化），直接断言形状才能钉住。
+        """
+        payload = client.get(f"/api/jobs/{FULL_B}").json()
+        assert "jd_raw" in payload, "字段不该被省略"
+        assert payload["jd_raw"] is None
+
+    def test_ambiguity_beyond_the_probe_limit_is_still_reported(
+        self, client: TestClient, db: Database
+    ) -> None:
+        """匹配数超过前缀探测上限（20）时仍报 409（报告测试薄弱点）。
+
+        `find_job` 用 `get_by_prefix(limit=20)` —— 第 21 个匹配之后就不在返回里。
+        报错文案说的是「**至少** N 条」，所以截断不该改变结论；这条把边界钉住。
+        """
+        for index in range(21):
+            db.jobs().upsert(
+                Job(
+                    id=f"{'a' * 8}{index:024d}",
+                    company_id=f"c-{index}",
+                    title=f"岗位 {index}",
+                    detail_url="https://x/n",
+                    source="实习僧",
+                    last_seen_at=NOW,
+                )
+            )
+
+        response = client.get(f"/api/jobs/{'a' * 8}")
+        assert response.status_code == 409, f"实得 {response.status_code}"
+        assert "至少" in response.json()["detail"]
