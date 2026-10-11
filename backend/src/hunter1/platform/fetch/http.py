@@ -249,13 +249,14 @@ class HttpFetcher:
         return _decode_bytes(body, declared=declared)
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
-        request_headers = {
-            "User-Agent": self._user_agent_for(url),
+        overrides = dict(headers or {})
+        # 调用方显式给了 UA 就一律用它（不再轮换）；没给才由本类按**当前主机**选。
+        pinned_agent = overrides.get("User-Agent")
+        base_headers = {
             "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
-        if headers:
-            request_headers.update(headers)
+        base_headers.update(overrides)
 
         # **逐跳**跟随重定向：每一跳都重新过 robots 与限速（见 `__init__` 里
         # `follow_redirects=False` 的说明）。跨主机重定向时，目标主机因此**也会**
@@ -263,6 +264,12 @@ class HttpFetcher:
         # 也堵住「一个 3xx 就绕开全部治理」的缺口（报告 M1）。
         current = url
         for _hop in range(MAX_REDIRECTS + 1):
+            # UA 也按**当前这一跳的主机**取，而不是沿用起点的那个：否则跨主机
+            # 重定向会让目标主机拿到别的站点的 UA，而它自己下次被直接访问时又是
+            # 另一个 —— 「同主机固定 UA」就只在单跳场景成立（见 `_user_agent_for`）。
+            request_headers = dict(base_headers)
+            request_headers["User-Agent"] = pinned_agent or self._user_agent_for(current)
+
             if self._robots is not None and not self._robots.allows(
                 current, user_agent=request_headers["User-Agent"]
             ):

@@ -618,3 +618,37 @@ class TestUserAgentStability:
 
         assert len(set(seen)) == 1, f"同主机 UA 漂移了：{seen}"
         assert seen[0], "UA 不该为空"
+
+    def test_cross_host_redirect_uses_the_target_hosts_own_agent(
+        self, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """跨主机重定向时，目标主机拿到的 UA 必须是**它自己**那一个。
+
+        原先 UA 按**起点**主机选、逐跳复用：目标主机于是拿到别的站点的 UA，而它
+        下次被直接访问时又是另一个 —— 「同主机固定」只在单跳场景成立。用确定性的
+        `random.choice` 让两台主机必然分到不同的 UA，免得靠 1/3 的运气判绿。
+        """
+        import hunter1.platform.fetch.http as http_module
+
+        agents = iter(["UA-FIRST", "UA-SECOND", "UA-FIRST", "UA-SECOND"])
+        monkeypatch.setattr(http_module.random, "choice", lambda _seq: next(agents))
+
+        seen: list[tuple[str, str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.url.host or "", request.headers.get("user-agent", "")))
+            if request.url.host == "a.com":
+                return httpx.Response(302, headers={"Location": "https://b.com/x"})
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(clock, handler)
+        fetcher.get_text("https://a.com/start")
+        via_redirect = dict(seen)["b.com"]
+
+        seen.clear()
+        fetcher.get_text("https://b.com/direct")
+        direct = dict(seen)["b.com"]
+
+        assert via_redirect == direct, (
+            f"目标主机两次拿到的 UA 不同（重定向 {via_redirect!r} vs 直接 {direct!r}）"
+        )
