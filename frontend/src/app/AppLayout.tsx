@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation } from "react-router";
 
+import { useCrawlStatus } from "../features/crawl/api";
 import { ErrorBoundary } from "./ErrorBoundary";
 
 /**
@@ -21,6 +22,23 @@ const NAV = [
   { to: "/settings", label: "配置" },
 ];
 
+/**
+ * 常驻订阅抓取状态 —— 只订阅，不渲染。
+ *
+ * 抓取跑在**后端线程**里，用户完全可以离开抓取页。原先「一轮跑完 → 失效岗位库」
+ * 的判定只在 `CrawlPage` 取数时发生：那个页面一卸载就没人感知，用户随后打开岗位库
+ * 会在 staleTime（30s）内看到**本轮之前**的列表，看起来像「抓了但没进来」
+ * （报告次要项）。
+ *
+ * 单独拆成一个组件是为了把重渲染**隔离**在这里：`useQuery` 的状态变化只让这个
+ * 返回 null 的组件重渲染，而不是整棵 `AppLayout` 子树。空闲时它不轮询
+ * （见 `crawlPollInterval`），所以常驻的代价接近零。
+ */
+function CrawlStatusWatcher() {
+  useCrawlStatus();
+  return null;
+}
+
 export function AppLayout() {
   // ErrorBoundary 的 key 绑当前路径：路由一变就重建，重置 error 状态。
   // 否则任一页面抛错后 state.error 永久有效（AppLayout 不随子路由卸载），
@@ -28,6 +46,7 @@ export function AppLayout() {
   const location = useLocation();
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
+      <CrawlStatusWatcher />
       <aside className="shrink-0 border-b border-line bg-surface md:w-48 md:border-r md:border-b-0">
         <div className="px-4 pt-3 pb-1 md:py-5">
           {/* 品牌名用 `<div>` 而不是 `<h1>`：每个页面自己还有一个 `<h1>`（PageHeader），

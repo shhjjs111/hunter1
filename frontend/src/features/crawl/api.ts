@@ -92,6 +92,11 @@ export function useCrawlStatus() {
       // （用户离开抓取页去看别处）时本组件不在场，那次 true→false 就漏掉了。
       // 改判「缓存里的上一次状态 → 本次状态」，卸载/重挂之间也照样能判出来
       // ——只要这个查询被再取一次（重挂、聚焦、别处 invalidate 都会触发）。
+      //
+      // ⚠ 「只要被再取一次」这个前提原先**不成立**：用户离开抓取页后本组件卸载、
+      // 轮询停止，而抓取跑在后端线程里 —— 期间结束的那一轮没有任何人感知。现在由
+      // `AppLayout` 的 `CrawlStatusWatcher` 常驻订阅兜住（见那里的注释），这段判定
+      // 不会再因为「页面不在场」而漏掉。
       const previous = queryClient.getQueryData<CrawlStatus>(["crawl", "status"]);
       try {
         const snapshot = await fetchStatus();

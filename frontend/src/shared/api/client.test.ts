@@ -51,6 +51,18 @@ describe("api 客户端错误漏斗", () => {
     expect(apiErrorMessage(error, "加载配置失败", response)).toContain("非 JSON");
   });
 
+  it("fetch 抛**非 Error 值**（字符串/对象）也能变成可读错误", async () => {
+    // `error instanceof Error ? error.message : String(error)` 的**非 Error 分支**：
+    // 有些 polyfill、拦截层或自定义 fetch 会 reject 一个字符串/普通对象，那里没有
+    // `.message` —— 不兜住的话用户看到的是「无法连接后端：undefined」。
+    const notAnError = { toString: () => "网络被拦下了" };
+    stubFetch(() => {
+      throw notAnError;
+    });
+
+    await expect(api.GET("/api/settings")).rejects.toThrow(/无法连接后端：网络被拦下了/);
+  });
+
   it("正常 JSON 响应不受漏斗影响", async () => {
     stubFetch(
       () =>

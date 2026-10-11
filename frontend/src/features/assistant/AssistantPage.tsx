@@ -238,6 +238,10 @@ export function AssistantPage() {
     if (controller.signal.aborted && !finished) {
       if (sawAssistantText.current) {
         setNotice("已中止：这段回答没有保存，刷新或切换会话后不会保留。");
+      } else {
+        // 还没收到任何正文就中止：屏幕上什么都没变化，用户容易以为「点了没反应」。
+        // 明确告诉他这一轮没产生也没保存内容 —— 原文已还回输入框，可直接重发。
+        setNotice("已中止：本轮还没有产生回答，内容未保存。");
       }
     } else if (!finished && !failed) {
       // 流**安静地**结束了（既没 done 也没 error）：上游/代理把连接正常收尾。

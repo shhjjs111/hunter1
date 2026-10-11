@@ -384,3 +384,53 @@ describe("ApplicationsPage 备注 / 阶段的写入互不踩踏", () => {
     expect(posts[0]).toMatchObject({ note: "" });
   });
 });
+
+describe("ApplicationsPage 备注保存后不回弹（M2 回归）", () => {
+  // `useSaveNote` 原先只 invalidate、不收敛缓存：组件在 onSuccess 里立刻撤掉草稿，
+  // 那一刻输入框 value 回落到 `item.note`（查询缓存里的**旧**值 —— refetch 还没落地），
+  // 用户看到「保存成功后输入框弹回旧内容」。这正是 `useChangeStage` 注释里描述并修掉的
+  // 同类问题（阶段路径收敛了、备注路径漏了）。
+  it("保存成功后输入框不回弹旧值（refetch 落地前保持新备注）", async () => {
+    let listCalls = 0;
+    let releaseRefetch!: () => void;
+    const refetchGate = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (methodOf(input, init) === "POST") {
+          return jsonResponse({ application_id: "app1", stage: "applied" });
+        }
+        listCalls += 1;
+        if (listCalls >= 2) {
+          await refetchGate; // 挂住 invalidate 触发的 refetch
+        }
+        return jsonResponse(LIST); // 这份响应里 note 仍是 null（服务端尚未反映）
+      }),
+    );
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ApplicationsPage />
+      </QueryClientProvider>,
+    );
+    const input = (await screen.findByLabelText(/的备注/)) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "约了下周三面试" } });
+    fireEvent.blur(input);
+
+    // 等 refetch 真的发起（说明成功链已跑过），再冲干净撤草稿那一步
+    await waitFor(() => expect(listCalls).toBeGreaterThanOrEqual(2));
+    await act(async () => {});
+
+    // 修复前：缓存里 note 仍是 null，撤草稿后 input.value 回落到 ""（弹回旧值）
+    expect(input.value).toBe("约了下周三面试");
+    expect(client.getQueryData<ApplicationList>(["applications"])?.items[0].note).toBe(
+      "约了下周三面试",
+    );
+
+    releaseRefetch();
+    await act(async () => {});
+  });
+});

@@ -51,9 +51,14 @@ export function apiErrorMessage(
   const isServerError = status != null && status >= 500;
   // 例外：漏斗自造的 5xx —— 它的 detail 是我们写给用户的，不该被当成服务端内部消息。
   const clientAuthored = response?.headers?.get(CLIENT_AUTHORED_ERROR_HEADER) != null;
+  // 例外：**503**。后端的 503 都是**手工写的可行动原因**（「抓取线程启动失败：…」
+  // 「前端产物未构建」+ 修复提示），不是 FastAPI 的 `"Internal Server Error"`。
+  // 与 409/422 同等待遇 —— 否则用户只看到「启动抓取失败（HTTP 503）」，而后端
+  // 精心写的原因被顶掉（报告次要项：409 透出、503 不透出，是不对称的）。
+  const authoredStatus = status === 503;
   const detail = (error as { detail?: unknown } | null | undefined)?.detail;
 
-  if (!isServerError || clientAuthored) {
+  if (!isServerError || clientAuthored || authoredStatus) {
     const readable = detailText(detail);
     if (readable !== null) {
       return readable;

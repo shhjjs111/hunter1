@@ -123,7 +123,26 @@ export function useSaveNote() {
       }
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, input) => {
+      // 先把本轮提交的 note 收敛进查询缓存，再让组件撤掉草稿（与 useChangeStage 同款，
+      // 见那里的详细说明）。只 invalidate 不够：组件在 onSuccess 里立刻 `clearNoteDraft`，
+      // 那一刻输入框 value 回落到缓存里的**旧** note（invalidate 触发的 refetch 还是
+      // 异步的），表现为「保存成功后输入框弹回旧内容」—— 正是 useChangeStage 注释里
+      // 描述并修掉的同类问题，此前备注路径漏了对应收敛。
+      //
+      // `StageUpdateResponse` 只有 id + stage（后端不回 note），所以这是基于**提交值**
+      // 的乐观写入。它与后端语义一致：空白备注被 `service.change_stage` 规范化为 NULL，
+      // 因此空串在这里也写 null（否则「清空备注」会先把框显示成空、再被 refetch 拉回旧值）。
+      queryClient.setQueryData<ApplicationList>(["applications"], (prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((row) =>
+                row.id === input.applicationId ? { ...row, note: input.note || null } : row,
+              ),
+            }
+          : prev,
+      );
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
     },
   });

@@ -175,7 +175,9 @@ describe("JobsPage 读取失败", () => {
       vi.fn(async () => jsonResponse({ detail: "服务暂时不可用" }, 503)),
     );
     renderPage();
-    await screen.findByText(/加载岗位失败/);
+    // 503 现在透出后端写的 detail（与 409/422 同等待遇，见 shared/api/errors.ts）——
+    // 原先 5xx 一刀切走 fallback，这里会是「加载岗位失败（HTTP 503）」。
+    await screen.findByText(/服务暂时不可用|加载岗位失败/);
     expect(screen.queryByText("加载中…")).toBeNull();
   });
 });

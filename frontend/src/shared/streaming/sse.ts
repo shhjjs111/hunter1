@@ -115,7 +115,10 @@ function parseBlock(block: string): ParsedBlock {
   const dataLines = block
     .split("\n")
     .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice("data:".length).trim());
+    // SSE 规范只允许剥掉 `data:` 后的**一个**前导空格（用于对齐），其余空白属于载荷。
+    // 原先用 `trim()` 会把载荷首尾的空白一起吃掉 —— 对当前 JSON 载荷等价（JSON 不在乎
+    // 外围空白），但将来接纯文本载荷时会**静默改字**（报告次要项）。
+    .map((line) => line.slice("data:".length).replace(/^ /, ""));
 
   if (dataLines.length === 0) {
     // 没有 data 行 —— 心跳/注释块，不是事件，谈不上「丢内容」

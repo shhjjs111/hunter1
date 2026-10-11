@@ -40,6 +40,31 @@ describe("apiErrorMessage", () => {
     );
   });
 
+  it("503 时用后端 detail —— 后端手写的可行动原因不该被顶掉", () => {
+    // 后端的 503 都是**手写**的（「抓取线程启动失败：…」「前端产物未构建」+ 提示），
+    // 不是 FastAPI 的 "Internal Server Error"。原先 5xx 一刀切走 fallback —— 于是
+    // 「启动抓取失败（HTTP 503）」把后端写好的原因顶掉，且与 409/422 不对称（报告次要项）。
+    expect(
+      apiErrorMessage(
+        { detail: "抓取线程启动失败：can't start new thread" },
+        "启动抓取失败",
+        { status: 503 },
+      ),
+    ).toBe("抓取线程启动失败：can't start new thread");
+  });
+
+  it("503 的 detail 取不出可读内容时仍退回 fallback", () => {
+    expect(apiErrorMessage({ detail: "" }, "启动抓取失败", { status: 503 })).toBe(
+      "启动抓取失败（HTTP 503）",
+    );
+  });
+
+  it("其它 5xx 仍走 fallback（例外只开给 503）", () => {
+    expect(apiErrorMessage({ detail: "boom" }, "加载失败", { status: 502 })).toBe(
+      "加载失败（HTTP 502）",
+    );
+  });
+
   it("detail 为 FastAPI 校验错误数组时取出 msg（PUT /settings 的 422 就是这形状）", () => {
     // 后端手工抛 422 时按 FastAPI 同款构造：[{loc, msg, type}]。
     // 只认字符串 detail 的话，用户看到的是「保存失败（HTTP 422）」，字段信息全丢。

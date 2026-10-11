@@ -347,6 +347,47 @@ describe("AssistantPage", () => {
     expect(await screen.findByText(/没有保存/)).toBeDefined();
   });
 
+  it("首个正文分片到达前中止 → 也给出提示（不是毫无反应）", async () => {
+    // 挂起：既不吐正文、也不 done —— 用户在这个窗口点「中止」时屏幕上什么都没变。
+    // 原先只有「已收到过正文」才出 notice，于是这种情况点了像没反应（报告次要项）。
+    //
+    // 与上一条是**两个不同的分支**（sawAssistantText 的真/假）—— 只钉一边的话，
+    // 「永远提示同一句」的实现照样绿。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = reqInfo(input, init);
+        if (url.includes("/api/assistant/stream")) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                init?.signal?.addEventListener("abort", () =>
+                  controller.error(new DOMException("aborted", "AbortError")),
+                );
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        return jsonResponse({
+          items: [{ id: "c1", title: "旧会话" }],
+          total: 1,
+          page: 1,
+          page_size: 50,
+          has_next: false,
+        });
+      }),
+    );
+
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "在吗" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+
+    fireEvent.click(await screen.findByRole("button", { name: "中止" }));
+
+    expect(await screen.findByText(/还没有产生回答/)).toBeDefined();
+  });
+
   it("本轮失败时把原文还回输入框（后端不落库，否则得重打一遍）", async () => {
     // `send()` 第一件事就是 `setInput("")`。失败的轮次后端**不落库**（router 的
     // 「整轮跑完才落库」），所以不还回去的话，用户想问的那句话两头都没了。
@@ -969,7 +1010,10 @@ describe("AssistantPage 会话列表的加载/错误态", () => {
       }),
     );
     renderPage();
-    expect(await screen.findByText(/加载会话失败/)).toBeDefined();
+    // 503 现在透出后端写的 detail（与 409/422 同等待遇，见 shared/api/errors.ts）——
+    // 原先 5xx 一刀切走 fallback，这里会显示「加载会话失败（HTTP 503）」，把后端
+    // 写好的原因顶掉。
+    expect(await screen.findByText(/会话列表炸了/)).toBeDefined();
   });
 });
 

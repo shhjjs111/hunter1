@@ -35,6 +35,27 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("探测的**请求层**失败（fetch reject）也给出可读原因", async () => {
+    // 报告指出的缺口：探测失败原先只有「后端答了错误」的用例，没有「请求根本发不出去」
+    // 的用例。这条路径不经过 `if (error || !data)`（`api.POST` 直接抛），是
+    // `shared/api/client.ts` 的错误漏斗把它转成中文的 —— 没有用例时漏斗一旦失效，
+    // 用户看到的会是英文的 "Failed to fetch"。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if ((input as Request).method === "POST") {
+          throw new TypeError("Failed to fetch");
+        }
+        return jsonResponse(SETTINGS);
+      }),
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+
+    expect(await screen.findByText(/无法连接后端/)).toBeDefined();
+  });
+
   it("加载期间用户先敲进去的内容不会被回填覆盖", async () => {
     // 慢网络下「页面一打开就开始输入」是常态。回填时若无视用户已经动过的字段，
     // 刚敲的地址会在响应到达那一刻被服务端旧值吃掉。

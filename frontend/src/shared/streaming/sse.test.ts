@@ -161,6 +161,25 @@ describe("streamSse", () => {
     expect(dropped).toEqual([]);
   });
 
+  it("data: 后只剥一个前导空格（规范要求，不吞载荷自身的空白）", async () => {
+    // SSE 规范：`data:` 后可选**一个**空格用于对齐，其余空白属于载荷。原实现整行
+    // `trim()`，会把载荷首尾空白一起吃掉 —— 当前 JSON 载荷看不出差别，但纯文本载荷
+    // 会静默改字（报告次要项）。
+    stubFetch(["data:  两个空格开头\n\n", 'data: {"type":"done"}\n\n']);
+    const events: Record<string, unknown>[] = [];
+    const dropped: string[] = [];
+    await streamSse(
+      "/x",
+      {},
+      (event) => events.push(event),
+      undefined,
+      (raw) => dropped.push(raw),
+    );
+    expect(events).toEqual([{ type: "done" }]);
+    // 只剥一个空格 → 剩「 两个空格开头」；整行 trim 会得到「两个空格开头」
+    expect(dropped).toEqual([" 两个空格开头"]);
+  });
+
   it("末尾无空行的事件也能收到", async () => {
     stubFetch(['data: {"type":"done"}']);
     const events: Record<string, unknown>[] = [];
