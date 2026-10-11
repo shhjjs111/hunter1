@@ -28,6 +28,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.convertors import Convertor, register_url_convertor
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
 from hunter1.domain.settings import LLMSettings
@@ -66,6 +67,20 @@ def _default_llm_factory(settings: LLMSettings) -> LLMProvider:
         model=settings.model,
         timeout=60.0,
     )
+
+
+def _current_api_key(context: AppContext) -> str:
+    """当前配置里的 API Key（读不到就给空串）。
+
+    只给**错误文案脱敏**用（见 `slices.scoring.router` 的 `_redact`）—— 不参与认证
+    或请求构造，所以「读不到」时返回空串（`redact_secret` 对空串原样返回）比抛异常
+    安全：脱敏失败不该把原始错误顶掉。
+    """
+    try:
+        settings = context.db.settings().get_llm()
+    except ValueError:
+        return ""
+    return settings.api_key if settings is not None else ""
 
 
 def _usable_dist(candidate: Path) -> Path | None:
@@ -114,6 +129,10 @@ class AppContext:
     clock: Callable[[], datetime] = _now
     site_keys: list[str] | None = None
     assistant_history_limit: int = 20
+    #: 允许的 Host 头（DNS rebinding 防线，理由见 `create_app` 里的说明）。
+    #: 默认含 Starlette `TestClient` 的 `testserver` —— 它是不可公网解析的单标签名，
+    #: 保留它让测试装配无需逐个改 `base_url`，且攻击者无法据此绕过（同样见 create_app）。
+    trusted_hosts: tuple[str, ...] = ("127.0.0.1", "localhost", "testserver")
 
     def crawler_factory(self) -> list[Crawler]:
         """构造本轮要跑的抓取器（默认全部注册站点）。"""
@@ -160,6 +179,23 @@ def create_app(context: AppContext) -> FastAPI:
         openapi_url=f"{API_PREFIX}/openapi.json",
         redoc_url=None,
     )
+
+    # ---- Host 头校验（DNS rebinding 防线）----
+    #
+    # 服务只绑 127.0.0.1，但**「只绑本地」挡不住 DNS rebinding**：攻击者把自己控制
+    # 的域名先解析到自己的服务器（返回恶意页），再让 DNS 重新解析到 127.0.0.1 ——
+    # 浏览器按**页面 origin** 判断同源，于是恶意页与本地服务「同源」，页面里的 fetch
+    # 能直接打到本机 API。此时 `POST /api/settings/test` 的「空 key = 用已保存的 key」
+    # 约定会把用户真实的 API Key 填进探测请求，发往攻击者控制的 base_url（密钥外送）。
+    #
+    # 校验 Host 头即可断在这条路上：页面的请求 Host 必然是**攻击者自己的域名**，
+    # 不在白名单内。修复成本极低，故直接做（报告 M4）。
+    #
+    # 白名单含 `testserver`：它是 Starlette `TestClient` 的默认 Host 头，保留它使测试
+    # 装配无需逐处改 `base_url`。**它不削弱防护** —— `testserver` 是不可公网解析的
+    # 单标签名（浏览器对它的请求根本发不出去），DNS rebinding 的攻击者既不能注册它、
+    # 也不能让浏览器把请求的 Host 写成它；而真实攻击的 Host 永远是攻击者域名。
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(context.trusted_hosts))
 
     def _runtime_llm() -> LLMProvider:
         """取当前模型配置构造客户端。
@@ -241,6 +277,8 @@ def create_app(context: AppContext) -> FastAPI:
             llm_factory=_runtime_llm,
             profile_provider=scoring_store.load_profile,
             clock=context.clock,
+            # 评分失败文案的脱敏兜底（报告次要项）—— 与 settings 切片同款。
+            api_key_provider=lambda: _current_api_key(context),
         )
     )
 

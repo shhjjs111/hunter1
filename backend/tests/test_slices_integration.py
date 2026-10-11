@@ -362,7 +362,9 @@ class TestFrontendServing:
         assert not (package_dir / "web").exists()
 
 
-def _raw_asgi_get(app: Any, raw_path: str) -> tuple[int | None, bytes]:
+def _raw_asgi_get(
+    app: Any, raw_path: str, host: str = "127.0.0.1:8000"
+) -> tuple[int | None, bytes]:
     """以**原始 ASGI scope** 直接调用应用，绕开 TestClient/httpx 的 URL 规范化。
 
     攻击者（原始 socket、`curl --path-as-is`、浏览器发百分号编码 `%2e%2e%2f`）
@@ -379,7 +381,7 @@ def _raw_asgi_get(app: Any, raw_path: str) -> tuple[int | None, bytes]:
         "raw_path": raw_path.encode("ascii"),
         "query_string": b"",
         "root_path": "",
-        "headers": [(b"host", b"127.0.0.1:8000")],
+        "headers": [(b"host", host.encode("ascii"))],
         "server": ("127.0.0.1", 8000),
         "client": ("127.0.0.1", 12345),
     }
@@ -442,6 +444,37 @@ class TestSpaFallbackSecurity:
         assert status == 200, f"含 NUL 的路径不该 5xx（实际 {status}）"
         assert b"SPA-ROOT" in body
         db.dispose()
+
+
+class TestHostHeaderGuard:
+    """DNS rebinding 防线：非白名单 Host 一律拒绝（报告 M4）。
+
+    服务只绑 127.0.0.1，但**浏览器按页面 origin 决定 Host** —— 攻击者把自己的域名
+    解析到 127.0.0.1 后，恶意页与本地服务「同源」，fetch 能打到本机 API。此时
+    `POST /api/settings/test` 的「空 key = 用已保存的 key」会把真实 API Key 外送。
+    拒绝非白名单 Host 即断在这条路上。
+
+    用**原始 ASGI scope** 走（同 `_raw_asgi_get`）：httpx/TestClient 会按 URL 生成
+    Host 头，只有直接构造 scope 才能伪造出攻击者形态的 Host。
+    """
+
+    def test_foreign_host_is_rejected(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        status, body = _raw_asgi_get(test_client.app, "/api/settings", host="evil.example.com")
+        assert status == 400, f"伪造 Host 未被拒（{status}）：{body[:120]!r}"
+
+    def test_loopback_host_is_accepted(self, client) -> None:  # type: ignore[no-untyped-def]
+        """本地合法 Host 照常放行 —— 防护不能把正常服务一起关掉。"""
+        test_client, _db = client
+        status, _body = _raw_asgi_get(test_client.app, "/api/settings", host="127.0.0.1:8000")
+        assert status == 200
+
+    def test_testserver_host_is_accepted(self, client) -> None:  # type: ignore[no-untyped-def]
+        """`testserver`（TestClient 默认 Host）在白名单内 —— 这是整套测试得以直用
+        `TestClient(app)` 的前提（见 `AppContext.trusted_hosts` 的说明）。"""
+        test_client, _db = client
+        status, _body = _raw_asgi_get(test_client.app, "/api/settings", host="testserver")
+        assert status == 200
 
 
 def _production_context(tmp_path: Path, name: str) -> Any:
