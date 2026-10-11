@@ -135,6 +135,24 @@ class TestApplyToJob:
         assert second.created is False
         assert len(store.by_job("j1")) == 1
 
+    def test_delete_then_reapply_is_not_a_conflict(self, store: ApplicationStore) -> None:
+        """删除投递后重新投递同一岗位：正常新建，不撞唯一约束、不报 409。
+
+        外部报告曾担心「删后重建」会误报冲突 —— 不可达：新建走 `uuid4` 主键，
+        删除又释放了 `UNIQUE(job_id)`，两条约束都不撞。此用例锁住「删后重建可达，
+        且 `created=True`、拿到的是新 id」。
+        """
+        first = apply_to_job(store=store, job=_job(), now=NOW)
+        assert first.created is True
+
+        store.delete(first.application.id)
+        assert store.by_job("j1") == []
+
+        second = apply_to_job(store=store, job=_job(), now=NOW)
+        assert second.created is True
+        assert second.application.id != first.application.id
+        assert len(store.by_job("j1")) == 1
+
     def test_concurrent_apply_keeps_a_single_record(self, store: ApplicationStore) -> None:
         """并发投递同一岗位仍只留一条 —— 唯一约束是最后一道闸。
 

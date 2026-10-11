@@ -117,6 +117,20 @@ class TestListJobs:
         assert page.page == MAX_PAGE
         assert page.items == []
 
+    def test_total_stays_correct_past_the_last_page(self, store: JobStore) -> None:
+        """越界页（OFFSET 越过末页）返回空 items，但 **total 仍是真实总数**。
+
+        total 由独立的 count 查询给出，不受 OFFSET 影响 —— 这正是「page + count
+        两次查询」相对 `COUNT(*) OVER ()` 单查询的价值：window function 的 total
+        挂在返回行上，OFFSET 越过末页时查询返回 0 行，total 随之丢失（实测
+        `rows=0 → total` 无从得知），分页器会谎报「共 0 条」。此用例锁住该不变量，
+        防止将来把这两次查询「优化」成一次 `COUNT(*) OVER ()`。
+        """
+        page = list_jobs(store, page=999_999)
+        assert page.items == []
+        assert page.total == 3
+        assert page.has_next is False
+
     def test_page_size_is_capped(self, store: JobStore) -> None:
         page = list_jobs(store, page_size=9999)
         assert page.page_size == 100
