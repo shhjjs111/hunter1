@@ -30,6 +30,7 @@ class LLMError(RuntimeError):
 _LLM_ERROR_HINTS: tuple[tuple[str, str], ...] = (
     ("transport_failed", "连不上模型端点：检查 Base URL、网络与代理是否可达"),
     ("invalid_url", "端点地址不合法：检查协议、主机名与端口"),
+    ("http_400", "端点拒绝了请求（400）：多半是上下文过长或参数不合法，可缩短对话/画像后重试"),
     ("http_401", "端点拒绝了这把 API Key（401）：检查 Key 是否正确、是否过期"),
     ("http_403", "端点拒绝访问（403）：检查该 Key 的权限"),
     ("http_404", "端点路径不存在（404）：base_url 多半少了一段（如 /v1）"),

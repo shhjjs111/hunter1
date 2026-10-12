@@ -18,6 +18,7 @@ class TestDescribeLlmError:
         [
             ("transport_failed", "连不上模型端点"),
             ("invalid_url", "端点地址不合法"),
+            ("http_400", "上下文过长"),
             ("http_401", "API Key"),
             ("http_404", "/v1"),
             ("http_429", "限流"),
