@@ -38,6 +38,10 @@ _DONE_MARKER = "[DONE]"
 #: 一切正常（这也不是假想：见 `_event_payloads` 记录的不合规实现）。
 #: 1 MiB 远高于任何正常事件（最大的也就是工具参数的 JSON），超过它就不是「事件大」，
 #: 而是「根本没有事件边界」—— 那时继续攒下去只会撑爆内存。
+#:
+#: 累计的是**编码后字节**（`len(piece.encode("utf-8"))`）而不是 `len(piece)`：后者是
+#: Unicode 码点数，对 CJK 文本会放行约 3 倍的字节，护栏恰好在最需要它的多字节场景
+#: 最弱（且与本常量名与错误文案里的「字节」不符）。
 MAX_EVENT_BYTES = 1024 * 1024
 
 
@@ -151,7 +155,7 @@ def parse_sse_lines(
                 buffered_bytes = 0
             break
         buffer.append(piece)
-        buffered_bytes += len(piece)
+        buffered_bytes += len(piece.encode("utf-8"))
         if buffered_bytes > MAX_EVENT_BYTES:
             raise LLMError(
                 "stream_event_too_large",

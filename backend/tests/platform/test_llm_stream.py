@@ -923,3 +923,33 @@ def test_unterminated_event_hits_the_buffer_ceiling() -> None:
     with pytest.raises(LLMError) as excinfo:
         list(parse_sse_lines(lines))
     assert excinfo.value.code == "stream_event_too_large"
+
+
+def test_event_ceiling_counts_utf8_bytes_not_codepoints() -> None:
+    """上限按**字节**计，不是码点 —— 否则 CJK 文本的护栏弱到约 3 倍。
+
+    `MAX_EVENT_BYTES` 名义是字节，且错误文案说的是「字节」。若累加 `len(piece)`
+    （码点数），一篇中文 `data:` 要攒到约 3 MiB **字节**才触发 1 MiB 的「字节」上限 ——
+    多字节场景恰是最需要护栏的场景，护栏却在那里最弱。
+    """
+    from hunter1.platform.llm.streaming import MAX_EVENT_BYTES
+
+    # 一个汉字约 3 个 UTF-8 字节：这条行的**码点数**远低于上限，字节数却已超过。
+    piece = "字" * (MAX_EVENT_BYTES // 3 + 1024)
+    assert len(piece) < MAX_EVENT_BYTES  # 按码点数它「没超」——正是修复前的漏判
+    assert len(piece.encode("utf-8")) > MAX_EVENT_BYTES
+
+    with pytest.raises(LLMError) as excinfo:
+        list(parse_sse_lines([f"data: {piece}"]))
+    assert excinfo.value.code == "stream_event_too_large"
+
+
+def test_event_ceiling_does_not_false_trip_on_ascii() -> None:
+    """改成按字节计后，ASCII 的判定不变（1 字节/字符），正常事件不受影响。"""
+    from hunter1.platform.llm.streaming import MAX_EVENT_BYTES
+
+    payload = json.dumps({"choices": [{"delta": {"content": "x" * (MAX_EVENT_BYTES // 2)}}]})
+    events = list(parse_sse_lines([f"data: {payload}", ""]))
+    complete = events[-1]
+    assert isinstance(complete, StreamComplete)
+    assert complete.content == "x" * (MAX_EVENT_BYTES // 2)
