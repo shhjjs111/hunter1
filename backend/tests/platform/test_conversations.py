@@ -461,3 +461,65 @@ class TestToolCallHydration:
         )
         message = _to_message(row)  # type: ignore[arg-type]
         assert [call.arguments for call in message.tool_calls] == [{}, {"keyword": "产品"}]
+
+
+class TestMessageInvariantTolerance:
+    """`Message.__post_init__` 的两条不变量同样不能因一行坏数据把整段历史读挂。
+
+    与 `TestToolCallHydration`、以及 `restore_enum` 是同族：库里的行是**历史**，
+    读它不该要求它当初写入时合规（坏值只可能来自手工改库 / 旧版本遗留）。
+    容忍 + stderr 留痕，与 `Database.initialize` 的重复序号修复同一约定。
+    """
+
+    def _raw_row(self, **overrides: object):
+        from types import SimpleNamespace
+
+        base: dict[str, object] = {
+            "role": "assistant",
+            "content": "正常内容",
+            "tool_calls": [],
+            "tool_call_id": None,
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def test_blank_assistant_without_tool_calls_does_not_break_read(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """assistant + 空白内容 + 无 tool_calls 会让 `Message` 构造抛错。
+
+        此前这条路径没有容错：一条这样的坏行让整段对话 `messages()` 直接抛。
+        """
+        from hunter1.platform.db.conversations import _to_message
+
+        message = _to_message(
+            self._raw_row(role="assistant", content="   ", tool_calls=[])  # type: ignore[arg-type]
+        )
+        assert message.content  # 补了占位符，不再是空白
+        assert "空消息" in capsys.readouterr().err
+
+    def test_tool_message_without_call_id_does_not_break_read(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """tool 消息缺 tool_call_id 同样会抛（`Message.__post_init__` 要求它）。"""
+        from hunter1.platform.db.conversations import _to_message
+
+        message = _to_message(
+            self._raw_row(role="tool", content="结果", tool_call_id=None)  # type: ignore[arg-type]
+        )
+        assert message.tool_call_id  # 补了合成 id
+        assert "tool_call_id" in capsys.readouterr().err
+
+    def test_assistant_with_tool_calls_and_blank_content_is_valid(self) -> None:
+        """「只带工具调用、无文本」的 assistant 消息是**合法**的 —— 不该被误判成坏行。"""
+        from hunter1.platform.db.conversations import _to_message
+
+        message = _to_message(
+            self._raw_row(  # type: ignore[arg-type]
+                role="assistant",
+                content="",
+                tool_calls=[{"id": "c1", "name": "search_jobs", "arguments": {}}],
+            )
+        )
+        assert message.tool_calls
+        assert message.content == ""  # 保持原样，没被替换成占位符

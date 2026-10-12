@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import sys
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from hunter1.domain.assistant import Message, Role, ToolCall
+from hunter1.domain.assistant import Message, Role, ToolCall, synthetic_call_id
 from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.pagination import check_page
 from hunter1.platform.db.schema import ConversationMessageRow, ConversationRow
@@ -296,11 +297,36 @@ def _to_message(row: ConversationMessageRow) -> Message:
                 arguments=arguments,
             )
         )
+    role = restore_enum(Role, row.role, default=Role.USER, where="会话消息角色")
+    content = row.content
+    tool_call_id = row.tool_call_id
+    # `Message.__post_init__` 的两条不变量同样不能因为一行坏数据就把整段历史读挂
+    # （与上面 tool_calls、以及 `restore_enum` 同族）：库里的行是**历史**，读它不该
+    # 要求它当初写入时合规。容忍 + stderr 留痕，与 `initialize` 的重复序号修复同一约定。
+    if role is Role.TOOL and not tool_call_id:
+        # tool 消息必须带 tool_call_id。给一个合成 id：这条消息在后续序列化时能通过，
+        # 又不会与真实 id 撞号（`synthetic_call_id` 是随机串）。
+        tool_call_id = synthetic_call_id()
+        print(
+            "警告：会话里一条 tool 消息缺 tool_call_id，已补合成 id。"
+            "（来自手工改库或更早的版本；正常流程不会产生这种值）",
+            file=sys.stderr,
+        )
+    if not (content or "").strip() and not (role is Role.ASSISTANT and tool_calls):
+        # 空白内容且不是「只带工具调用的 assistant」—— 会触发「必须非空」不变量。
+        # 换成中性占位符（不是复用 router 的 FALLBACK_REPLY：那是**对外**的文案，
+        # 这里只是让一条坏历史可读）。
+        content = "(空消息)"
+        print(
+            f"警告：会话里一条 {role} 消息内容为空，已按「(空消息)」处理。"
+            "（来自手工改库或更早的版本；正常流程不会产生这种值）",
+            file=sys.stderr,
+        )
     return Message(
-        role=restore_enum(Role, row.role, default=Role.USER, where="会话消息角色"),
-        content=row.content,
+        role=role,
+        content=content,
         tool_calls=tool_calls,
-        tool_call_id=row.tool_call_id,
+        tool_call_id=tool_call_id,
     )
 
 
