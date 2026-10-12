@@ -757,8 +757,9 @@ def check_reupload_is_same_artifact(
     检查**。所以这里 fail-closed：拿不到线上清单、或清单里没有对应平台，都算不通过。
 
     `platform` 只在测试里显式传（默认取本机 `platform_key()`）：比对的是「**本机
-    这份产物**是不是线上那一份」，所以查的必须是本机平台的那个附件 —— 写死成
-    win32 的用例在 CI（ubuntu）上会查 `linux` 而查不到，于是**用例本机绿、CI 红**。
+    这份产物**是不是线上那一份」，所以查的必须是本机平台的那个附件 —— 用例把平台
+    固定成常量（而不是跟随 `sys.platform`）是为了不依赖跑测试的机器：跟着平台走的话，
+    用例在本机（win32）绿、换个平台的 CI 就可能去查另一个附件而查不到。
     """
     target = platform or platform_key()
     published = fetch_published_manifest(owner, repo, tag)

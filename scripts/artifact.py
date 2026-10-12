@@ -5,8 +5,11 @@
 `gh_publish.py` 三处消费，而它们此前各自写死 `hunter1-win32.zip` / `hunter1.exe`。
 可这套命名**本就随平台变**（`build.py` 按 `sys.platform` 打包，见下方 `platform_key`）。
 后果是整条发布链在非 Windows 上 100% 失败：`release.sh` 找不到产物、`gh_publish.py`
-报「缺少产物」。而 CI 跑在 ubuntu-latest —— 这个缺口永远不会被本机门禁发现，
-同时 `pyproject.toml` 又自称跨平台。
+报「缺少产物」。集中到一处后，命名与平台词汇只有一个来源。
+
+（历史注：此缺口曾经永远不被 CI 发现，因为 CI 跑在 ubuntu-latest 而开发机是 win32 ——
+两者平台词汇不同，本机永远走 `win32` 分支。CI 现已改跑 windows-latest，与交付目标
+和开发机同平台，这个缺口不再有藏身处。）
 
 刻意只用标准库：`gh_publish.py` 是双击发布入口，不该为了取一个文件名就被拉进
 `httpx` 这类重依赖（那份依赖只有构建机才需要）。

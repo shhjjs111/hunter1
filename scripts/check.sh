@@ -30,7 +30,7 @@
 #   首选只抬阈值（守卫仍开着，只放行这一处体积正常的清理）：
 #     CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=1000 bash scripts/check.sh
 #   注意：**前台**跑可能被自动提权到沙箱之外，此时守卫不生效、测出来一律通过（输出里
-#   会出现 bypassed 字样）—— 要复现或要证伪，都得后台跑。CI（ubuntu）没有守卫，不受影响。
+#   会出现 bypassed 字样）—— 要复现或要证伪，都得后台跑。CI（windows runner）没有这层守卫，不受影响。
 #
 # ⚠ scripts/ 的 ruff 检查必须显式传 `--config backend/pyproject.toml`。
 #   根目录没有 ruff 配置，不传就会用 ruff 的**默认规则集**（行长 88、规则集也不同），

@@ -1,13 +1,13 @@
 """`scripts/artifact.py` 的**跨平台命名**契约测试 —— 纯函数，无需打包。
 
-为什么要单独钉它：`artifact.py` 是产物命名的唯一来源，被 `build.py`、`release.sh`、
+为什么单独钉它：`artifact.py` 是产物命名的唯一来源，被 `build.py`、`release.sh`、
 `gh_publish.py` 三处消费，而命名**本就随平台变**（`exe_name` 只有 Windows 带 `.exe`）。
-CI 跑在 `ubuntu-latest`、且现在用 `check.sh --with-pack` **真打包** —— 于是这条
-命名链路第一次在 Linux 上被真实走通。若 Windows 以外会得出 `hunter1.exe`
-（或反之），CI 的打包会去 `dist/hunter1/hunter1.exe` 找可执行文件而扑空。
+本工具交付目标是 Windows（CI 也跑 windows-latest、用 `check.sh --with-pack` 真打包），
+所以这些平台词汇必须钉死：一旦 Windows 以外会得出 `hunter1.exe`（或反之），
+打包会去 `dist/hunter1/hunter1.exe` 找可执行文件而扑空。
 
 此前只测了「当前平台」的取值（`build._exe_name()`），**没有任何用例传显式
-platform** —— 而那正是发布链在非 Windows 上赖以工作的那半。这里补齐：
+platform** —— 而那正是命名链路赖以区分平台的那半。这里补齐：
 每种平台的命名都写死期望值，Windows 之外若混进 `.exe` 立刻红灯。
 """
 
@@ -32,7 +32,7 @@ class TestExeName:
 
     @pytest.mark.parametrize("platform", ["linux", "darwin"])
     def test_non_windows_has_no_suffix(self, platform: str) -> None:
-        """非 Windows 不该带 `.exe` —— 带上则 CI（ubuntu）的打包冒烟必然找不到产物。"""
+        """非 Windows 不该带 `.exe` —— 带上则跑在别的平台上的打包冒烟会找不到产物。"""
         assert artifact.exe_name(platform) == "hunter1"
 
 

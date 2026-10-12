@@ -7,8 +7,23 @@ on:
 
 jobs:
   quality:
-    name: 质量门禁（后端 + 前端 + 契约）
-    runs-on: ubuntu-latest
+    # 跑在 **windows-latest**，不是 ubuntu —— 本工具的用户只有 Windows
+    # （README 的「跨平台」是历史声明；实际交付目标是 Windows 便携包）。
+    #
+    # 为什么这不是「退让」而是**更强的**门禁：门禁跑在**用户所在的平台**才拦得住
+    # 用户会遇到的缺陷。本项目吃过两次「CI 绿、Windows 红」：GBK 子进程解码（P0）
+    # 与 node 包装器导致的打包失败 —— 两者在 ubuntu runner 上都不复现，于是
+    # 「本机红、CI 绿」长期并存。跑 Windows 后，这两类**只此一地**能暴露的缺陷
+    # 会被 CI 当场拦下。
+    #
+    # 顺带消掉一个我不再能回避的问题：CI 与开发机同平台 ⇒ CI 跑的就是开发机跑的
+    # 那条命令，本地可复现（此前 ubuntu 上的行为在本机根本跑不出来）。
+    runs-on: windows-latest
+    # Windows runner 的 `run:` 默认走 pwsh；本项目所有脚本是 bash。统一成 bash
+    # （Git Bash，runner 自带），与开发机的 Git Bash 同源 —— 路径/glob/引号行为一致。
+    defaults:
+      run:
+        shell: bash
     strategy:
       matrix:
         python-version: ["3.12"]
@@ -32,10 +47,10 @@ jobs:
         # 只装 .[dev] 的话，test_repository（sqlalchemy）、test_adapters（bs4）
         # 以及各切片的路由测试都会在收集阶段就 ImportError。
         #
-        # 额外装 `build`（PyInstaller）：CI 现在用 `check.sh --with-pack` **真打包**，
+        # 额外装 `build`（PyInstaller）：CI 用 `check.sh --with-pack` **真打包**，
         # 把「打包 + 冒烟」纳入必过门禁（此前只编译 spec、不真打，结果 build.py 的
-        # 前端烘焙一节在里面烂掉而无人知）。pyproject 里那句「CI 不构建产物」的
-        # 注释已随本改动更正。
+        # 前端烘焙一节在里面烂掉而无人知）。Windows runner 装的正是用户拿到的
+        # win32 产物，比在 ubuntu 上打一份 linux 包更贴目标。
         run: pip install -e ".[dev,web,db,crawler,build]"
         working-directory: backend
 
@@ -44,18 +59,18 @@ jobs:
         working-directory: frontend
 
       - name: 安装 shellcheck
-        # 用 pip 装**与开发机同版本**的 shellcheck（shellcheck-py 自带二进制，
-        # 且有 manylinux wheel）。不用 apt 的理由是**版本漂移**：apt 的版本随
-        # runner 镜像变，实测其 shellcheck 比 0.11.0 旧 —— 同一段 `A && B || C`
-        # 旧版报 SC2015、新版不报，于是「本机绿、CI 红」。钉住版本才能让两边
-        # 的判定一致。
+        # pip 装**与开发机同版本**的 shellcheck（shellcheck-py 自带二进制，有
+        # win_amd64 wheel）。不用别处来源的理由是**版本漂移**：同一段
+        # `A && B || C` 旧版报 SC2015、新版不报，版本不钉则「本机绿、CI 红」。
         #
         # 显式指定官方索引：本项目开发机默认 PIP_INDEX_URL 指向清华镜像，而清华
         # 未收录 shellcheck-py（见 docs/DEVELOPMENT.md）。CI 上无该变量，但写明更稳。
+        # 装在哪个解释器里无关紧要：check.sh 会按 venv 布局从解释器路径反推
+        # `<python>/Scripts/shellcheck.exe`（该目录不一定在 PATH 上）。
         run: python -m pip install --index-url https://pypi.org/simple shellcheck-py==0.11.0.1
 
       - name: 全量门禁（ruff / pyright / pytest / 示例 / shellcheck / 前端 check+build / 契约漂移 / 打包+冒烟）
-        # 直接调用本地同款脚本 —— CI 与开发机不可能再漂移。
+        # 直接调用本地同款脚本 —— CI 与开发机不可能再漂移（如今还同平台）。
         # 之前这里手写后端五步，漏了前端 `npm run check` 与 `contracts.sh --check`：
         # 「后端改了 API 模型忘了重跑 contracts.sh」能一路绿灯合入，契约静默断开。
         # check.sh 按目录存在性自动纳入各端检查，新增端时无需再改本文件。
