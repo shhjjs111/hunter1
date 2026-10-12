@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import os
 import sys
 import threading
@@ -27,6 +26,7 @@ from sqlalchemy.exc import DatabaseError
 from hunter1 import __version__
 from hunter1.main import AppContext
 from hunter1.paths import data_dir, default_db_path
+from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.db import DatabaseLocationError
 from hunter1.slices.crawl import available_sites
 
@@ -320,30 +320,18 @@ def _update(args: argparse.Namespace) -> int:
 
 
 def _enable_utf8_console(*streams: object) -> None:
-    """让 Windows 控制台也能正确显示中文。
+    """让 Windows 控制台也能正确显示中文（委托 `platform.console`，一处定义）。
 
-    控制台默认按本地代码页（简中 Windows 上是 CP936）编码；而 Git Bash、
-    Windows Terminal、VS Code 终端都按 UTF-8 解码 —— 结果是用户第一次运行
-    看到的提示就是一串乱码。这里把输出流固定到 UTF-8 并请控制台配合。
+    控制台默认按本地代码页编码（简中 CP936 能编码中文，但英文 Windows —— 含 GitHub
+    的 windows runner —— 是 **cp1252，编不了任何中文**）。本函数的实现现已抽到
+    `hunter1.platform.console.enable_utf8_console`，示例与 CLI 共用同一份 ——
+    此前每个入口各抄一份，`examples/` 里有三个就因此漏掉了防护、在 cp1252 的 CI
+    上一 print 中文就崩。
 
-    只在 Windows 上动控制台代码页；非 Windows 直接返回。任何一步失败都
-    静默跳过 —— 显示不好是小事，不能因此让程序起不来。
+    保留本名（而非直接改调用点为公开名）是为了不打断既有测试的导入
+    （`tests/test_cli.py` 直接 import `_enable_utf8_console`）。
     """
-    targets = streams or (sys.stdout, sys.stderr)
-
-    if os.name == "nt":
-        with contextlib.suppress(Exception):
-            # 拿不到控制台时会抛（比如输出被重定向到文件）
-            import ctypes
-
-            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
-
-    for stream in targets:
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is None:
-            continue
-        with contextlib.suppress(ValueError, OSError):
-            reconfigure(encoding="utf-8", errors="replace")
+    enable_utf8_console(*streams)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
