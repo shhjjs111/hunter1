@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
+from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.db import Database
 from hunter1.platform.fetch.http import FetchError, HttpFetcher
 from hunter1.slices.crawl import SITES, StaticHtmlCrawler, crawl_company
@@ -53,6 +54,7 @@ class _OfflineFetcher:
 
 
 def main(argv: list[str]) -> int:
+    enable_utf8_console()
     offline = "--offline" in argv
     db_path = Path(tempfile.mkdtemp(prefix="hunter1-demo-")) / "jobs.db"
     db = Database(db_path)

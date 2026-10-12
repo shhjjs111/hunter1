@@ -20,10 +20,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
 from hunter1.domain.models import CaptureStatus, Company, Job
+from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.db import Database
 
 
 def main() -> int:
+    enable_utf8_console()
     tmp = tempfile.mkdtemp(prefix="hunter1-demo-")
     db_path = Path(tmp) / "hunter1-demo.db"
     db = Database(db_path)

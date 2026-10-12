@@ -14,14 +14,13 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src"))
 
+from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.db import Database
 from hunter1.platform.fetch.http import HttpFetcher
 from hunter1.slices.crawl import SITES, available_sites, build_all, crawl_all
@@ -31,23 +30,14 @@ FIXTURES = ROOT / "backend" / "tests" / "slices" / "crawl" / "fixtures"
 
 
 def _enable_utf8_console() -> None:
-    """把输出流固定到 UTF-8 —— 与 `cli.py` 的同名处理一致。
+    """把输出流固定到 UTF-8 —— 实现已抽到 `platform.console`，一处定义。
 
-    本脚本打印**真实站点的岗位标题**，标题里可能出现 GBK 无法编码的字符
-    （实测踩到过：`UnicodeEncodeError: 'gbk' codec can't encode character`,
-    简中 Windows 控制台默认 CP936）。不修的话，演示会在自己国家的终端上崩掉。
-    任何一步失败都静默跳过 —— 显示不好是小事，不能因此让演示起不来。
+    本脚本打印**真实站点的岗位标题**，标题里可能出现当前控制台代码页编不了的字符
+    （曾经在简中 Windows（CP936）上崩过；英文 Windows（cp1252）连中文都编不了）。
+    防护逻辑现由 `enable_utf8_console` 统一提供 —— 保留下面的薄包装只为不动本文件
+    其余调用点。
     """
-    if os.name == "nt":
-        with contextlib.suppress(Exception):
-            import ctypes
-
-            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
-            with contextlib.suppress(ValueError, OSError):
-                reconfigure(encoding="utf-8", errors="replace")
+    enable_utf8_console()
 
 
 class _FixtureFetcher:

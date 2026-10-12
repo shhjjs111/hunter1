@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src
 from hunter1.domain.assistant import Message, Role, ToolCall
 from hunter1.domain.llm import LLMResponse, StreamComplete, TextDelta
 from hunter1.domain.models import CaptureStatus, Job
+from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.db import Database
 from hunter1.slices.assistant import build_tools, run_turn
 
@@ -115,6 +116,7 @@ def _seed(db: Database) -> None:
 
 
 def main(argv: list[str]) -> int:
+    enable_utf8_console()
     live = "--live" in argv
     db_path = Path(tempfile.mkdtemp(prefix="hunter1-asst-")) / "demo.db"
     db = Database(db_path)
