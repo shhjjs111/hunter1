@@ -27,6 +27,7 @@ import contextlib
 import importlib.util
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -116,6 +117,40 @@ def _exe_name() -> str:
     return exe_name()
 
 
+def _prefer_real_node_dir() -> None:
+    """把**真 node** 的目录提到 PATH 最前 —— 与 `scripts/check.sh` 同一道防线。
+
+    为什么需要：`npm.cmd` 在 Windows 上内部经 cmd.exe 调 `node`，而 cmd 按 PATH
+    解析 `node`。若 PATH 里存在别的「node 包装」（如天枢运行时的
+    `D:\\tianshu\\node-runtime\\win-x64\\node.cmd`），cmd 会命中它，而那个包装
+    只有一行 `"%~dp0tianshu-runtime.exe" %*` —— 经 PATH 调用时 `%~dp0` 展开为空、
+    退化成相对名，于是报 `'"<cwd>\\tianshu-runtime.exe"' 不是内部或外部命令`：
+        前端构建失败（exit 1）
+
+    实测（本机、本次）：`shutil.which("node")` → `...\\node.CMD`（PATHEXT 里 .CMD
+    先于 .EXE），真 node 在 `D:\\nodejs\\node.exe`；`build.py` 此前不前置真 node
+    目录，**打包必挂**。`check.sh` 早已前置（bash 的 `command -v node` 命中真
+    node，顺带把它的目录提到 PATH 最前，cmd 于是也能解析到同一份）——同一模式
+    在两处，此前只修了 check.sh 这一处。
+
+    「找真 node 的目录」用 `shutil.which("node.exe")`：显式带 `.exe` 跳过 PATHEXT
+    里的 .CMD，拿到的是**可执行**的那份（本机 `D:\\nodejs\\node.exe`），其目录
+    同时含 `npm.cmd`。找不到就原样返回（Linux/CI 上 PATH 本就正确，无副作用）。
+    """
+    node_exe = shutil.which("node.exe")
+    if not node_exe:
+        return
+    node_dir = os.path.dirname(node_exe)
+    if not node_dir:
+        return
+    # **无条件提到最前**，并去掉 PATH 里原有的同一项 —— 判据不能是「不在 PATH 里才加」：
+    # 本机 `D:\\nodejs` 本就在 PATH 中（只是排在包装器目录之后），那种写法会跳过前置，
+    # 包装器仍排在真 node 之前、问题原样复现（实测踩到）。
+    current = os.environ.get("PATH", "")
+    parts = [entry for entry in current.split(os.pathsep) if entry and entry != node_dir]
+    os.environ["PATH"] = os.pathsep.join([node_dir, *parts])
+
+
 def _ensure_frontend_built() -> None:
     """确保前端产物存在（构建前先 build 一次）。
 
@@ -126,6 +161,9 @@ def _ensure_frontend_built() -> None:
     frontend_dir = ROOT / "frontend"
     if not (frontend_dir / "package.json").is_file():
         raise SystemExit(f"缺少前端工程：{frontend_dir}")
+
+    # 先把真 node 目录前置，npm.cmd 内部的 `node` 才解析到真解释器（见上面函数）。
+    _prefer_real_node_dir()
 
     npm = "npm.cmd" if os.name == "nt" else "npm"
     print("== 构建前端 ==")

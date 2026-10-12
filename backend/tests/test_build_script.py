@@ -776,3 +776,47 @@ class TestProduceZipKeepsBadArchivesOut:
 
         assert archive is None
         assert not stale.exists(), "构建失败后旧包不该继续留在官方路径"
+
+
+class TestPreferRealNodeDir:
+    """打包脚本必须把**真 node** 目录提到 PATH 最前 —— 否则 npm.cmd 内部经 cmd
+    解析 `node` 时可能命中的是别的「node 包装」（如 `node.cmd` → 找不到
+    `tianshu-runtime.exe`），前端烘焙失败（实测 exit 1）。
+
+    这是 `scripts/check.sh` 早有的那道防线（bash 的 `command -v node` 命中真 node
+    并把其目录前置）；`build.py` 此前没做，同一模式漏了一处。
+    """
+
+    def test_prepends_real_node_dir_even_when_already_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """关键是**提到最前**，不是「不在 PATH 里才加」。
+
+        本机 `D:\nodejs` 本就在 PATH 中、只是排在包装器目录之后 —— 「不在才加」
+        的写法会跳过前置，包装器仍在前，问题原样复现。
+        """
+        real_dir = tmp_path / "real-node"
+        real_dir.mkdir()
+        node_exe = real_dir / ("node.exe" if os.name == "nt" else "node")
+        node_exe.write_text("", encoding="utf-8")
+
+        wrapper_dir = tmp_path / "wrapper"
+        wrapper_dir.mkdir()
+        # 真 node 目录已在 PATH 里，但排在包装器**之后**
+        monkeypatch.setenv("PATH", os.pathsep.join([str(wrapper_dir), str(real_dir)]))
+        monkeypatch.setattr(
+            "shutil.which", lambda name, *a, **k: str(node_exe) if name == "node.exe" else None
+        )
+
+        build._prefer_real_node_dir()
+
+        entries = os.environ["PATH"].split(os.pathsep)
+        assert entries[0] == str(real_dir), entries[:3]
+        assert entries.count(str(real_dir)) == 1, "前置后不该在原位留重复项"
+
+    def test_no_real_node_leaves_path_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """找不到真 node（Linux/CI 上 PATH 本就正确）时不动 PATH。"""
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        monkeypatch.setattr("shutil.which", lambda *a, **k: None)
+        build._prefer_real_node_dir()
+        assert os.environ["PATH"] == "/usr/bin:/bin"
