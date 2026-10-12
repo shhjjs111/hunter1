@@ -41,7 +41,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
 from hunter1 import __version__  # noqa: E402
+from hunter1.platform.console import enable_utf8_console  # noqa: E402
 from hunter1.platform.update import ReleaseManifest, file_sha256  # noqa: E402
+
+# 本脚本 print 中文进度 —— 非中文 locale 控制台（cp1252）下会抛 UnicodeEncodeError。
+enable_utf8_console()
 
 #: 与更新链的 `asset_for()` 输入对齐 —— 这份词汇表是 `sys.platform` 的值。
 PLATFORM_VOCAB = ("win32", "darwin", "linux")

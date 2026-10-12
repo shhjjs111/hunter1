@@ -27,8 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend" / "src
 
 from bs4 import BeautifulSoup
 
+from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.fetch.http import HttpFetcher
 from hunter1.slices.crawl import SITES, available_sites, ensure_not_blocked, parse_list_page
+
+# 本脚本 print 中文（抓取进度/状态）—— 非中文 locale 控制台（cp1252）下会抛
+# UnicodeEncodeError。共用同一份防护。
+enable_utf8_console()
 
 ROOT = Path(__file__).resolve().parent.parent
 KEEP = 3

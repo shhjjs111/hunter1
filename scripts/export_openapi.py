@@ -20,6 +20,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend" / "src"))
 
+from hunter1.platform.console import enable_utf8_console  # noqa: E402
+
+# 本脚本 print 中文（`已导出：…`）—— 非中文 locale 控制台（cp1252）下会抛
+# UnicodeEncodeError。CI（windows runner）实测踩到。共用同一份防护。
+enable_utf8_console()
+
 
 def build_spec() -> dict[str, object]:
     from hunter1.main import AppContext, create_app

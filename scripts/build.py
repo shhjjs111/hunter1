@@ -61,6 +61,12 @@ from artifact import (  # noqa: E402
 # 不依赖安装状态（与 make_manifest.py 同一手法）。
 sys.path.insert(0, str(BACKEND / "src"))
 from hunter1 import __version__ as source_version  # noqa: E402
+from hunter1.platform.console import enable_utf8_console  # noqa: E402
+
+# 本脚本打印大量中文进度（`== 构建前端 ==` 等）——在非中文 locale 的控制台上
+# （英文 Windows / GitHub 的 windows runner = cp1252）会直接抛 UnicodeEncodeError。
+# 与 cli / examples 共用同一份防护（见 hunter1.platform.console）。
+enable_utf8_console()
 
 #: 写进产物（并被压进 zip）的版本文件。发布链靠它核对「这份产物是不是这个源码版本
 #: 构建的」—— 没有它，用一份旧 `dist/` 配当前源码生成清单不会报任何错，而用户的
