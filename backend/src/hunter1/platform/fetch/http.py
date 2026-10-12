@@ -1,4 +1,4 @@
-"""HTTP 抓取器 —— httpx + 资源治理（限流/间隔/体积上限/robots）+ 重试 + UA 轮换。
+"""HTTP 抓取器 —— httpx + 资源治理（限流/间隔/体积上限/robots）+ 重试 + UA 按主机固定。
 
 错误一律以 `FetchError`（带机器可读 `code`）抛出，不静默返回 None ——
 静默失败是旧系统最难查的一类问题（调用方拿到 None 却不知为什么）。
@@ -305,7 +305,20 @@ class HttpFetcher:
                     self._client.stream("GET", url, headers=request_headers) as stream,
                 ):
                     status = stream.status_code
-                    body = _read_capped(stream, self.max_bytes, url)
+                    # 只有**确实会被跟随**的重定向才丢弃正文（判据与 `get` 的
+                    # 「`status in _REDIRECT_STATUS and location`」逐字一致）——
+                    # 3xx 但无 `Location` 时 `get` 会把它当最终响应交出去，那时正文
+                    # 仍要读。见下方说明。
+                    followed_redirect = status in _REDIRECT_STATUS and bool(
+                        stream.headers.get("location")
+                    )
+                    # 被跟随的重定向，其响应体是**一次性丢弃**的：`get` 只从它取
+                    # `Location` 头，正文从不被消费（客户端以 `follow_redirects=False`
+                    # 构造，httpx 自己也不会读）。若照常 `_read_capped`，一份体量超过
+                    # 上限的 3xx 会把一次**本可成功**的重定向报成 `too_large` —— 决定
+                    # 成败的成了那份被丢弃的体，而不是最终目标；即便在上限内，也是纯然
+                    # 的内存与配额开销。故这一支只保留响应头。
+                    body = b"" if followed_redirect else _read_capped(stream, self.max_bytes, url)
                     response = httpx.Response(
                         status,
                         headers=stream.headers,

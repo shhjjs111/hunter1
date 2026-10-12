@@ -652,3 +652,44 @@ class TestUserAgentStability:
         assert via_redirect == direct, (
             f"目标主机两次拿到的 UA 不同（重定向 {via_redirect!r} vs 直接 {direct!r}）"
         )
+
+
+class TestRedirectBodyIsNotRead:
+    """被丢弃的重定向响应体不该被读进内存，更不该让请求失败。
+
+    现象（修复前）：`_fetch_once` 对所有状态码都 `_read_capped`，而 `get` 收到 3xx
+    时只从响应取 `Location` 头、正文从不消费 —— 于是那份被丢弃的体成了唯一读者。
+    后果有二：正常重定向白白把整份体读进内存；体量超过 `max_bytes` 时直接把一次
+    **本可成功**的重定向报成 `too_large`（决定成败的是被丢弃的 3xx 体，而不是最终
+    目标页）。
+    """
+
+    def test_oversized_redirect_body_does_not_fail_the_fetch(self, clock: FakeClock) -> None:
+        """302 的体超过 max_bytes 时，跟随仍应成功（体不被读）。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/list":
+                return httpx.Response(
+                    302,
+                    headers={"Location": "/final"},
+                    content=b"x" * (128 * 1024),
+                )
+            return httpx.Response(200, text="<html>final</html>")
+
+        fetcher = _fetcher(clock, handler, retries=1, max_bytes=1024)
+        assert fetcher.get_text("https://a.com/list") == "<html>final</html>"
+
+    def test_redirect_without_location_still_returns_body(self, clock: FakeClock) -> None:
+        """3xx 但无 Location：`get` 会把它当最终响应，正文仍须读到。
+
+        判据必须与 `get` 的「`status in _REDIRECT_STATUS and location`」一致 ——
+        只按状态码分支会让这种少见的 3xx 返回空体。
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, content=b"<html>no location</html>")
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        response = fetcher.get("https://a.com/x")
+        assert response.status_code == 302
+        assert response.content == b"<html>no location</html>"
