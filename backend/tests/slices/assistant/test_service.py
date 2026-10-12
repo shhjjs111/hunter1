@@ -216,3 +216,30 @@ class TestDefaultSystemPrompt:
 
         assert "不可信" in DEFAULT_SYSTEM_PROMPT
         assert "不执行" in DEFAULT_SYSTEM_PROMPT
+
+
+class TestOutputBudget:
+    """助手必须显式给输出 token 上限 —— 否则是全仓唯一没有输出成本闸门的路径。
+
+    留空 = 完全交给上游网关默认值，而各网关默认从几百到上万不等；且
+    `finish_reason == "length"` 的截断提示依赖对端行为、本应用侧不可控。
+    """
+
+    def test_max_tokens_is_forwarded_on_non_stream_path(self) -> None:
+        llm = ScriptedLLM([_text("好的")])
+        run_turn(llm=llm, registry=REGISTRY, messages=[Message(Role.USER, "在吗")], max_tokens=777)
+        assert llm.calls[0]["max_tokens"] == 777
+
+    def test_default_max_tokens_is_sent(self) -> None:
+        """不显式传时也要带上切片默认值（不是 None = 不带）。"""
+        from hunter1.slices.assistant.service import DEFAULT_MAX_TOKENS
+
+        llm = ScriptedLLM([_text("好的")])
+        run_turn(llm=llm, registry=REGISTRY, messages=[Message(Role.USER, "在吗")])
+        assert llm.calls[0]["max_tokens"] == DEFAULT_MAX_TOKENS
+
+    def test_length_finish_reason_appends_notice(self) -> None:
+        """`finish_reason == "length"` 时回复尾部要带截断提示（可达，非死代码）。"""
+        llm = ScriptedLLM([LLMResponse(content="半截回答", model="fake", finish_reason="length")])
+        result = run_turn(llm=llm, registry=REGISTRY, messages=[Message(Role.USER, "长回答")])
+        assert "截断" in result.reply

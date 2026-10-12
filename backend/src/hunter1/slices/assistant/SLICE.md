@@ -30,7 +30,7 @@
 | `schemas.py` | API 模型（契约唯一事实来源；含分页的 `ConversationListResponse`） |
 | `service.py` | agent 循环（含刹车 `max_iterations`、工具失败不中断对话） |
 | `tools.py` | 工具注册表（类型注解 → JSON Schema，异常转 `ToolResult(error=...)`） |
-| `job_tools.py` | 助手可调用的只读工具（查岗位/投递） |
+| `job_tools.py` | 助手可调用的只读工具（查岗位/投递）。**回灌的外部文本**（JD 整段围栏、标题/城市/公司名剥围栏标记 + 尾部不可信声明） |
 | `store.py` | 会话持久化门面 |
 
 ## API 面
@@ -60,7 +60,9 @@
 **截断的两种来源**（都必须在界面上说出来，否则「半截回答」与「完整回答」无法区分）：
 
 - `finish_reason == "length"`：上游被 token 上限截断 → 回复尾部追加「回答因长度上限
-  被截断」的提示（见 `service.py` 的 `_LENGTH_TRUNCATED_NOTICE`）；
+  被截断」的提示（见 `service.py` 的 `_LENGTH_TRUNCATED_NOTICE`）。上限由本切片显式
+  给出（`DEFAULT_MAX_TOKENS`，随 `complete_with_tools` / `stream_with_tools` 透传）——
+  留空时截断与否完全取决于上游网关的默认值，提示也就成了不可控的死路径；
 - `truncated`：工具调用轮次达到 `max_iterations` 刹车 → `done.truncated` 为真。
 
 「流没收到 `[DONE]`」**不**当作失败：大量兼容网关就这么收尾，属既有容忍设计。

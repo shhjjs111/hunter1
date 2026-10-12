@@ -68,6 +68,22 @@ JD_FENCE_OPEN = "<<<JD"
 JD_FENCE_CLOSE = "JD>>>"
 
 
+def strip_fence_markers(text: str | None) -> str | None:
+    """剥掉文本里的 JD 围栏标记（防止内容闭合围栏、冒充「我们的说明」）。
+
+    给**内联**的不可信字段用（岗位标题 / 城市 / 公司名 —— 它们同样抓自外部站点，
+    但展示在列表里、不适合整段围栏）：只要保证它们不能伪造 `JD>>>` 提前闭合围栏
+    即可，与 `fence_untrusted_jd` 的防逃逸是同一件事。
+
+    `None` 原样返回（这些字段在领域模型里可空，调用方不必各自防御）。
+    """
+    if not text:
+        return text
+    for marker in (JD_FENCE_OPEN, JD_FENCE_CLOSE):
+        text = text.replace(marker, "")
+    return text
+
+
 def fence_untrusted_jd(text: str, *, limit: int) -> str:
     """把抓取来的 JD 变成「无法逃逸出围栏、且长度受控」的文本（不含围栏本身）。
 
@@ -96,4 +112,5 @@ __all__ = [
     "fence_untrusted_jd",
     "normalize_job_title",
     "redact_secret",
+    "strip_fence_markers",
 ]

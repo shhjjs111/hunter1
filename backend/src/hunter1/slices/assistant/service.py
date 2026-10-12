@@ -42,6 +42,16 @@ DEFAULT_SYSTEM_PROMPT = """你是 Hunter1 的求职助手，帮用户管理秋�
 
 DEFAULT_MAX_ITERATIONS = 6
 
+#: 单次模型调用的输出 token 上限。
+#:
+#: 为什么助手要显式给一个（scoring 给 1200、settings 探测给 16，只有助手此前留空）：
+#: 留空 = 完全交给上游网关的默认值 —— 而各网关默认从几百到上万不等，助手因此是
+#: 全仓唯一直通模型却**没有输出成本闸门**的路径，且 `finish_reason == "length"`
+#: 的截断提示依赖对端行为、本应用侧不可控（见 `_LENGTH_TRUNCATED_NOTICE` 的使用点）。
+#: 给一个足够宽松、又能挡住跑飞的上限：正常对话回复远用不到 2048 token，
+#: 真撞上时截断提示会把「半截回答」显式说出来。
+DEFAULT_MAX_TOKENS = 2048
+
 _TRUNCATED_REPLY = "（助手在多次工具调用后仍未给出结论，已停止。请把问题拆小一点再问。）"
 
 #: 流式回答被 token 上限截断时补的提示（`finish_reason == "length"`）。
@@ -107,6 +117,7 @@ def run_turn(
     messages: list[Message],
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
 ) -> AssistantResult:
     """跑一轮助手对话（可能包含多次模型调用与工具执行）。"""
     if not messages:
@@ -123,6 +134,7 @@ def run_turn(
         response = llm.complete_with_tools(
             messages=conversation,
             tools=tools,
+            max_tokens=max_tokens,
         )
         model = response.model
         input_tokens += response.input_tokens or 0
@@ -178,6 +190,7 @@ def run_turn_stream(
     messages: list[Message],
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
 ) -> Iterator[AssistantEvent]:
     """跑一轮助手对话，把过程**边发生边交出来**。
 
@@ -203,7 +216,9 @@ def run_turn_stream(
         spoken = ""
         completion: StreamComplete | None = None
 
-        for event in llm.stream_with_tools(messages=conversation, tools=tools):
+        for event in llm.stream_with_tools(
+            messages=conversation, tools=tools, max_tokens=max_tokens
+        ):
             if isinstance(event, TextDelta):
                 spoken += event.text
                 yield event
@@ -276,6 +291,7 @@ def run_turn_stream(
 
 __all__ = [
     "DEFAULT_MAX_ITERATIONS",
+    "DEFAULT_MAX_TOKENS",
     "DEFAULT_SYSTEM_PROMPT",
     "AssistantEvent",
     "AssistantResult",
