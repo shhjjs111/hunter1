@@ -429,3 +429,76 @@ def test_page_bounds_reject_beyond_int64(db: Database) -> None:
         db.jobs().list(limit=10, offset=2**63)
     with pytest.raises(ValueError):
         db.jobs().get_by_prefix("j", limit=2**63)
+
+
+class TestIllegalNumericAndTimeValuesInDatabase:
+    """越界的 `match_score` / 倒序的时间戳同样不能把整张列表拖成 500。
+
+    与 `TestIllegalEnumValuesInDatabase` 是同一条不变量：行映射直接构造领域对象，
+    非法值在读列表路径上抛 `ValidationError` → 500。枚举列当时修了，数值列
+    （`match_score` 的 ge=0/le=100）与时间不变量（`first_seen_at <= last_seen_at`）
+    没有跟上 —— 同族的缺口只修一半，另一半照样能把整表读挂（实测：
+    `UPDATE jobs SET match_score=150` 之后 `GET /api/jobs` 直接 500）。
+
+    约定一致：容忍坏行必须留痕（stderr 一行），不能静默。
+    """
+
+    def _corrupt(self, db: Database, *, column: str, value: object) -> None:
+        import sqlalchemy as sa
+
+        with db.engine.begin() as conn:
+            conn.execute(
+                sa.text(f"UPDATE jobs SET {column} = :v WHERE id = :i"),
+                {"v": value, "i": "j1"},
+            )
+
+    def test_out_of_range_match_score_falls_back_with_a_warning(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db.jobs().upsert(_job())  # 未评分（match_score=None）
+        self._corrupt(db, column="match_score", value=150)
+
+        jobs = db.jobs().list()  # 不应抛
+
+        assert len(jobs) == 1
+        assert jobs[0].match_score is None  # 退回「未评分」，不是 150、也不是 0
+        assert "150" in capsys.readouterr().err
+
+    def test_negative_match_score_falls_back(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db.jobs().upsert(_job())
+        self._corrupt(db, column="match_score", value=-5)
+
+        assert db.jobs().list()[0].match_score is None
+        capsys.readouterr()
+
+    def test_reversed_seen_times_do_not_break_reads(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`first_seen_at > last_seen_at` 会让 `Job` 构造抛错（模型不变量）。
+
+        读路径必须容忍它：库里一行倒序时间不该让整个岗位库 500。对齐到较晚的那个
+        时间（保留「最近被触碰」的证据，不伪造更早的下界）。
+        """
+        db.jobs().upsert(_job())
+        self._corrupt(db, column="first_seen_at", value="2024-01-02 00:00:00.000000")
+        self._corrupt(db, column="last_seen_at", value="2024-01-01 00:00:00.000000")
+
+        job = db.jobs().list()[0]  # 不应抛
+
+        assert job.first_seen_at is not None and job.last_seen_at is not None
+        assert job.first_seen_at <= job.last_seen_at
+        assert "倒序" in capsys.readouterr().err
+
+    def test_corrupt_numeric_row_does_not_hide_healthy_neighbours(
+        self, db: Database, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db.jobs().upsert(_job(id="j1", title="坏行"))
+        db.jobs().upsert(_job(id="j2", title="好行"))
+        self._corrupt(db, column="match_score", value=999)
+
+        titles = {job.title for job in db.jobs().list()}
+
+        assert titles == {"好行", "坏行"}
+        capsys.readouterr()

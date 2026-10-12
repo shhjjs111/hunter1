@@ -39,9 +39,17 @@ def _as_object(value: object, key: str) -> dict[str, Any]:
     直穿成 500，与「配置损坏必须可修复、不能自锁」的不变量冲突。
 
     这里显式把「不是对象」判成损坏，让异常类型与守卫的词汇一致。
+
+    `None` 也算损坏：行存在、值却是 JSON `null` —— 它**不是**「这个键没配过」
+    （那是 `get_raw` 在行不存在时返回的 `None`）。把两者混为一谈会让
+    `get_raw` 无法表达「值是 null」与「值是 `{}`」的区别，调用方（如
+    `ScoreStore.load_profile` 的 `if raw is None: return None`）会据此把
+    「存了个 null」误判成「已保存了一份（空的）配置」。
+
+    取键的合理形状是 `{}`（空对象，例如「配置过但没有可选项」）与带字段的对象；
+    裸 `null` 只能来自应用之外的写入或旧版本遗留，判为损坏给人一条修复路径
+    （配置页可覆盖重存）比静默折叠成 `{}` 好。
     """
-    if value is None:
-        return {}
     if not isinstance(value, dict):
         raise ValueError(f"配置 {key!r} 不是对象（实际是 {type(value).__name__}），已判为损坏")
     return dict(value)

@@ -128,3 +128,24 @@ class TestNonObjectStoredValueIsCorruptionNotCrash:
         _write_raw(db, "llm", 123)
         with pytest.raises(ValueError):
             db.settings().get_llm()
+
+
+class TestNullStoredValueIsCorruption:
+    """存的是 JSON `null` → 判为损坏（ValueError），而不是静默折叠成 `{}`。
+
+    `None` 是**行不存在**时 `get_raw` 的返回值（「这个键没配过」）；而「行存在、
+    值是 null」是另一回事。把后者折叠成 `{}` 会让 `get_raw` 无法表达「值是 null」
+    与「值是 `{}`」的区别，调用方（如 `ScoreStore.load_profile`）会把「存了个 null」
+    误判成「已保存了一份（空的）配置」，与「没配过 = None、配过但坏了 = 抛错」
+    的取舍相悖。
+    """
+
+    def test_null_value_raises_valueerror(self, db: Database) -> None:
+        _write_raw(db, "llm", None)
+        with pytest.raises(ValueError):
+            db.settings().get_raw("llm")
+
+    def test_empty_object_is_still_valid(self, db: Database) -> None:
+        """空对象是合法形状（配过但没有可选项），不该被当损坏。"""
+        _write_raw(db, "prefs", {})
+        assert db.settings().get_raw("prefs") == {}

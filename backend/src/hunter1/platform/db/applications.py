@@ -14,12 +14,16 @@ from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.like import escape_like
 from hunter1.platform.db.pagination import check_page
 from hunter1.platform.db.schema import ApplicationRow
+from hunter1.platform.db.tolerance import restore_time_order
 
 if TYPE_CHECKING:
     from hunter1.platform.db.database import Database
 
 
 def _to_application(row: ApplicationRow) -> Application:
+    applied_at, updated_at = restore_time_order(
+        row.applied_at, row.updated_at, where="投递的申请/更新时间"
+    )
     return Application(
         id=row.id,
         job_id=row.job_id,
@@ -28,8 +32,8 @@ def _to_application(row: ApplicationRow) -> Application:
         stage=restore_enum(
             ApplicationStage, row.stage, default=ApplicationStage.APPLIED, where="投递阶段"
         ),
-        applied_at=row.applied_at,
-        updated_at=row.updated_at,
+        applied_at=applied_at,
+        updated_at=updated_at,
         note=row.note,
     )
 

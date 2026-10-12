@@ -13,6 +13,7 @@ from hunter1.platform.db.enums import restore_enum
 from hunter1.platform.db.like import escape_like
 from hunter1.platform.db.pagination import check_page
 from hunter1.platform.db.schema import CompanyRow, JobRow
+from hunter1.platform.db.tolerance import restore_int_in_range, restore_time_order
 from hunter1.platform.text import normalize_job_title
 
 if TYPE_CHECKING:
@@ -39,6 +40,9 @@ def _to_company(row: CompanyRow) -> Company:
 
 
 def _to_job(row: JobRow) -> Job:
+    first_seen_at, last_seen_at = restore_time_order(
+        row.first_seen_at, row.last_seen_at, where="岗位的首次/最近出现时间"
+    )
     return Job(
         id=row.id,
         company_id=row.company_id,
@@ -49,7 +53,9 @@ def _to_job(row: JobRow) -> Job:
         company_name=row.company_name,
         city=row.city,
         jd_raw=row.jd_raw,
-        match_score=row.match_score,
+        match_score=restore_int_in_range(
+            row.match_score, minimum=0, maximum=100, where="岗位匹配分"
+        ),
         score_summary=row.score_summary,
         score_advantages=row.score_advantages,
         score_gaps=row.score_gaps,
@@ -59,8 +65,8 @@ def _to_job(row: JobRow) -> Job:
         capture_status=restore_enum(
             CaptureStatus, row.capture_status, default=CaptureStatus.UNKNOWN, where="岗位抓取状态"
         ),
-        first_seen_at=row.first_seen_at,
-        last_seen_at=row.last_seen_at,
+        first_seen_at=first_seen_at,
+        last_seen_at=last_seen_at,
     )
 
 
