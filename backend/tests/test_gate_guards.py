@@ -123,3 +123,38 @@ def test_check_sh_cannot_say_all_green_after_skipping() -> None:
     green_at = source.index('echo "== 全部通过 =="')
     assert guard_at < green_at, "「全部通过」出现在了 SKIPPED 拦截之前"
     assert "exit 3" in source[guard_at:green_at], "SKIPPED 非零时没有以独立退出码拦截"
+
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+class TestPackGateIsWired:
+    """「打包 + 冒烟」必须接进门禁，且 CI 真的开它 —— 否则这条路径又滑出门禁之外。
+
+    背景：门禁此前只 `vite build` + 编译 spec，**从不真打包**，于是 `build.py` 的
+    前端烘焙一节在里面烂掉（本机 exit 1）而门禁一直绿。修法是给 `check.sh` 加
+    `--with-pack` 开关（默认关，不拖慢日常循环），CI 用 `--with-pack` 必跑。
+
+    这条守卫的存在理由与文件头一致：最贵的失败是「**没查**却说通过」。有人把
+    CI 改回裸 `check.sh`（或把开关删掉）时，打包覆盖会**静默**消失 —— 这里钉住它。
+    只做源码级断言（真跑一次打包要几分钟）。
+    """
+
+    def test_check_sh_supports_with_pack_switch(self) -> None:
+        source = CHECK_SH.read_text(encoding="utf-8")
+        assert "--with-pack" in source, "check.sh 不认识 --with-pack"
+        assert "scripts/build.py" in source, "check.sh 的打包一节没调 build.py"
+
+    def test_ci_enables_the_pack_gate(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        assert "check.sh --with-pack" in workflow, (
+            "CI 没有用 --with-pack 调门禁 —— 「打包 + 冒烟」又滑出了必过门禁"
+        )
+
+    def test_ci_installs_the_build_extra(self) -> None:
+        """CI 真打包就必须装 PyInstaller，否则那一节会以「未执行」记一笔、门禁转红；
+        更糟的是若有人把它当噪声去掉开关，覆盖就静默没了。"""
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        assert "build" in workflow.split("pip install")[1].split("\n")[0], (
+            "CI 的 pip install 没带 build extra（PyInstaller）"
+        )

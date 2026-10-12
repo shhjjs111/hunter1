@@ -37,7 +37,9 @@ dev = [
   "ruff>=0.6",
   "pyright>=1.1",
 ]
-# 打包用。刻意不并进 dev：CI 只跑质量门禁、不构建产物，装了纯属拖慢。
+# 打包用。刻意不并进 dev：日常 `check.sh` 不构建产物，只在 `--with-pack` 时用 —— 
+# CI 与发布前必跑（CI 装本 extra 并 `check.sh --with-pack`），本机日常循环不装、
+# 也不付这个钱。装它会把 PyInstaller 及其依赖拖进每个开发者的环境。
 build = ["pyinstaller>=6.0"]
 
 [project.scripts]

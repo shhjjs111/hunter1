@@ -31,7 +31,12 @@ jobs:
         # 测试横跨 db / crawler / 各切片三层，必须把它们都装上：
         # 只装 .[dev] 的话，test_repository（sqlalchemy）、test_adapters（bs4）
         # 以及各切片的路由测试都会在收集阶段就 ImportError。
-        run: pip install -e ".[dev,web,db,crawler]"
+        #
+        # 额外装 `build`（PyInstaller）：CI 现在用 `check.sh --with-pack` **真打包**，
+        # 把「打包 + 冒烟」纳入必过门禁（此前只编译 spec、不真打，结果 build.py 的
+        # 前端烘焙一节在里面烂掉而无人知）。pyproject 里那句「CI 不构建产物」的
+        # 注释已随本改动更正。
+        run: pip install -e ".[dev,web,db,crawler,build]"
         working-directory: backend
 
       - name: 安装前端依赖
@@ -49,9 +54,13 @@ jobs:
         # 未收录 shellcheck-py（见 docs/DEVELOPMENT.md）。CI 上无该变量，但写明更稳。
         run: python -m pip install --index-url https://pypi.org/simple shellcheck-py==0.11.0.1
 
-      - name: 全量门禁（ruff / pyright / pytest / 示例 / shellcheck / 前端 check+build / 契约漂移）
+      - name: 全量门禁（ruff / pyright / pytest / 示例 / shellcheck / 前端 check+build / 契约漂移 / 打包+冒烟）
         # 直接调用本地同款脚本 —— CI 与开发机不可能再漂移。
         # 之前这里手写后端五步，漏了前端 `npm run check` 与 `contracts.sh --check`：
         # 「后端改了 API 模型忘了重跑 contracts.sh」能一路绿灯合入，契约静默断开。
         # check.sh 按目录存在性自动纳入各端检查，新增端时无需再改本文件。
-        run: bash scripts/check.sh
+        #
+        # `--with-pack`：额外真打包 + 冒烟。这条路径此前完全在门禁之外（只编译
+        # spec），实测 `build.py` 的前端烘焙已在其间烂掉（node 包装器导致本机
+        # exit 1，门禁却绿）。默认关是为了不拖慢日常本机循环；CI 必开。
+        run: bash scripts/check.sh --with-pack

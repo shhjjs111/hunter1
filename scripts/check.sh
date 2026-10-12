@@ -3,6 +3,7 @@
 #
 # 用法：
 #   bash scripts/check.sh
+#   bash scripts/check.sh --with-pack           # 额外跑「打包 + 冒烟」（需 PyInstaller）
 #   PY=/path/to/python bash scripts/check.sh   # 显式指定解释器
 #
 # 覆盖范围按目录存在性**自动纳入**（迁移期友好，不需要改脚本）：
@@ -13,6 +14,11 @@
 #   contracts/   目录存在时检查（快照缺失即失败）：契约漂移门禁
 # 另含：shell 脚本静态分析（shellcheck；未装则本节未执行、末尾以退出码 3 报出）与
 #       语法（bash -n）、PyInstaller 规格语法（compile）。
+#
+# `--with-pack` **默认关**：真打包（PyInstaller）一次数分钟，不该塞进日常循环
+# （与 pytest 的 `--cov` 同一取舍）。但 CI 与发布前必须开 —— 「打包」这条路径
+# 门禁此前完全不覆盖（只编译 spec），实测已在其中烂过一次（build.py 的前端烘焙
+# 因 node 包装器必挂，本机 exit 1，门禁却一直绿）。
 #
 # ⚠ 沙箱的「批量删除守卫」会让本脚本**门禁全绿却以 1 退出**（WorkBuddy 沙箱实测；
 #   普通环境没有这层守卫，本机 Hermes 运行时复现不出来）。
@@ -43,6 +49,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 未执行的检查计数。缺失的工具（如 shellcheck）会让对应一节「跳过」——
 # 那一节**没有查**，与「查过且通过」不是一回事。末尾据此决定能不能喊「全部通过」。
 SKIPPED=0
+
+#: 是否跑「打包 + 冒烟」（`build.py`）。默认**不跑**：PyInstaller 一次数分钟，
+#: 日常开发循环不该付这个钱（与下面 pytest 的 `--cov` 同一取舍）。CI 与发布前用
+#: `--with-pack` 打开 —— 判据是「真打出一个能启动的包」，而不是「spec 能编译」。
+#: 这条之所以必须存在：门禁此前只做 `vite build` + 编译 spec，**从不真打包**，
+#: 于是 `build.py` 的前端烘焙一节整段在门禁之外（实测它在本机因 node 包装器而
+#: 必挂，门禁却一直绿）——「不覆盖的路径最先烂掉」，与示例离线冒烟是同一条教训。
+WITH_PACK=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-pack) WITH_PACK=1 ;;
+    -h | --help)
+      echo "用法: bash scripts/check.sh [--with-pack]"
+      echo "  --with-pack  额外跑「打包 + 冒烟」（scripts/build.py；需 PyInstaller）"
+      exit 0
+      ;;
+    *)
+      echo "未知参数: $arg（见 --help）" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ -z "${PY:-}" ]]; then
   if [[ -x "$ROOT/.tools/python/python.exe" ]]; then
@@ -260,6 +288,24 @@ fi
 if [[ -d "$ROOT/contracts" ]]; then
   echo "== 契约：漂移门禁 (contracts.sh --check) =="
   bash "$ROOT/scripts/contracts.sh" --check
+fi
+
+# 打包 + 冒烟（`--with-pack` 才跑，见文件头的开关说明）。
+# 判据是**真打出一个能启动的包**：跑 `build.py`（烘前端 + PyInstaller + 布局校验 +
+# `--help`/`--version`/serve 冒烟），而不是「spec 能编译」。缺 PyInstaller 时记一笔
+# 未执行（末尾按「没查 ≠ 通过」报出，退出码 3）—— 静默跳过会让「没装」看起来像
+# 「查过且通过」。
+if [[ "$WITH_PACK" -eq 1 ]]; then
+  if "$PY" -c "import PyInstaller" > /dev/null 2>&1; then
+    echo "== 打包 + 冒烟 (build.py) =="
+    # 产物落在 gitignore 的 dist/ 与 build/（见 .gitignore）；这里不清理，留给
+    # 发布流程复用（每次门禁重打一遍纯属浪费）。
+    (cd "$ROOT" && "$PY" scripts/build.py)
+  else
+    echo "  ⚠ 未安装 PyInstaller，打包一节**未执行**（不是通过 —— 是没查）。"
+    echo "    安装：$PY -m pip install -e \"backend[build]\"（或 --index-url https://pypi.org/simple pyinstaller）"
+    SKIPPED=$((SKIPPED + 1))
+  fi
 fi
 
 # 有未执行的检查就**不能喊「全部通过」** —— 那正是最难受的一种假绿：
