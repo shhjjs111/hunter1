@@ -27,6 +27,25 @@ if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
   exit 1
 fi
 
+# 把**真 node** 的目录提到 PATH 最前 —— 与 check.sh / build.py 同一道防线。
+#
+# 为什么需要：`npm run dev` 在 Windows 上经 cmd.exe 跑脚本，而 cmd 按 PATH 解析
+# `node`。若 PATH 里存在别的「node 包装」（如天枢运行时的
+# `D:\tianshu\node-runtime\win-x64\node.cmd`，内容只有
+# `"%~dp0tianshu-runtime.exe" %*`），cmd 会命中它 —— 经 PATH 调用时 `%~dp0` 展开
+# 为空、退化成相对名，于是 Vite 起不来：
+#     '"D:\hunter1\frontend\tianshu-runtime.exe"' 不是内部或外部命令
+#
+# ⚠ 别被 `npm -v` 骗过：那条命令不 spawn node，走 PATH 的 `npm` 直连即可通过 ——
+#    实测过，`npm -v` 正常而 `npm run dev` 挂。（本文件此前据此误判「dev.sh 没问题」。）
+#    `command -v node` 在 Git Bash 下反而命中真 node（`/d/nodejs/node`），
+#    前置它的目录后 cmd 侧也能解析到同一份。
+NODE_BIN="$(command -v node 2>/dev/null || true)"
+if [[ -n "$NODE_BIN" && -x "$NODE_BIN" ]]; then
+  PATH="$(dirname "$NODE_BIN"):$PATH"
+  export PATH
+fi
+
 cleanup() {
   # 两个子进程一起收 —— 留一个在后台占着端口是本地开发最常见的困惑源
   #
