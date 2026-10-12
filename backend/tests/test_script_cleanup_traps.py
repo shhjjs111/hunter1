@@ -39,15 +39,19 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import git_bash
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = sorted((ROOT / "scripts").glob("*.sh"))
+
+#: 一个**真正的 Git Bash** 路径（不是 WSL 启动器）；找不到就跳过依赖它的用例。
+BASH = git_bash()
 
 #: `trap <动作> <信号...>`；动作可能是引号包起来的命令，也可能是一个函数名。
 _TRAP_RE = re.compile(r"""^\s*trap\s+(?P<action>'[^']*'|"[^"]*"|\S+)\s+(?P<signals>\S.*)$""")
@@ -169,7 +173,7 @@ def test_exit_trap_cleanups_cannot_fail_the_script() -> None:
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="需要 bash 才能验证规则前提")
+@pytest.mark.skipif(BASH is None, reason="需要 Git Bash 才能验证规则前提")
 @pytest.mark.parametrize(
     ("action", "expected"),
     [("false", 1), ("false || true", 0)],
@@ -187,7 +191,7 @@ def test_unguarded_exit_trap_is_fatal_under_set_e(
     script.write_bytes(f'set -euo pipefail\ntrap "{action}" EXIT\ntrue\n'.encode())
 
     proc = subprocess.run(
-        ["bash", str(script)],
+        [BASH, str(script)],
         capture_output=True,
         text=True,
         encoding="utf-8",

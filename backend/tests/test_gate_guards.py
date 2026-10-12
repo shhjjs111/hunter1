@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import git_bash
+
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_SH = ROOT / "scripts" / "check.sh"
 CONTRACTS_SH = ROOT / "scripts" / "contracts.sh"
@@ -30,6 +32,10 @@ SNAPSHOT = ROOT / "contracts" / "openapi.json"
 #: 跑真的门禁脚本时要给它一个解释器：本机 python 不在 PATH 上（embeddable 版），
 #: `contracts.sh` 只在 `$ROOT/.tools/python` 存在时才用它 —— 临时树里没有那个目录。
 _PYTHON = ROOT / ".tools" / "python" / "python.exe"
+
+#: 一个**真正的 Git Bash** 路径；找不到就跳过依赖它的用例。
+#: 不能用裸 `"bash"`：Windows 上它可能是 WSL 启动器（见 conftest.git_bash）。
+BASH = git_bash()
 
 
 #: 假装参数写错 / 多给参数时，契约脚本必须拒绝执行
@@ -41,6 +47,7 @@ def _digest(path: Path) -> str:
 
 
 @pytest.mark.parametrize("argv", UNKNOWN_FLAG_CASES)
+@pytest.mark.skipif(BASH is None, reason="需要 Git Bash 才能跑门禁脚本")
 def test_contracts_sh_refuses_bad_arguments(argv: list[str]) -> None:
     """拼错的参数必须报错退出，且**一个字节都不能改**快照。
 
@@ -52,7 +59,7 @@ def test_contracts_sh_refuses_bad_arguments(argv: list[str]) -> None:
     before = _digest(SNAPSHOT)
 
     proc = subprocess.run(
-        ["bash", str(CONTRACTS_SH), *argv],
+        [BASH, str(CONTRACTS_SH), *argv],
         capture_output=True,
         text=True,
         # 显式 utf-8：`text=True` 不给 encoding 时按**宿主 locale** 解码，Windows
@@ -71,6 +78,7 @@ def test_contracts_sh_refuses_bad_arguments(argv: list[str]) -> None:
     assert _digest(SNAPSHOT) == before, "拒绝执行时快照被改写了"
 
 
+@pytest.mark.skipif(BASH is None, reason="需要 Git Bash 才能跑门禁脚本")
 def test_contracts_sh_reports_a_skipped_frontend_check(tmp_path: Path) -> None:
     """缺 `frontend/package.json` 时**必须说出来**，不能照喊「✓ 契约零漂移」。
 
@@ -93,7 +101,7 @@ def test_contracts_sh_reports_a_skipped_frontend_check(tmp_path: Path) -> None:
     # 刻意**不**建 frontend/ —— 这就是要复现的场景
 
     proc = subprocess.run(
-        ["bash", str(root / "scripts" / "contracts.sh"), "--check"],
+        [BASH, str(root / "scripts" / "contracts.sh"), "--check"],
         capture_output=True,
         text=True,
         encoding="utf-8",
