@@ -731,18 +731,46 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> R
 
 
 def find_release(owner: str, repo: str, tag: str, token: str) -> dict | None:
-    """按 tag 查已有 Release；没有返回 None。
+    """按 tag 查已有 Release（**含草稿**）；没有返回 None。
 
-    `GET /releases/tags/<tag>` 在不存在时返回 404 —— 那是**正常情形**（首次发布），
-    不该当错误抛出去。其余状态码照常抛。
+    两条路径，顺序不可换：
+
+    1. `GET /releases/tags/<tag>` —— 精确、正常路径一次命中，不多付请求。
+       但它**看不到草稿**：目标处于草稿态时该端点返回 404（GitHub 的行为，
+       实测确认 —— 线上同时存在草稿与已发布两条同 tag 记录时，这里只返回后者）。
+    2. 回退查 `GET /releases` 列表（带认证的请求会包含草稿），按 `tag_name` 匹配。
+
+    为什么第 2 条不可省：`ensure_release` 的「先查后建」以「查得到同名 Release」
+    为前提。一次上传中断会在远端留下草稿；查不到就会 POST 出**第二个**同 tag 的
+    Release —— 第一个沦为孤儿草稿（无附件、`untagged-` 网址），只增不减，得人工
+    DELETE 收尾。这不只是多一条垃圾：发布链的原子性依赖「同名 tag 只有一个
+    Release」，孤儿让线上状态无法自洽对账。实测复现（2026-10-13 发 v0.2.0）
+    见测试类 `TestFindReleaseSeesDrafts`。
+
+    404 在路径 1 是**正常情形**（首次发布，或目标正是草稿），不抛错、转路径 2。
+    其余状态码照常抛。
     """
     try:
         found = api_request("GET", f"/repos/{owner}/{repo}/releases/tags/{tag}", token)
+        if isinstance(found, dict):
+            return found
     except ApiError as exc:
-        if exc.status == 404:
+        if exc.status != 404:
+            raise
+    # 回退：列表端点（含草稿）。每页给满，命中即返回；列表不满一页说明已到底。
+    # 页数上限只为防实现出错时死循环 —— 1000 条 Release 远超本项目量级。
+    for page in range(1, 11):
+        batch = api_request(
+            "GET", f"/repos/{owner}/{repo}/releases?per_page=100&page={page}", token
+        )
+        if not isinstance(batch, list) or not batch:
             return None
-        raise
-    return found if isinstance(found, dict) else None
+        for item in batch:
+            if isinstance(item, dict) and item.get("tag_name") == tag:
+                return item
+        if len(batch) < 100:
+            return None
+    return None
 
 
 def set_draft(owner: str, repo: str, token: str, release_id: int, *, draft: bool) -> None:

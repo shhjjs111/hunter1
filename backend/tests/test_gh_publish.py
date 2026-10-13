@@ -802,13 +802,21 @@ class TestReleaseDraftFlow:
     """
 
     def test_created_as_draft(self, monkeypatch) -> None:
-        """首次发布：查无同名 Release（GET 404）→ POST 建草稿。"""
+        """首次发布：两个端点都查无同名 Release → POST 建草稿。
+
+        mock 必须**区分两条查询路径**（`/releases/tags/<tag>` 与 `/releases` 列表）：
+        `find_release` 现在在 tags 端点 404 后会回退查列表（草稿对 tags 端点不可见，
+        见 `TestFindReleaseSeesDrafts`）。真实 API 上列表端点不会 404，只会返回数组
+        ——旧 mock「凡 GET 皆 404」是单端点时代的写法，留着会让这条正常路径报错。
+        """
         seen: list[tuple[str, dict]] = []
 
         def fake_api(method, path, token, **kw):
             if method == "GET":
-                # 查无此 tag —— 这是**正常情形**（首次发布），不是错误。
-                raise gh.ApiError("GET", path, 404, "Not Found")
+                if "/releases/tags/" in path:
+                    # 查无此 tag —— 这是**正常情形**（首次发布），不是错误。
+                    raise gh.ApiError("GET", path, 404, "Not Found")
+                return []  # 列表端点：也确实没有同名 Release
             seen.append((method, kw.get("payload") or {}))
             return {"id": 5}
 
@@ -1318,6 +1326,81 @@ class TestFindReleasePathNeverLeaksToken:
         joined = " ".join(seen_paths)
         assert tag in joined, f"路径里应含 tag {tag!r}，实际：{joined}"
         assert token not in joined, f"令牌绝不能出现在请求路径里！实际：{joined}"
+
+
+class TestFindReleaseSeesDrafts:
+    """`GET /releases/tags/<tag>` **看不到草稿** —— 必须回退查列表。
+
+    实测复现（2026-10-13 发 v0.2.0）：一次上传中断留下草稿后重跑，
+    `ensure_release` 的「先查后建」对它返回 404（tags 端点只返回已发布的），
+    于是又 POST 建出**第二个**同 tag 的 Release —— 第一个成了孤儿草稿
+    （无附件、`untagged-` 网址、只增不减，最终要人工 DELETE 收尾）。
+
+    这不只是「多一条垃圾」：发布链的原子性依赖「同名 tag 只有一个 Release」
+    这个前提，孤儿让线上状态无法自洽对账。
+
+    修复前的红灯：`find_release` 返回 None（查不到草稿）→ 前两个用例失败。
+    """
+
+    def test_finds_draft_via_list_fallback(self, monkeypatch) -> None:
+        calls: list[str] = []
+
+        def fake_api(method, path, token, **kw):
+            calls.append(path)
+            if "/releases/tags/" in path:
+                raise gh.ApiError("GET", path, 404, "Not Found")
+            return [{"id": 5, "tag_name": "v9.9.9", "draft": True}]
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        found = gh.find_release(owner="o", repo="r", tag="v9.9.9", token="tok")
+
+        assert found is not None, "草稿必须能被查到 —— 否则重跑会建出孤儿草稿"
+        assert found["id"] == 5
+        assert any("/releases/tags/" in p for p in calls), "仍应先试 tags 端点"
+
+    def test_published_release_found_without_list_call(self, monkeypatch) -> None:
+        """已发布的那条仍走 tags 端点、不回退 —— 正常路径不多付一次请求。"""
+        calls: list[str] = []
+
+        def fake_api(method, path, token, **kw):
+            calls.append(path)
+            return {"id": 7, "tag_name": "v1", "draft": False}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        assert gh.find_release("o", "r", "v1", "tok")["id"] == 7
+        assert len(calls) == 1, "命中 tags 端点就不该再查列表"
+
+    def test_ensure_release_reuses_existing_draft_instead_of_creating_duplicate(
+        self, monkeypatch
+    ) -> None:
+        """端到端：存在同 tag 草稿时，`ensure_release` 复用而非再建一个。"""
+        posts: list[str] = []
+
+        def fake_api(method, path, token, **kw):
+            if method == "POST":
+                posts.append(path)
+                return {"id": 99}
+            if "/releases/tags/" in path:
+                raise gh.ApiError("GET", path, 404, "Not Found")
+            return [{"id": 5, "tag_name": "v1", "draft": True}]
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        handle = gh.ensure_release("o", "r", "tok", "v1", "notes")
+
+        assert handle.id == 5, "应复用已有草稿"
+        assert posts == [], "查出草稿后绝不能再 POST 出第二个 Release"
+        assert handle.reopened_from_published is False, "草稿本就未发布，不算收回"
+
+    def test_truly_absent_tag_still_returns_none(self, monkeypatch) -> None:
+        """两个端点都没有时才返回 None（首次发布的正常路径）。"""
+
+        def fake_api(method, path, token, **kw):
+            if "/releases/tags/" in path:
+                raise gh.ApiError("GET", path, 404, "Not Found")
+            return []
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        assert gh.find_release("o", "r", "v1", "tok") is None
 
 
 class TestRedactIsTheLastLineOfDefence:
