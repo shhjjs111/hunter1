@@ -393,7 +393,20 @@ def _raw_asgi_get(
     async def send(message: dict[str, Any]) -> None:
         messages.append(message)
 
-    asyncio.run(app(scope, receive, send))
+    # 显式超时护栏。实测教训（CI，faulthandler 抓到的堆栈）：这个调用**可能在
+    # CI 上挂死** —— 堆栈停在 FileResponse 的流式发送（`await send(...)`）里，
+    # 本机多次全量都无法复现（1461 passed / 162s，含 --cov）。没有护栏时，
+    # 一个挂住的用例让整个 job 跑到 GitHub 的 6 小时上限才被取消，日志里只有
+    # 一串进度点。护栏把它变成 60 秒内的一次明确失败（指明 raw_path）——
+    # 失败是信号，转圈是噪音。
+    try:
+        asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=60))
+    except TimeoutError as exc:
+        raise AssertionError(
+            f"ASGI 调用 60s 未返回（疑似挂死）：raw_path={raw_path!r}。"
+            "若 CI 上再次出现，日志里 300s 处应有 faulthandler 的线程堆栈（见"
+            " pyproject.toml 的 faulthandler_timeout）——对比两处定位根因。"
+        ) from exc
 
     status = next((m["status"] for m in messages if m["type"] == "http.response.start"), None)
     body = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
