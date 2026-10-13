@@ -1354,11 +1354,26 @@ class TestRedactIsTheLastLineOfDefence:
         monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / "不存在")
         assert gh._redact("普通错误消息") == "普通错误消息"
 
-    def test_main_redacts_token_in_api_error(self, monkeypatch, capsys) -> None:
+    def test_main_redacts_token_in_api_error(self, monkeypatch, capsys, tmp_path: Path) -> None:
         """端到端：让 api_request 抛一条**含令牌**的异常，看 main 的输出。
 
         这正是本次事故的输出形态 —— 断言打印出来的东西里没有令牌。
+
+        `ROOT` 必须指向临时目录并造出产物：`main()` 在 `read_token()` **之前**
+        先做「产物存在」与「tag 指向 HEAD」两道检查，缺产物就直接 `return 1` ——
+        根本走不到被 stub 的 `read_token`，断言 `"***"` 随之失败。实测：本机主仓库
+        因 `dist/hunter1-win32.zip` 恰好在而假绿，干净检出（CI / 新克隆）必红 ——
+        `check.sh` 里 pytest 也跑在打包之前，CI 上同样没有该产物。
+        造产物 + stub `ROOT` 与本文件其它调用 `main()` 的用例同款。
         """
+        root = tmp_path / "repo"
+        (root / "dist").mkdir(parents=True)
+        (root / "dist" / gh.artifact_name()).write_bytes(b"zip")
+        exe = root / "dist" / gh.exe_relative_path()
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"exe")
+        monkeypatch.setattr(gh, "ROOT", root)
+
         monkeypatch.setenv("GITHUB_TOKEN", self.TOKEN)
         monkeypatch.setattr(gh, "read_token", lambda *a, **k: self.TOKEN)
 
