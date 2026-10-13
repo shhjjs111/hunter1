@@ -430,7 +430,6 @@ class TestDetectBlocking:
             "challenge-platform",
             "cf-challenge",
             "cf_chl_opt",
-            "geetest",
             "/verify-slider",
         }
         assert set(BLOCK_TITLE_SIGNALS) >= {
@@ -450,12 +449,15 @@ class TestDetectBlocking:
     def test_every_markup_signal_is_detected(self, signal: str) -> None:
         """**每一个**结构标记都要能单独命中 —— 这条通路此前零正向用例。
 
-        实测：把 `BLOCK_MARKUP_SIGNALS` 整个删空，测试全绿 —— 而 7 个验证码厂商
-        信号（geetest / grecaptcha / hcaptcha / cf_chl_opt…）全失效。后果正是
+        实测：把 `BLOCK_MARKUP_SIGNALS` 整个删空，测试全绿 —— 而验证码厂商信号
+        （cf_chl_opt / cf-challenge / challenge-platform…）全失效。后果正是
         guards.py docstring 要避免的那种失败模式：线上换挑战页时**静默漏检**，
         表现为「抓到 0 条」而不是报错。
 
         标题刻意用一个正常标题：只可能由结构标记命中。
+
+        （`geetest` / `grecaptcha` / `hcaptcha` 属**刻意排除**的噪声信号，见下方
+        `test_low_signal_vendor_names_are_excluded` 与 guards.py 词表上方的说明。）
         """
         html = (
             "<html><head><title>招聘 - 示例站点</title></head>"
@@ -484,6 +486,36 @@ class TestDetectBlocking:
         """
         assert "grecaptcha" not in BLOCK_MARKUP_SIGNALS
         assert "hcaptcha" not in BLOCK_MARKUP_SIGNALS
+        assert "geetest" not in BLOCK_MARKUP_SIGNALS
+
+    def test_geetest_widget_on_a_normal_page_is_not_flagged(self) -> None:
+        """带 geetest 组件的**正常**页面不该被判成拦截页（三条通路都试）。
+
+        原先 `BLOCK_MARKUP_SIGNALS` 里有裸串 `geetest`，任何位置命中即误报。
+        实测（本机，2026-10-13）三类真实形态都会命中：
+          ① `<style>` 里 geetest 的样式规则；② `<script src=...static.geetest.com>`；
+          ③ 正文提到该服务名。
+        而它对**识别挑战页零贡献**：BOSS 挑战页（zhipin.com）里 `geetest` 出现
+        25 次，**全部**在 `<style>`/`<script>` 内、DOM 标记里 0 次 —— 那页真正
+        命中的是标题信号 `安全验证`。去掉裸串不损失检出，只消除误报。
+
+        与 `test_recaptcha_login_widget_does_not_trigger_a_false_positive` 同款：
+        光断言名单不含它证明不了误报消失，得让行为本身作证。
+        """
+        cases = {
+            "样式规则": "<style>.geetest_holder .geetest_radar_btn{border:1px}</style>",
+            "脚本引用": '<script src="https://static.geetest.com/gt.js"></script>',
+            "正文提及": "<p>本站使用 geetest 验证码服务</p>",
+        }
+        for label, fragment in cases.items():
+            html = (
+                "<html><head><title>招聘列表 - 示例站点</title>"
+                f"{fragment if label != '正文提及' else ''}</head>"
+                f"<body>{fragment if label == '正文提及' else ''}"
+                '<ul class="jobs"><li class="job">'
+                '<a class="t" href="/j/1">产品经理</a></li></ul></body></html>'
+            )
+            assert detect_blocking(html) is None, f"{label} 形态被误判为拦截页"
 
     def test_recaptcha_login_widget_does_not_trigger_a_false_positive(self) -> None:
         """带 reCAPTCHA 登录组件的**正常**列表页不该被判成拦截页。
