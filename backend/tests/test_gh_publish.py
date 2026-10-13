@@ -1266,3 +1266,55 @@ class TestPushTagWhenRemoteTagExists:
             gh.push("o", "r", "tok")
 
         assert not any("--force" in c for c in calls), "分支推送失败不许 force 重试"
+
+
+class TestFindReleasePathNeverLeaksToken:
+    """查 Release 的 URL 里必须出现 **tag**，绝不能出现 token。
+
+    实测复现（2026-10-13 发 v0.1.1）：`find_release` 的定义签名是
+    `(owner, repo, tag, token)`，而调用处写成了位置参数 `(owner, repo, token, tag)`
+    —— 两个参数**都是 str**，错位不报错，只静默把令牌当成了 tag 名：
+
+        GET /repos/o/r/releases/tags/github_pat_11CPM… → HTTP 401
+
+    后果有两层：功能上查不到已有 Release（首次发布也就罢了，重发会建重复）；
+    更要紧的是**令牌被拼进了请求路径**——它会出现在 GitHub 的访问日志、任何
+    中间代理、以及脚本自己的错误输出里（本例就把它打印到了终端）。
+
+    既有测试抓不到它：那些用例里 token 与 tag 都是无所谓的短字符串，
+    `fake_api` 也不看路径。这个用例专门盯住「路径里是 tag、不是 token」。
+    """
+
+    def test_path_contains_tag_and_not_token(self, monkeypatch) -> None:
+        seen_paths: list[str] = []
+        token = "github_pat_THIS_IS_THE_TOKEN_VALUE"
+        tag = "v9.9.9"
+
+        def fake_api(method, path, tok, **kw):
+            seen_paths.append(path)
+            return {"id": 42, "draft": True}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        gh.find_release(owner="o", repo="r", tag=tag, token=token)
+
+        assert seen_paths, "应当发出一次查询"
+        joined = " ".join(seen_paths)
+        assert tag in joined, f"请求路径里应含 tag {tag!r}，实际：{joined}"
+        assert token not in joined, f"令牌绝不能出现在请求路径里！实际：{joined}"
+
+    def test_ensure_release_passes_tag_not_token_to_lookup(self, monkeypatch) -> None:
+        """从 `ensure_release` 一路传下去，tag/token 也不能错位。"""
+        seen_paths: list[str] = []
+        token = "github_pat_THIS_IS_THE_TOKEN_VALUE"
+        tag = "v9.9.9"
+
+        def fake_api(method, path, tok, **kw):
+            seen_paths.append(path)
+            return {"id": 42, "draft": True}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        gh.ensure_release("o", "r", token, tag, "notes")
+
+        joined = " ".join(seen_paths)
+        assert tag in joined, f"路径里应含 tag {tag!r}，实际：{joined}"
+        assert token not in joined, f"令牌绝不能出现在请求路径里！实际：{joined}"

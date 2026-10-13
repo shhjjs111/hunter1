@@ -662,7 +662,7 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> R
     指向**旧产物**），必须人工用 API 收尾。先查后建消除整条重复路径，
     也顺带少一次注定失败的 POST。
     """
-    existing = find_release(owner, repo, token, tag)
+    existing = find_release(owner=owner, repo=repo, tag=tag, token=token)
     if existing is None:
         release = api_request(
             "POST",
