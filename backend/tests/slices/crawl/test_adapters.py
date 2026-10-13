@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import pytest
 
-from hunter1.slices.crawl.adapters import ListPageSpec, StaticHtmlCrawler, parse_list_page
+from hunter1.slices.crawl.adapters import (
+    ListPageSpec,
+    StaticHtmlCrawler,
+    parse_detail_page,
+    parse_list_page,
+)
 from hunter1.slices.crawl.guards import (
     BLOCK_MARKUP_SIGNALS,
     BLOCK_TITLE_SIGNALS,
@@ -617,3 +622,171 @@ class TestCrawlerRaisesOnChallenge:
         with pytest.raises(CrawlEmptyPageError) as excinfo:
             self._crawler(half_dead).fetch()
         assert "empty_first_page" in str(excinfo.value)
+
+
+# ---- 详情页解析（JD 正文）----
+
+DETAIL_PAGE = """
+<html><body>
+  <div class="header">导航噪音</div>
+  <div class="job-detail">
+    <h1>AI产品经理</h1>
+    <div class="job-desc">
+      岗位职责：
+      1. 负责 AI 产品规划与落地；
+      2. 与算法团队协作推进模型上线。
+      任职要求：
+      1. 本科及以上学历，3 年以上产品经验；
+      2. 熟悉大模型应用场景。
+    </div>
+    <div class="footer">页脚噪音</div>
+  </div>
+</body></html>
+"""
+
+
+class TestParseDetailPage:
+    """按选择器抽 JD 正文 —— 纯函数，离线可测。
+
+    为什么需要它：抓取此前只解析列表页，`jd_raw` 恒为空（实测用户库 477 条岗位里
+    非空 = 0 条）。而评分切片的输入正是 `jd_raw`（`scoring/service.py:45`）——
+    JD 不填，AI 评分等于没东西可评。
+    """
+
+    def test_extracts_job_description(self) -> None:
+        text = parse_detail_page(DETAIL_PAGE, ".job-desc")
+        assert text is not None
+        assert "岗位职责" in text
+        assert "任职要求" in text
+        assert "熟悉大模型应用场景" in text
+
+    def test_excludes_surrounding_noise(self) -> None:
+        """只取选择器命中的容器，不把导航/页脚当正文。"""
+        text = parse_detail_page(DETAIL_PAGE, ".job-desc")
+        assert text is not None
+        assert "导航噪音" not in text
+        assert "页脚噪音" not in text
+
+    def test_normalizes_whitespace(self) -> None:
+        """HTML 里的换行与缩进不该原样进库 —— 会在界面上变成大片空白。"""
+        text = parse_detail_page(DETAIL_PAGE, ".job-desc")
+        assert text is not None
+        assert "\n" not in text
+        assert "  " not in text
+
+    def test_missing_selector_returns_none(self) -> None:
+        """选择器不匹配（站点改版）→ None，**不抛**。
+
+        这是刻意的：详情页抓不到只该让**那一条**没有 JD，不能让整站标红
+        （见 `crawl_company` 的 per-job 隔离）。
+        """
+        assert parse_detail_page(DETAIL_PAGE, ".nonexistent") is None
+
+    def test_empty_selector_returns_none(self) -> None:
+        """站点没声明 `detail_selector`（如应届生详情页不可用）→ None。"""
+        assert parse_detail_page(DETAIL_PAGE, None) is None
+
+    def test_empty_text_returns_none(self) -> None:
+        """容器在但里面是空的 → None，不返回空串。
+
+        空串与非空串在下游都能落库，但「有 JD」和「没 JD」必须可分 —— 返回 None
+        让 `_merge` 的「已有 JD 不被空值抹掉」语义继续成立。
+        """
+        html = '<html><body><div class="job-desc">   </div></body></html>'
+        assert parse_detail_page(html, ".job-desc") is None
+
+    def test_joins_all_matching_blocks(self) -> None:
+        """同一选择器命中**多个**块时要全部拼上，不能只取第一个。
+
+        实测（2026-10-13，高校人才网）：一个详情页里有 4 个 `.detail-item`
+        —— 「基本信息」76 字 /「其他要求」724 字 /「岗位职责」107 字 /
+        「任职要求」158 字。原先用 `select_one` 只留第一个，**丢掉 989 字**，
+        而丢掉的恰是评分最需要的职责与要求。
+        """
+        html = (
+            "<html><body>"
+            '<div class="detail-item">基本信息：招聘 6 人</div>'
+            '<div class="detail-item">岗位职责：协助教学管理</div>'
+            '<div class="detail-item">任职要求：硕士研究生</div>'
+            "</body></html>"
+        )
+        text = parse_detail_page(html, ".detail-item")
+        assert text is not None
+        assert "基本信息" in text
+        assert "岗位职责" in text, "第二个命中块被丢掉了"
+        assert "任职要求" in text, "第三个命中块被丢掉了"
+
+
+class TestFetchDetail:
+    """`StaticHtmlCrawler.fetch_detail` —— 详情页抓取（离线，按 URL 分派）。"""
+
+    def _crawler(self, pages: dict[str, str], **overrides: object) -> StaticHtmlCrawler:
+        spec = _spec(**overrides)
+        return StaticHtmlCrawler(
+            company="示例科技",
+            careers_url="https://a.com/jobs?page=1",
+            spec=spec,
+            fetcher=FakeFetcher(pages),
+        )
+
+    def test_returns_detail_text(self) -> None:
+        crawler = self._crawler({"https://a.com/jd/1": DETAIL_PAGE}, detail_selector=".job-desc")
+        text = crawler.fetch_detail("https://a.com/jd/1")
+        assert text is not None and "岗位职责" in text
+
+    def test_no_detail_selector_returns_none_without_requesting(self) -> None:
+        """站点没声明选择器时**不该发请求** —— 白打一次网络对站点不礼貌。"""
+        fetcher = FakeFetcher({"https://a.com/jd/1": DETAIL_PAGE})
+        crawler = StaticHtmlCrawler(
+            company="示例科技",
+            careers_url="https://a.com/jobs?page=1",
+            spec=_spec(),
+            fetcher=fetcher,
+        )
+        assert crawler.fetch_detail("https://a.com/jd/1") is None
+        assert fetcher.requested == []
+
+    def test_request_failure_returns_none(self) -> None:
+        """请求抛错 → None，**不向上抛**（per-job 隔离的第一道）。
+
+        若这里让异常穿出去，`crawl_company` 的 `except` 会把**整站**标红 ——
+        一条详情失败连累几百条岗位不落库。
+        """
+
+        class _BoomFetcher:
+            def get_text(self, url: str, **_kwargs: object) -> str:
+                raise RuntimeError("network down")
+
+        crawler = StaticHtmlCrawler(
+            company="示例科技",
+            careers_url="https://a.com/jobs?page=1",
+            spec=_spec(detail_selector=".job-desc"),
+            fetcher=_BoomFetcher(),
+        )
+        assert crawler.fetch_detail("https://a.com/jd/1") is None
+
+    def test_referer_is_sent_when_configured(self) -> None:
+        """需要 Referer 的站点（高校人才网：不带则 403）要带上它。"""
+        seen: dict[str, object] = {}
+
+        class _RecordingFetcher:
+            def get_text(self, url: str, **kwargs: object) -> str:
+                seen.update(kwargs)
+                return DETAIL_PAGE
+
+        crawler = StaticHtmlCrawler(
+            company="示例科技",
+            careers_url="https://a.com/jobs?page=1",
+            spec=_spec(detail_selector=".job-desc", detail_referer="https://a.com/"),
+            fetcher=_RecordingFetcher(),
+        )
+        crawler.fetch_detail("https://a.com/jd/1")
+        assert seen.get("headers") == {"Referer": "https://a.com/"}
+
+    def test_blocked_detail_page_returns_none(self) -> None:
+        """详情页返回风控页 → None（不是把挑战页 HTML 当 JD 存进库）。"""
+        challenge = (
+            "<html><head><title>安全验证 - 示例</title></head><body><h1>安全验证</h1></body></html>"
+        )
+        crawler = self._crawler({"https://a.com/jd/1": challenge}, detail_selector="body")
+        assert crawler.fetch_detail("https://a.com/jd/1") is None

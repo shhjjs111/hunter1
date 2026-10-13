@@ -94,6 +94,12 @@ class ListPageSpec:
     max_pages: int = 1
     job_type: str = "校招"
     link_kind: str = "detail"
+    #: JD 正文容器选择器（详情页）。None = 该站不抓详情（没选择器 / 详情页不可用）。
+    #: 抓到的正文填进 `RawJob.jd_raw` —— 评分切片的输入正是它，不填则评分无米下锅。
+    detail_selector: str | None = None
+    #: 请求详情页时要带的 `Referer`。None = 不带。
+    #: 部分站点对详情页做来源校验（实测高校人才网：不带 Referer 返回 403）。
+    detail_referer: str | None = None
 
     @property
     def is_paginated(self) -> bool:
@@ -224,6 +230,34 @@ def _item_company(item: Tag, spec: ListPageSpec, *, default: str) -> str:
     return _item_text(item, spec.company_selector) or default
 
 
+def parse_detail_page(html: str, selector: str | None) -> str | None:
+    """从详情页抽 JD 正文（纯函数）。
+
+    返回归一化空白的正文；**任何抽不到的情况都返回 `None`，绝不抛**
+    （没有选择器 / 选择器不匹配 / 容器为空）。
+
+    为什么「不抛」是刻意的：详情页抓取失败只该让**那一条**没有 JD，不能让整站
+    标红。而 `crawl_company` 的 `except` 会把整站标成 failed —— 一条详情页改版
+    连累几百条岗位不落库，比「这条没 JD」严重得多。调用方仍能区分「抓到」与
+    「没抓到」（`None` vs 非空串），据此推进 `CaptureStatus`。
+
+    为什么用 `select()` 拼接**所有**命中容器而不是 `select_one()`：一个详情页里
+    同一段语义常被拆成多个并列块。实测高校人才网（2026-10-13）有 4 个
+    `.detail-item` —— 分别是「基本信息」76 字 /「其他要求」724 字 /「岗位职责」
+    107 字 /「任职要求」158 字。`select_one` 只留第一个，**丢掉 989 字**，
+    而丢掉的那三块恰恰是评分最需要的职责与要求。`select_one` 对「只有一个容器」
+    的站点（实习僧 / 猎聘 / 万行）行为完全一致，故这一改不伤它们。
+
+    为什么归一空白：HTML 里的缩进与换行会原样进库，在界面上渲染成大片空白。
+    """
+    if not selector or not html:
+        return None
+    soup = BeautifulSoup(html, "lxml")
+    parts = [" ".join(node.get_text(" ", strip=True).split()) for node in soup.select(selector)]
+    text = " ".join(part for part in parts if part)
+    return text or None
+
+
 class StaticHtmlCrawler(BaseCrawler):
     """按 `ListPageSpec` 抓取静态列表页的适配器。"""
 
@@ -276,5 +310,34 @@ class StaticHtmlCrawler(BaseCrawler):
 
         return jobs
 
+    def fetch_detail(self, url: str) -> str | None:
+        """抓一个岗位详情页并抽出 JD 正文；任何失败都返回 `None`，**不抛**。
 
-__all__ = ["BaseCrawler", "ListPageSpec", "StaticHtmlCrawler", "parse_list_page"]
+        「不抛」是这一层最重要的约定：调用方 `crawl_company` 的 `except` 会把
+        **整站**标红，一条详情页失败（改版 / 超时 / 风控）若穿出去，代价是该站
+        几百条岗位全不落库。所以这里把所有异常都收成 `None` —— 语义是「这条没
+        抓到 JD」，而不是「这一轮失败了」。调用方据此推进 `CaptureStatus`。
+
+        `blocked` 页同样算「没抓到」：挑战页的 HTML 不是 JD，不能当正文入库。
+        """
+        if not self.spec.detail_selector:
+            # 没声明选择器（如应届生详情页不可用）→ 直接返回，**不发请求**：
+            # 白打一次网络对站点不礼貌，也没有任何产出。
+            return None
+
+        headers = {"Referer": self.spec.detail_referer} if self.spec.detail_referer else None
+        try:
+            html = self.fetcher.get_text(url, headers=headers)
+            ensure_not_blocked(html, url=url)
+        except Exception:
+            return None
+        return parse_detail_page(html, self.spec.detail_selector)
+
+
+__all__ = [
+    "BaseCrawler",
+    "ListPageSpec",
+    "StaticHtmlCrawler",
+    "parse_detail_page",
+    "parse_list_page",
+]

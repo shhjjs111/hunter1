@@ -61,6 +61,8 @@ SITES: dict[str, SiteDefinition] = {
             company_selector=".f-r .title",
             max_pages=2,
             job_type="实习",
+            # JD 正文容器（探针实测：`<div class="con-job">` 内含「职位描述/岗位职责」全文）
+            detail_selector=".con-job",
         ),
     ),
     # 猎聘 · 校园招聘岗（卡片外层含职位 + 公司两块，故条目取外层）
@@ -74,6 +76,8 @@ SITES: dict[str, SiteDefinition] = {
             link_selector="a.jobcard2-detail-box",
             city_selector=".jobcard2-detail-des span",
             company_selector=".jobcard2-company-title",
+            # JD 正文容器（探针实测：`<div class="job-intro-container">` 以「职位介绍」开头）
+            detail_selector=".job-intro-container",
         ),
     ),
     # 高校人才网 · 教职/科研岗（`li` 内含职位、学历要求与单位、城市）
@@ -87,6 +91,11 @@ SITES: dict[str, SiteDefinition] = {
             link_selector="a",
             city_selector=".region .city",
             company_selector=".region .school",
+            # JD 正文容器（探针实测：`<div class="detail-item">` 含「岗位职责」全文）
+            detail_selector=".detail-item",
+            # 该站对详情页做来源校验：**不带 Referer 返回 403，带上则 200**
+            # （对照实验实测）。列表页不需要，只有详情页要。
+            detail_referer="https://www.gaoxiaojob.com/",
         ),
     ),
     # BOSS直聘 · **不在注册表内**（2026-10-13 移除）。
@@ -119,9 +128,17 @@ SITES: dict[str, SiteDefinition] = {
             link_selector=".list-name a",
             city_selector=".list-child-1",
             company_selector=".job-list-4 a",
+            # JD 正文容器（探针实测：`<div class="jobs-desc">` 含「职位详情」全文）
+            detail_selector=".jobs-desc",
         ),
     ),
     # 应届生 · 名企校园招聘项目（列表本身就是项目名，无独立雇主/城市字段 → 留空）
+    #
+    # ⚠️ `detail_selector` **刻意不填**：该站详情链接多为第三方 ATS 跳转
+    # （`q.yingjiesheng.com/thirdlink?url=...`），实测返回的是**加密 WAF 内容**
+    # 而非 HTML —— 抓了也解析不出 JD。不填 = 该站不发详情请求（见
+    # `StaticHtmlCrawler.fetch_detail` 的无选择器短路），省下每轮几十次无效请求。
+    # 代价：该站岗位的 `jd_raw` 恒为空、`CaptureStatus` 停在 PENDING。
     "yingjiesheng": SiteDefinition(
         key="yingjiesheng",
         label="应届生",
