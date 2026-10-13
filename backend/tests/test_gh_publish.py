@@ -1318,3 +1318,72 @@ class TestFindReleasePathNeverLeaksToken:
         joined = " ".join(seen_paths)
         assert tag in joined, f"路径里应含 tag {tag!r}，实际：{joined}"
         assert token not in joined, f"令牌绝不能出现在请求路径里！实际：{joined}"
+
+
+class TestRedactIsTheLastLineOfDefence:
+    """**任何**错误输出都不许含令牌 —— 这是最后一道防线。
+
+    实测事故（2026-10-13 发 v0.1.1）：`find_release` 调用参数错位，令牌被当成
+    tag 名拼进 URL；`ApiError` 把 path 原样写进消息，于是令牌打到了终端：
+        GET /repos/.../releases/tags/github_pat_11CPM… → HTTP 401
+
+    那一处参数已修（见 TestFindReleasePathNeverLeaksToken），但**根因不在那里**
+    —— 根因是错误输出路径上完全没有脱敏。任何一处再次错位都会重演。下面这些
+    用例盯的是「出口」，与具体哪条路径泄露无关。
+    """
+
+    TOKEN = "github_pat_11ABCDEFG0abcdefghijklmnop_THIS_IS_THE_REAL_TOKEN"
+
+    def test_redact_removes_token_from_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", self.TOKEN)
+        out = gh._redact(f"GET /repos/o/r/releases/tags/{self.TOKEN} → HTTP 401")
+        assert self.TOKEN not in out, "环境变量里的令牌必须被抹掉"
+        assert "***" in out
+
+    def test_redact_removes_token_from_file(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        target = tmp_path / ".tok"
+        target.write_text(self.TOKEN, encoding="utf-8")
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        out = gh._redact(f"path={self.TOKEN}")
+        assert self.TOKEN not in out
+
+    def test_redact_survives_missing_token_sources(self, monkeypatch, tmp_path) -> None:
+        """没有令牌可查时也不能炸 —— 它在报错路径上，炸掉会把真正的错误顶掉。"""
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / "不存在")
+        assert gh._redact("普通错误消息") == "普通错误消息"
+
+    def test_main_redacts_token_in_api_error(self, monkeypatch, capsys) -> None:
+        """端到端：让 api_request 抛一条**含令牌**的异常，看 main 的输出。
+
+        这正是本次事故的输出形态 —— 断言打印出来的东西里没有令牌。
+        """
+        monkeypatch.setenv("GITHUB_TOKEN", self.TOKEN)
+        monkeypatch.setattr(gh, "read_token", lambda *a, **k: self.TOKEN)
+
+        # 让「工作区是否干净」与 tag 校验都被跳过 —— 它们与本用例无关，
+        # 但会把 main 提前 return（测试机上工作区通常是脏的）。
+        class _Clean:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr(gh.subprocess, "run", lambda *a, **k: _Clean())
+        monkeypatch.setattr(gh, "resolve_target", lambda *a, **k: ("o", "r"))
+        monkeypatch.setattr(gh, "ensure_repo", lambda *a, **k: None)
+        monkeypatch.setattr(gh, "push", lambda *a, **k: None)
+
+        def boom(*a, **kw):
+            # 模拟参数错位：令牌被当成 tag 拼进 URL（本次事故的真实形态）
+            raise gh.ApiError("GET", f"/repos/o/r/releases/tags/{self.TOKEN}", 401, "Bad")
+
+        # 让含令牌的异常**在 main 的 except 范围内**抛出。用 read_token
+        # （main 里最早的一步），避免依赖后面还有多少步骤、也不打真实网络。
+        monkeypatch.setattr(gh, "read_token", boom)
+        rc = gh.main(["o/r"])
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert self.TOKEN not in combined, f"令牌泄漏到了输出里！\n{combined}"
+        assert "***" in combined, "应当看到脱敏后的占位"
+        assert rc != 0

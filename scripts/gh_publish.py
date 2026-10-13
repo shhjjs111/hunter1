@@ -237,6 +237,48 @@ def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
     return owner_clean, _check_name("repo", repo.strip())
 
 
+def _known_tokens() -> list[str]:
+    """当前可能用到的令牌值（环境变量 + 令牌文件），用于输出脱敏。
+
+    不改动任何状态、失败一律忽略 —— 这是**显示层**的兜底，不该因为它自己
+    出问题而把要报的那个错顶掉。
+    """
+    values: list[str] = []
+    env = os.environ.get("GITHUB_TOKEN", "").strip()
+    if env:
+        values.append(env)
+    try:
+        if DEFAULT_TOKEN_FILE.is_file():
+            stored = DEFAULT_TOKEN_FILE.read_text(encoding="utf-8").strip()
+            if stored:
+                values.append(stored)
+    except OSError:
+        pass
+    return values
+
+
+def _redact(text: str) -> str:
+    """把文本里可能出现的令牌抹成 `***`。
+
+    **这是最后一道防线，不是唯一一道。** 实测事故（2026-10-13 发 v0.1.1）：
+    `find_release` 的调用参数错位，令牌被当成 tag 名拼进 URL，而 `ApiError`
+    会把 path 原样写进异常消息 —— 于是令牌直接打到了终端，并随会话记录外泄。
+
+    根因不在「那一处参数写错」（已修，并有专门的回归测试），而在于
+    **错误输出路径上没有任何脱敏**：`ApiError` 的 message 含任意调用方传入的
+    path，将来任何一处再错位就会重演。所以在**唯一的出口**（main 的 except）
+    统一抹一遍 —— 与后端 `platform.text.redact_secret` 是同一个思路：
+    脱敏点越靠近显示端越可靠（那边用在 LLM 错误文案上，见 settings/scoring 切片）。
+
+    刻意不依赖「哪个令牌正在用」这个前提：环境变量与令牌文件都查一遍，
+    这样即便异常发生在 read_token() **之前**（那时还没有 token 变量）也有效。
+    """
+    for secret in _known_tokens():
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
 def verify_token(token: str) -> str | None:
     """令牌有效时返回账号名；GitHub **明确拒绝**（401）时返回 None。
 
@@ -859,7 +901,7 @@ def _restore_if_reopened(
         print(f"  ↩ 已把 {tag} 恢复为已发布（回滚本次的「暂时收回为草稿」）", file=sys.stderr)
     except PublishError as exc:
         print(
-            f"⚠ 还原 Release 状态失败：{exc}\n"
+            f"⚠ 还原 Release 状态失败：{_redact(str(exc))}\n"
             f"  {tag} 仍是草稿、下载入口暂时取不到它。手动恢复：\n"
             f"    gh release edit {tag} --draft=false   # 或用网页把该 Release 取消草稿",
             file=sys.stderr,
@@ -893,7 +935,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         owner, repo = resolve_target(args.owner_repo, args.owner, args.repo)
     except PublishError as exc:
-        print(exc, file=sys.stderr)
+        print(_redact(str(exc)), file=sys.stderr)
         return 2
 
     tag = f"v{__version__}"
@@ -1029,7 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
             _restore_if_reopened(owner, repo, token, handle, tag)
             raise
     except PublishError as exc:
-        print(f"\n✗ {exc}", file=sys.stderr)
+        print(f"\n✗ {_redact(str(exc))}", file=sys.stderr)
         return 1
 
     base = f"https://github.com/{owner}/{repo}/releases/download/{tag}"
