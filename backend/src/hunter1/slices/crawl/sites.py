@@ -136,10 +136,17 @@ SITES: dict[str, SiteDefinition] = {
     ),
     # 应届生 · 名企校园招聘项目（列表本身就是项目名，无独立雇主/城市字段 → 留空）
     #
-    # ⚠️ `detail_selector` **刻意不填**：该站详情链接多为第三方 ATS 跳转
-    # （`q.yingjiesheng.com/thirdlink?url=...`），实测返回的是**加密 WAF 内容**
-    # 而非 HTML —— 抓了也解析不出 JD。不填 = 该站不发详情请求（见
-    # `StaticHtmlCrawler.fetch_detail` 的无选择器短路），省下每轮几十次无效请求。
+    # ⚠️ `detail_selector` **刻意不填**：该站岗位链接跳到**多个互不相同的第三方
+    # 域名**，实测（2026-10-13，逐域名抽样）结果分三类：
+    #   - `q.yingjiesheng.com/thirdlink?...` → 返回**加密 WAF 内容**（非 HTML），不可解析；
+    #   - `2027.yingjiesheng.com` / `campus.51job.com` / `xyz.51job.com` → 只有页面壳
+    #     （文本 < 70 字，正文由 JS 渲染），抓不到 JD；
+    #   - `minisite.51job.com` / `xyzp.51job.com` → 有可读正文（约 1–2.8K 字）。
+    #
+    # 也就是说**并非全站不可抓**，而是「一个站点要按 N 个第三方域名各写一套选择器」。
+    # 本次不做：成本与收益不成比例（单一来源站，且约一半域名本就抓不到）。
+    # 不填 = 该站不发详情请求（见 `StaticHtmlCrawler.fetch_detail` 的无选择器短路），
+    # 省下每轮几十次无效请求。
     # 代价：该站岗位的 `jd_raw` 恒为空、`CaptureStatus` 停在 PENDING。
     "yingjiesheng": SiteDefinition(
         key="yingjiesheng",

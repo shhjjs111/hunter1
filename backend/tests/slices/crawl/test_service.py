@@ -640,3 +640,34 @@ class TestDetailBackfill:
             [job_identity(detail_url="https://example.com/j/1", company="丙", title="岗位")]
         )
         assert next(iter(stored.values())).capture_status == CaptureStatus.PENDING
+
+    def test_failed_detail_is_retried_on_the_next_round(self, db: Database) -> None:
+        """上一轮详情失败的岗位，**下一轮会被自动重试**并补上 JD。
+
+        这条守的是「偶发失败自愈」：站点风控是随机命中的（实测猎聘同一批 URL
+        连打三轮 18/18 成功，但真实运行里 6 条偶发失败），若把「试过的」也跳过，
+        那 6 条就永远没有 JD 了。
+
+        判据是 `existing.jd_raw` 为空（而不是 `capture_status == FAILED`）——
+        这样「上一轮没轮到（超 DETAIL_LIMIT）」的岗位下一轮同样能补上，
+        轮转推进，不需要额外的调度状态。
+        """
+        from hunter1.domain.models import CaptureStatus
+
+        url = "https://example.com/j/1"
+        jobs = db.jobs()
+
+        # 第 1 轮：详情抓不到 → FAILED
+        first = DetailCrawler("甲", [_raw("岗位", url)], details={url: None})
+        crawl_company(first, jobs=jobs)  # type: ignore[arg-type]
+        job_id = job_identity(detail_url=url, company="甲", title="岗位")
+        assert jobs.get_many([job_id])[job_id].capture_status == CaptureStatus.FAILED
+
+        # 第 2 轮：详情恢复 → 应重试并补上
+        second = DetailCrawler("甲", [_raw("岗位", url)], details={url: "补上的 JD"})
+        crawl_company(second, jobs=jobs)  # type: ignore[arg-type]
+
+        assert second.detail_calls == [url], "上一轮失败的不该被跳过"
+        after = jobs.get_many([job_id])[job_id]
+        assert after.jd_raw == "补上的 JD"
+        assert after.capture_status == CaptureStatus.COMPLETE
