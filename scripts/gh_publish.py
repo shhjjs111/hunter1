@@ -703,6 +703,15 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> R
     失败却把新 Release 留在草稿态、旧 Release 继续对外服务（`releases/latest`
     指向**旧产物**），必须人工用 API 收尾。先查后建消除整条重复路径，
     也顺带少一次注定失败的 POST。
+
+    ⚠⚠ **草稿对 `GET /releases/tags/<tag>` 不可见** —— 这是「先查后建」能否真正
+    生效的前提，`find_release` 为此回了退路（查列表）。实测（2026-10-13 发
+    v0.2.0）：一次上传中断在远端留下草稿，重跑时 `find_release` 查不到它
+    （tags 端点对草稿返回 404），于是这里又 POST 出**第二个**同 tag 的 Release，
+    第一个沦为孤儿草稿（无附件、`untagged-` 网址），只增不减、得人工 DELETE。
+    所以**先查后建的正确性由 `find_release` 的列表回退保证**，别只盯着这里的
+    调用顺序 —— 改 `find_release` 的实现前先读它的 docstring 与
+    `TestFindReleaseSeesDrafts` 那组用例。
     """
     existing = find_release(owner=owner, repo=repo, tag=tag, token=token)
     if existing is None:
