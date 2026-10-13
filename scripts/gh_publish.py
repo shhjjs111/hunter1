@@ -592,8 +592,41 @@ def push(owner: str, repo: str, token: str) -> None:
     tag = f"v{__version__}"
     git("push", "-u", "origin", "HEAD:refs/heads/main", token=token)
     print("  ✓ 已推送分支 main")
-    git("push", "origin", f"refs/tags/{tag}", token=token)
-    print(f"  ✓ 已推送 tag {tag}")
+    push_tag(tag, token)
+
+
+def push_tag(tag: str, token: str) -> None:
+    """推 tag；远端已有同名 tag 时改用 `--force` 覆盖。
+
+    为什么需要这个回退：`release.sh` 在「tag 不指向 HEAD」时给出的修复动作正是
+    `git tag -f <tag>`（把一个已存在的 tag 移到新提交）。而 git 默认**拒绝**
+    更新已存在的远端 tag：
+
+        ! [rejected]  v0.1.0 -> v0.1.0 (already exists)
+
+    于是照提示做完本地动作后，整条发布链仍断在 push 这一步 —— 用户只能手敲
+    `git push --force` 绕过（实测 2026-10-13 一次真实发布即如此）。
+
+    刻意**先试普通 push**、只在被拒时才 force：绝大多数发布是「新 tag」，
+    不需要 force；而 force 是**不可逆**的（覆盖远端已有的 tag 指针），
+    所以它必须是一个被显式说出来的动作，不能默默发生。
+
+    分支推送**不**走这条回退（见 `push` 里对 main 的普通 push）：`main` 是共享
+    分支，force 推它会静默丢弃远端已有的提交。只有 tag 允许 force ——
+    它是发布链自有的、指向某个已发布版本的标记。
+    """
+    try:
+        git("push", "origin", f"refs/tags/{tag}", token=token)
+        print(f"  ✓ 已推送 tag {tag}")
+        return
+    except PublishError as exc:
+        # 只有「远端已有该 tag」才允许 force。其余失败（网络、权限、不是仓库）
+        # force 也解决不了，照原样抛 —— 免得把一个真问题伪装成「已处理」。
+        if "already exists" not in str(exc) and "rejected" not in str(exc):
+            raise
+        print(f"  ⚠ 远端已存在 tag {tag}，改用 --force 覆盖（不可逆：远端 tag 指针会移动）")
+    git("push", "--force", "origin", f"refs/tags/{tag}", token=token)
+    print(f"  ✓ 已强制更新 tag {tag}")
 
 
 @dataclass(frozen=True)
@@ -618,8 +651,19 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> R
     「zip → manifest」，zip 成功、manifest 失败时 `releases/latest/download/
     manifest.json` 直接 404，所有用户的更新链同时断掉，脚本只 return 1 不做清理。
     草稿期间 `releases/latest` 仍指向上一版（GitHub 跳过草稿），更新链一刻不断。
+
+    **先查后建**（不是「建失败再查」）：同名 tag 已存在 Release 时必须复用它。
+    旧实现只在 `POST` 抛 422 时才去查 —— 而 422 只是「同 tag 已有 Release」的
+    *一种*表现。实测（2026-10-13 一次真实发布）：按 `release.sh` 的提示
+    （`git tag -f <tag>`）force 移动 tag 之后，`POST /releases` **不再返回 422**，
+    而是直接建出第二个同 tag 的草稿 —— 于是走不到复用分支，直到
+    `publish_release` 转正时才撞 `already_exists`。那一刻两个附件都已上传完毕，
+    失败却把新 Release 留在草稿态、旧 Release 继续对外服务（`releases/latest`
+    指向**旧产物**），必须人工用 API 收尾。先查后建消除整条重复路径，
+    也顺带少一次注定失败的 POST。
     """
-    try:
+    existing = find_release(owner, repo, token, tag)
+    if existing is None:
         release = api_request(
             "POST",
             f"/repos/{owner}/{repo}/releases",
@@ -628,12 +672,9 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> R
         )
         print(f"  ✓ 已创建 Release {tag}（草稿）")
         return ReleaseHandle(int(release["id"]))
-    except ApiError as exc:
-        if exc.status != 422:  # 422 = tag 已存在 Release
-            raise
-    found = api_request("GET", f"/repos/{owner}/{repo}/releases/tags/{tag}", token)
-    release_id = int(found["id"])
-    if found.get("draft"):
+
+    release_id = int(existing["id"])
+    if existing.get("draft"):
         print(f"  ✓ Release {tag} 已存在，复用（草稿）")
         return ReleaseHandle(release_id)
     # 已发布的同名 Release（重发 / --reupload）：先收回成草稿再动附件。
@@ -645,6 +686,21 @@ def ensure_release(owner: str, repo: str, token: str, tag: str, notes: str) -> R
     set_draft(owner, repo, token, release_id, draft=True)
     print(f"  ✓ Release {tag} 已存在（已发布）→ 暂时收回为草稿，附件传完再发布")
     return ReleaseHandle(release_id, reopened_from_published=True)
+
+
+def find_release(owner: str, repo: str, tag: str, token: str) -> dict | None:
+    """按 tag 查已有 Release；没有返回 None。
+
+    `GET /releases/tags/<tag>` 在不存在时返回 404 —— 那是**正常情形**（首次发布），
+    不该当错误抛出去。其余状态码照常抛。
+    """
+    try:
+        found = api_request("GET", f"/repos/{owner}/{repo}/releases/tags/{tag}", token)
+    except ApiError as exc:
+        if exc.status == 404:
+            return None
+        raise
+    return found if isinstance(found, dict) else None
 
 
 def set_draft(owner: str, repo: str, token: str, release_id: int, *, draft: bool) -> None:

@@ -802,26 +802,31 @@ class TestReleaseDraftFlow:
     """
 
     def test_created_as_draft(self, monkeypatch) -> None:
-        seen: list[dict] = []
+        """首次发布：查无同名 Release（GET 404）→ POST 建草稿。"""
+        seen: list[tuple[str, dict]] = []
 
         def fake_api(method, path, token, **kw):
-            seen.append(kw.get("payload") or {})
+            if method == "GET":
+                # 查无此 tag —— 这是**正常情形**（首次发布），不是错误。
+                raise gh.ApiError("GET", path, 404, "Not Found")
+            seen.append((method, kw.get("payload") or {}))
             return {"id": 5}
 
         monkeypatch.setattr(gh, "api_request", fake_api)
         assert gh.ensure_release("a", "b", "t", "v1", "notes").id == 5
-        assert seen[0]["draft"] is True, "新建的 Release 必须是草稿，附件传完才公开"
+        assert [m for m, _ in seen] == ["POST"], "只有查无时才建"
+        assert seen[0][1]["draft"] is True, "新建的 Release 必须是草稿，附件传完才公开"
 
     def test_existing_published_release_is_pulled_back_to_draft(self, monkeypatch) -> None:
         """重发 / --reupload：已发布的同名 Release 先收回草稿再动附件。
 
         收回后 `releases/latest` 回落到上一版 —— 比「先删旧附件」那个 404 窗口安全。
+        （先查后建之后，`GET /releases/tags/<tag>` 直接返回已发布的那条；
+        POST 根本不会被调用 —— 它以前是 422 的来源。）
         """
         patches: list[dict] = []
 
         def fake_api(method, path, token, **kw):
-            if method == "POST":
-                raise gh.ApiError("POST", path, 422, "already_exists")
             if method == "GET":
                 return {"id": 5, "draft": False}
             patches.append(kw.get("payload") or {})
@@ -831,6 +836,39 @@ class TestReleaseDraftFlow:
         handle = gh.ensure_release("a", "b", "t", "v1", "notes")
         assert handle.id == 5
         assert handle.reopened_from_published is True, "收回过已发布版本，失败路径要能据此还原"
+        assert patches == [{"draft": True}]
+
+    def test_force_moved_tag_reuses_published_release_instead_of_creating_duplicate(
+        self, monkeypatch
+    ) -> None:
+        """tag 被 force 移动后 `POST` 会**成功**建出第二个 Release —— 必须先查后建。
+
+        实测（2026-10-13 一次真实发布）：`release.sh` 给出的修复动作正是
+        `git tag -f <tag>`；force 移动 tag 之后，`POST /releases` 不再返回 422，
+        而是直接建出一个同 tag 的**草稿**。旧代码只在 POST 抛 422 时才去查已有的，
+        于是走不到复用分支 —— 直到 `publish_release` 把草稿转正时才撞
+        `already_exists`。那一刻两个附件都已上传完毕，失败却把新 Release 留在
+        草稿态、旧 Release 仍在对外服务（`releases/latest` 指向**旧产物**），
+        只能人工用 API 收尾。先查后建即消除整条重复路径。
+        """
+        calls: list[str] = []
+        patches: list[dict] = []
+
+        def fake_api(method, path, token, **kw):
+            calls.append(method)
+            if method == "GET":
+                return {"id": 5, "draft": False}  # 已发布的旧 Release
+            if method == "POST":
+                return {"id": 9}  # force 移动 tag 后，POST 会成功建出重复草稿
+            patches.append(kw.get("payload") or {})
+            return {}
+
+        monkeypatch.setattr(gh, "api_request", fake_api)
+        handle = gh.ensure_release("a", "b", "t", "v1", "notes")
+
+        assert handle.id == 5, "必须复用已发布的旧 Release，而不是新建那个重复的"
+        assert handle.reopened_from_published is True
+        assert "POST" not in calls, "先查后建：已有 Release 时不该走到 POST"
         assert patches == [{"draft": True}]
 
     def test_already_draft_is_not_patched_again(self, monkeypatch) -> None:
@@ -1149,3 +1187,82 @@ class TestSaveTokenUmask:
 
         assert seen and seen[0] == 0o077, f"写前未收紧 umask：{seen}"
         assert target.read_text(encoding="utf-8") == "secret-token-value"
+
+
+class TestPushTagWhenRemoteTagExists:
+    """远端已有同名 tag 时必须能推进去 —— 否则「改 tag 指向」这条路走不通。
+
+    实测（2026-10-13 一次真实发布）：`release.sh` 在 tag 不指向 HEAD 时给出的
+    修复动作正是 `git tag -f <tag>`；移动本地 tag 之后再跑 `gh_publish.py`，
+    `push()` 用**普通** `git push origin refs/tags/<tag>` —— 而 git 默认拒绝
+    更新已存在的远端 tag：
+
+        ! [rejected]  v0.1.0 -> v0.1.0 (already exists)
+
+    于是整条发布链断在这里，用户只能手敲 `git push --force` 绕过去（本次即如此）。
+    修法：tag 推送**先试普通、被拒再 force**，并把 force 这个不可逆动作显式打印。
+    """
+
+    def _patch_git(self, monkeypatch, *, reject_plain_tag: bool) -> list[list[str]]:
+        calls: list[list[str]] = []
+
+        def fake_git(*args, token, cwd=None):
+            calls.append(list(args))
+            head = tuple(args[:2])
+            if head == ("remote", "get-url"):
+                return "https://github.com/o/r.git"  # 已指向目标，无输出行
+            is_tag_push = args and args[0] == "push" and "refs/tags/" in " ".join(args)
+            if is_tag_push and reject_plain_tag and "--force" not in args:
+                raise gh.PublishError(
+                    "git push origin refs/tags/v1 失败（exit 1）：\n"
+                    " ! [rejected] v1 -> v1 (already exists)"
+                )
+            return ""
+
+        monkeypatch.setattr(gh, "git", fake_git)
+        return calls
+
+    @staticmethod
+    def _tag_pushes(calls: list[list[str]]) -> list[list[str]]:
+        """所有推 tag 的调用（含 force 形态：`push --force origin refs/tags/...`）。"""
+        return [c for c in calls if c and c[0] == "push" and "refs/tags/" in " ".join(c)]
+
+    def test_falls_back_to_force_when_tag_already_exists(self, monkeypatch) -> None:
+        calls = self._patch_git(monkeypatch, reject_plain_tag=True)
+        gh.push("o", "r", "tok")
+
+        tag_pushes = self._tag_pushes(calls)
+        assert len(tag_pushes) == 2, f"应先普通、再 force，实际：{tag_pushes}"
+        assert "--force" not in tag_pushes[0], "第一次必须是普通 push（不无脑 force）"
+        assert "--force" in tag_pushes[1], "被拒后要改用 force"
+
+    def test_plain_push_succeeds_without_force(self, monkeypatch) -> None:
+        calls = self._patch_git(monkeypatch, reject_plain_tag=False)
+        gh.push("o", "r", "tok")
+
+        tag_pushes = self._tag_pushes(calls)
+        assert len(tag_pushes) == 1, f"普通 push 成功时不该再试 force：{tag_pushes}"
+        assert "--force" not in tag_pushes[0]
+
+    def test_non_tag_push_failure_is_not_retried_with_force(self, monkeypatch) -> None:
+        """分支推送失败**不许**用 force 重试 —— 那可能覆盖别人的提交。
+
+        `main` 是共享分支：force 推它会静默丢弃远端已有的提交。只有 tag
+        （发布链自有的、指向已发布版本的标记）才允许 force。
+        """
+        calls: list[list[str]] = []
+
+        def fake_git(*args, token, cwd=None):
+            calls.append(list(args))
+            head = tuple(args[:2])
+            if head == ("remote", "get-url"):
+                return "https://github.com/o/r.git"
+            if head == ("push", "-u"):
+                raise gh.PublishError("git push -u origin HEAD:refs/heads/main 失败（exit 1）")
+            return ""
+
+        monkeypatch.setattr(gh, "git", fake_git)
+        with pytest.raises(gh.PublishError):
+            gh.push("o", "r", "tok")
+
+        assert not any("--force" in c for c in calls), "分支推送失败不许 force 重试"
