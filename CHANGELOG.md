@@ -7,10 +7,36 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-13
+
+抓取层新增详情页正文回填，并修掉一批「静默失败」类缺陷。
+
+### Added
+
+- **详情页解析**：`parse_detail_page` + `fetch_detail`，为 4 个可用站点提供详情选择器。
+- **抓取时回填 JD 正文**：per-job 隔离 + 状态推进 + 请求量上限。
+
 ### Fixed
 
+- **BOSS直聘站点移除**：结构性风控使其不可用。
+- **噪声信号 `geetest` 移除**：正常页引用该组件会被误判为拦截。
+- **未声明 `detail_selector` 的站点不再产生假失败**。
+- **压缩站点双重解压失败**：`platform/fetch` 剥离描述原始体的响应头。
+- **上游失败文案**：assistant 走 `describe_llm_error`，不再吐裸机器码。
 - **发布脚本错误输出统一脱敏**：`gh_publish.py` 的错误路径此前可能把令牌原样打到终端；
   现在所有输出统一过 `_redact()`，令牌不再有外泄通道。
+- **卫生守卫自校准**：样本改为运行时拼装，修「提交前绿、提交后红」。
+
+### Documentation
+
+- crawl 切片：应届生的取舍补上量化依据（可抓 2/80 ≈ 2.5%），并修正「详情页不可用」的表述。
+- 补齐开源项目的对外门面（LICENSE / CHANGELOG / SECURITY / CONTRIBUTING / 模板 / 徽章）。
+- 泛化注释里的本机路径 —— 公开仓库不留开发机目录结构。
+
+### Tests
+
+- 上传卫生守卫：把「不要什么都传」变成会红的门禁。
+- crawl 详情页快照与回读用例 —— 让详情选择器失效时先红。
 
 ## [0.1.1] - 2026-10-13
 
@@ -47,6 +73,7 @@ AI 求职助手 → 投递管理」全流程。
 - **打包分发**：PyInstaller 单目录产物，前端产物嵌入；`check.sh --with-pack`
   真打包 + 冒烟纳入 CI 门禁。
 
-[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/shhjjs111/hunter1/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/shhjjs111/hunter1/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shhjjs111/hunter1/releases/tag/v0.1.0
