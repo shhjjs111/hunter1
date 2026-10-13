@@ -341,8 +341,11 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
    "$EDGE" --headless=new --disable-gpu --hide-scrollbars \
      --virtual-time-budget=4000 --window-size=700,900 \
-     --screenshot=shot.png "http://127.0.0.1:8000/jobs"
+     --screenshot=shot.png "http://127.0.0.1:8000/"
    ```
+   > ⚠️ 页面路径以 `frontend/src/app/App.tsx` 的路由表为准：**岗位库在 `/`**，
+   > 不是 `/jobs`（那条路由不存在，请求它会被渲染成「页面不存在」）。五个页面分别是
+   > `/`（岗位库）、`/crawl`、`/applications`、`/assistant`、`/settings`。
    必测宽度与理由：
    | 宽度 | 对应真实场景 |
    |---|---|
