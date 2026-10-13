@@ -961,13 +961,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description SSE 事件流：若干 text/tool_start/tool_end 事件，以 done 收尾（开流后的失败以 error 事件交出） */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": unknown;
                 };
             };
             /** @description 模型未配置 / 配置不可用（开流前校验）—— 去「配置」页填好模型后再试。注意开流**之后**的失败只能作为 SSE `error` 事件交出去 */

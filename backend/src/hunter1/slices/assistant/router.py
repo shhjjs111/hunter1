@@ -304,7 +304,20 @@ def build_router(
     @router.post(
         "/assistant/stream",
         summary="流式对话（SSE）",
+        # 响应类型必须**显式声明**，让 OpenAPI 如实描述这个端点。
+        #
+        # 只写函数返回标注（`-> StreamingResponse`）时，FastAPI 会把它推成
+        # 「`application/json` + 空 schema」—— 契约因此把**事件流**说成了 JSON。
+        # 前端照契约读就会按 JSON 解析 SSE，与运行时（`text/event-stream`，
+        # `TestStreamEndpoint` 已钉住）分叉。显式给 `response_class` + content
+        # 后，生成器不再猜（实测：200 只声明 `text/event-stream`，无误加的 json）。
+        response_class=StreamingResponse,
         responses={
+            200: {
+                "content": {"text/event-stream": {}},
+                "description": "SSE 事件流：若干 text/tool_start/tool_end 事件，以 done 收尾"
+                "（开流后的失败以 error 事件交出）",
+            },
             409: {
                 "description": (
                     "模型未配置 / 配置不可用（开流前校验）—— 去「配置」页填好模型后再试。"

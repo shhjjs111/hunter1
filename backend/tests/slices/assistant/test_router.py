@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -820,3 +821,39 @@ class TestConversationMessagesWindow:
             assert client.get(url, params={"limit": 0}).status_code == 422
             assert client.get(url, params={"limit": 10_000}).status_code == 422
             assert client.get(url, params={"offset": -1}).status_code == 422
+
+
+class TestStreamResponseContract:
+    """流式端点的**契约声明**必须如实 —— 运行时与 OpenAPI 不许分叉。
+
+    实测（修复前）：`POST /api/assistant/stream` 的实际响应是
+    `text/event-stream`（runtime 与 `TestStreamEndpoint` 都钉住了这一点），
+    但生成的 OpenAPI 把 200 声明成 `application/json` + **空 schema** ——
+    统一按函数返回标注推导响应模型时，`StreamingResponse` 被推成了
+    「一个没有字段的 JSON 对象」。
+
+    后果与 ARCHITECTURE.md 里「响应要有类型」那条硬规则同源，只是换了形态：
+    契约在最有价值的地方失真。前端照契约读，会以为这个 POST 返回 JSON
+    而不是事件流。修法是显式声明 `response_class=StreamingResponse` +
+    `responses[200].content`，让生成器不再猜。
+    """
+
+    def test_openapi_declares_event_stream_not_json(self) -> None:
+        # 断言**真实组装根**导出的契约（与 scripts/export_openapi.py 同源），
+        # 而不是临时拼一个最小 app —— 后者可能与生产路由的声明漂移。
+        from hunter1.main import AppContext, create_app
+
+        with tempfile.TemporaryDirectory(prefix="hunter1-sse-contract-") as tmp:
+            context = AppContext.default(db_path=Path(tmp) / "sse.db", site_keys=[])
+            try:
+                spec = create_app(context).openapi()
+            finally:
+                context.db.dispose()
+        responses = spec["paths"]["/api/assistant/stream"]["post"]["responses"]
+        content = responses["200"].get("content", {})
+        assert "text/event-stream" in content, (
+            f"契约必须声明 SSE 的媒体类型；实际声明了 {sorted(content)}"
+        )
+        assert "application/json" not in content, (
+            "契约把事件流声明成了 application/json —— 前端照它读会把 SSE 当 JSON 解析"
+        )
