@@ -7,6 +7,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`find_release` 看不到草稿 → 建出孤儿 Release**：`GET /releases/tags/<tag>` 对草稿
+  返回 404，而 `ensure_release` 的「先查后建」以「查得到同名 Release」为前提。一次
+  上传中断在远端留下草稿后重跑，查不到它 → `POST` 出**第二个**同 tag 的 Release，
+  第一个沦为孤儿草稿（无附件、`untagged-` 网址、只增不减，需人工 `DELETE` 收尾）。
+  现在 tags 端点未命中时回退查列表（带认证的列表含草稿），按 `tag_name` 匹配；
+  已发布的那条仍走 tags 端点，不多付请求。
+  > 影响面仅限发布工具链（`scripts/gh_publish.py`，不随产物分发）；实测于
+  > 2026-10-13 发 v0.2.0，见 `TestFindReleaseSeesDrafts`。
+
 ## [0.2.0] - 2026-10-13
 
 抓取层新增详情页正文回填，并修掉一批「静默失败」类缺陷。
