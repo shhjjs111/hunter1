@@ -355,6 +355,26 @@ class TestRepositoryIsClean:
         assert expected == covered, f"判据表与用例不同步：{expected ^ covered}"
 
 
+def _assembled(*parts: str) -> str:
+    """把样本拼成完整字符串 —— **源码文本里不出现完整形态**。
+
+    为什么不能直接写成字面量：本文件**自己也在被扫描的跟踪清单里**。
+    样本若写成字面量，它一边断言「仓库里没有密钥」，一边自己带着一个密钥形态——
+    文件未跟踪时判据扫不到它（门禁绿），**一旦提交进索引就当场自撞**。
+    表现是最坏的一种时序：提交前全绿、提交后全红，而本地那次门禁给出的
+    是虚假的安全感。
+
+    （实测踩到过：提交 92803a4 之后，`test_no_secrets_in_content` /
+    `test_no_home_directory_paths_in_content` / `test_no_personal_data_in_content`
+    三条同时转红，命中项全是本文件自己的反向校准样本。）
+
+    不采用「把本文件加入豁免名单」的修法：那会在最该被扫的文件上开一个盲区——
+    这个文件恰恰是最可能被塞进真密钥的地方（调试时顺手粘一个真 token 进来）。
+    拼装则让源码永远不构成完整形态，判据保持全量覆盖。
+    """
+    return "".join(parts)
+
+
 class TestJudgesActuallyFire:
     """反向校准：每条判据对**合成违规样本**都必须命中。
 
@@ -364,9 +384,9 @@ class TestJudgesActuallyFire:
 
     def test_secret_judge_fires_on_real_token_shapes(self) -> None:
         samples = {
-            "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH": "OpenAI",
-            "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij": "GitHub",
-            "AKIAIOSFODNN7EXAMPLE": "AWS",
+            _assembled("sk-", "proj-", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"): "OpenAI",
+            _assembled("ghp_", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"): "GitHub",
+            _assembled("AKIA", "IOSFODNN7EXAMPLE"): "AWS",
         }
         for token, label in samples.items():
             assert _scan_text_for_secrets(token), f"{label} 令牌形态未被检出：{token[:12]}…"
@@ -387,10 +407,10 @@ class TestJudgesActuallyFire:
 
     def test_home_path_judge_fires_on_user_paths(self) -> None:
         for path in (
-            r"C:\Users\23579\projects\x.py",
-            r"C:/Users/23579/projects/x.py",
-            "/home/alice/proj/x.py",
-            "/Users/alice/proj/x.py",
+            _assembled("C:", "\\", "Users", "\\", "23579", "\\projects\\x.py"),
+            _assembled("C:/", "Users", "/", "23579", "/projects/x.py"),
+            _assembled("/home/", "alice", "/proj/x.py"),
+            _assembled("/Users/", "alice", "/proj/x.py"),
         ):
             assert HOME_DIR_PATTERN.search(path), f"家目录路径未被检出：{path}"
 
@@ -399,7 +419,7 @@ class TestJudgesActuallyFire:
         for path in (
             r"C:\Windows\System32\bash.exe",
             r"C:\Program Files\Git\bin",
-            r"C:\Users\<你>",
+            _assembled("C:", "\\", "Users", "\\", "<placeholder>"),
             "C:/Users/%USERNAME%",
             "/usr/bin:/bin",
         ):
@@ -427,11 +447,10 @@ class TestJudgesActuallyFire:
             assert judge_forbidden_suffixes([rel]) == [], f"扩展名误报：{rel}"
 
     def test_pii_judge_fires_on_real_contact_details(self) -> None:
-        assert judge_pii.__module__  # 判据可调用（防止被重命名后静默失效）
-        assert _scan_text_for_pii("联系 hr@somecompany.cn 投递")
+        assert _judge_pii_text(_assembled("联系 hr@", "somecompany.cn", " 投递"))
 
     def test_pii_judge_ignores_reserved_example_domains(self) -> None:
-        """`hr@example.com` 这类保留域名是测试夹具的标准示例，不该报。"""
+        """保留域名是测试夹具的标准示例，不该报。"""
         for text in ("mailto:hr@example.com", "a@example.org", "x@test.com"):
             assert not _judge_pii_text(text), f"保留域名被误报：{text}"
 
