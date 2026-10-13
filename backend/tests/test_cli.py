@@ -29,7 +29,7 @@ class TestSiteKeys:
         assert _site_keys("   ") is None
 
     def test_parses_comma_separated(self) -> None:
-        assert _site_keys("zhipin, job910") == ["zhipin", "job910"]
+        assert _site_keys("gaoxiaojob, job910") == ["gaoxiaojob", "job910"]
 
     def test_unknown_site_fails_loudly(self) -> None:
         """写错站点名要立刻报错并列出可选值 —— 不能默默按「全部」跑。"""

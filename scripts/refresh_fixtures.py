@@ -3,7 +3,7 @@
 用法：
 
     ./.tools/python/python.exe scripts/refresh_fixtures.py            # 全部站点
-    ./.tools/python/python.exe scripts/refresh_fixtures.py zhipin     # 指定站点
+    ./.tools/python/python.exe scripts/refresh_fixtures.py job910     # 指定站点
 
 做三件事：
 1. 按 `slices.crawl` 站点表的选择器从**真实页面**抓取；

@@ -89,21 +89,24 @@ SITES: dict[str, SiteDefinition] = {
             company_selector=".region .school",
         ),
     ),
-    # BOSS直聘 · 首页推荐岗位卡（岗位与公司在同一 <li> 的两块里）
-    # ⚠️ 该站有风控：连续请求后返回 HTTP 200 的「安全验证」页。此时抓取器会抛
-    # `CrawlBlockedError`（不静默返回 0 条），需人工介入。
-    "zhipin": SiteDefinition(
-        key="zhipin",
-        label="BOSS直聘",
-        spec=ListPageSpec(
-            url_template="https://www.zhipin.com/",
-            item_selector=".sub-li",
-            title_selector="p.name",
-            link_selector="a.job-info",
-            city_selector=".job-text span",
-            company_selector=".sub-li-bottom .name",
-        ),
-    ),
+    # BOSS直聘 · **不在注册表内**（2026-10-13 移除）。
+    #
+    # 保留这段说明而不是直接删掉，是因为「为什么没有它」是个反复会被问到的问题，
+    # 而理由不是主观取舍、是可复现的实测：
+    #
+    # 从本机 IP 直连，该站对**所有** HTML 入口一律返回 HTTP 200 的「安全验证」页
+    # （实测：首页第 1 次请求即被拦，不是「连续请求后」；换完整浏览器头
+    # Sec-Fetch-* / Referer、换移动版 m.zhipin.com 结果相同）。唯一不拦的是纯 JS
+    # 应用壳（`/web/geek/job` 返回 9KB 的「加载中，请稍候」，HTML 里零岗位数据）。
+    #
+    # 因此它不是「慢/偶发失败」，而是**结构性不可用**：留在表里只会让每轮抓取固定
+    # 多出一条永远为红的记录。要它的数据须登录 + 绕验证码 —— 与本项目的立场冲突
+    # （见 README「务实说明」：不做登录、不绕验证码）。正路是官方开放平台 API。
+    #
+    # 若将来该站放开匿名列表页，把 SiteDefinition 加回即可（选择器一并留档）：
+    #   url_template="https://www.zhipin.com/", item_selector=".sub-li",
+    #   title_selector="p.name", link_selector="a.job-info",
+    #   city_selector=".job-text span", company_selector=".sub-li-bottom .name"
     # 万行教师人才网 · 教师岗列表（城市与学历/经验同在一个节点，只取首行；
     # 学校名挂在 logo 链接的 title 属性上，没有可见文字）
     "job910": SiteDefinition(

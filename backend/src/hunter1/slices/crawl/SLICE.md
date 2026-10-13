@@ -30,7 +30,7 @@
 | `router.py` | HTTP 端点（`POST /api/crawl`、`GET /api/crawl/status`） |
 | `service.py` | 抓取编排（`crawl_company` / `crawl_all`、合并不变量） |
 | `adapters.py` | 基础爬虫 + 声明式列表页适配器（原 base + static_html 合并） |
-| `sites.py` | 站点注册表（6 个真实站点） |
+| `sites.py` | 站点注册表（5 个真实站点；BOSS直聘因结构性风控已移除，原因见文件内注释） |
 | `guards.py` | 风控页识别（「被拦截」≠「没有岗位」） |
 | `runner.py` | 后台线程运行器 + 进度快照 |
 
