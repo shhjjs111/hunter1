@@ -113,6 +113,17 @@ def _backfill_jd(
     if fetch_detail is None:
         return statuses
 
+    # 该站**声明了**详情选择器吗？没有的话（如应届生：详情链接是第三方 ATS 跳转、
+    # 返回加密 WAF）根本不该进回填 —— 否则每条都会调一次 `fetch_detail`、
+    # 拿到 None、被标成 `FAILED`，界面上凭空多出一片假失败。
+    # 「不适用」与「抓失败」必须分开：前者该保持 PENDING，只有后者才是 FAILED。
+    #
+    # 用 `spec.detail_selector` 判断而不是「调一次看返回什么」：后者既多发请求，
+    # 又把「没选择器」与「选择器失效」混成同一个 None，无法区分。
+    spec = getattr(crawler, "spec", None)
+    if spec is None or getattr(spec, "detail_selector", None) is None:
+        return statuses
+
     # 只处理需要 JD 的：新增的，或已有但 `jd_raw` 为空的。
     # 已有 JD 的不重复抓 —— 省请求量，也保住「已有 JD 不被覆盖」的语义。
     pending: list[tuple[RawJob, str]] = []

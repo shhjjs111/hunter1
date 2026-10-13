@@ -77,7 +77,7 @@ def refresh_detail(key: str, http: HttpFetcher, detail_url: str) -> tuple[int, i
     """
     site = SITES[key]
     selector = site.spec.detail_selector
-    assert selector is not None, f"{key} 没声明 detail_selector"  # noqa: S101
+    assert selector is not None, f"{key} 没声明 detail_selector"
     headers = {"Referer": site.spec.detail_referer} if site.spec.detail_referer else None
     html = http.get_text(detail_url, headers=headers)
     ensure_not_blocked(html, url=detail_url)

@@ -507,6 +507,15 @@ class DetailCrawler:
         self._details = details or {}
         self._boom_on = boom_on
         self.detail_calls: list[str] = []
+        #: 真实适配器都有 `spec`（`StaticHtmlCrawler` 一系）—— 替身也得有，
+        #: 因为 `_backfill_jd` 靠 `spec.detail_selector` 判断该站抓不抓详情。
+        #: 没有它会被当成「不适用」而整段跳过，测试就成了假绿。
+        self.spec = ListPageSpec(
+            url_template="https://example.com/careers",
+            item_selector=".j",
+            title_selector="a",
+            detail_selector=".jd",
+        )
 
     def fetch(self) -> list[RawJob]:
         return list(self._jobs)
@@ -603,3 +612,31 @@ class TestDetailBackfill:
             FakeCrawler("乙", [_raw("岗位", "https://example.com/j/9")]), jobs=db.jobs()
         )  # type: ignore[arg-type]
         assert result.ok and result.created == 1
+
+    def test_site_without_detail_selector_stays_pending(self, db: Database) -> None:
+        """**没声明 `detail_selector` 的站点**：不发请求、状态保持 PENDING。
+
+        实测踩到过（应届生）：它有 `fetch_detail` 方法（`StaticHtmlCrawler` 一系
+        都有），但 `spec.detail_selector` 为 None。若不看选择器就逐条调用，
+        每条都会拿到 None 并被标成 `FAILED` —— 界面上凭空多出 20 条假失败，
+        而真实语义是「该站不适用详情抓取」，应该是 `PENDING`。
+        """
+        from hunter1.domain.models import CaptureStatus
+
+        class NoSelectorCrawler(DetailCrawler):
+            """方法在、选择器不在（模拟应届生）。"""
+
+            def __init__(self, company: str, jobs: list[RawJob]) -> None:
+                super().__init__(company, jobs, details={})
+                self.spec = ListPageSpec(
+                    url_template="https://a.com/", item_selector=".j", title_selector="a"
+                )
+
+        crawler = NoSelectorCrawler("丙", [_raw("岗位", "https://example.com/j/1")])
+        crawl_company(crawler, jobs=db.jobs())  # type: ignore[arg-type]
+
+        assert crawler.detail_calls == [], "没声明选择器就不该打详情请求"
+        stored = db.jobs().get_many(
+            [job_identity(detail_url="https://example.com/j/1", company="丙", title="岗位")]
+        )
+        assert next(iter(stored.values())).capture_status == CaptureStatus.PENDING
