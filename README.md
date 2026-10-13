@@ -1,5 +1,12 @@
 # Hunter1
 
+[![CI](https://github.com/shhjjs111/hunter1/actions/workflows/ci.yml/badge.svg)](https://github.com/shhjjs111/hunter1/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![Release](https://img.shields.io/github/v/release/shhjjs111/hunter1)](https://github.com/shhjjs111/hunter1/releases/latest)
+
+> 求职工作台 · 轻量 · 跨平台 · 零托管 · **前后端完全分离**
+
 > 求职工作台 · 轻量 · 跨平台 · 零托管 · **前后端完全分离**
 
 填入**自己的大模型 API Key**（任意 OpenAI 兼容厂商）即可使用：在本地完成
@@ -26,6 +33,17 @@ contracts/      OpenAPI 快照（生成物）
 协作规则（多 Agent 并行开发）见 **AGENTS.md**。
 
 ## 快速开始
+
+### 直接用（无需 Python / Node）
+
+到 [Releases](https://github.com/shhjjs111/hunter1/releases/latest) 下载
+`hunter1-win32.zip`，解压后双击 `hunter1.exe` —— 会在本机 `127.0.0.1:8000`
+起服务并自动打开浏览器。数据放在程序旁的 `data/`，纯绿色便携。
+
+启动后到「配置」页填 base_url / 模型 / API Key（点「测试连接」验证），
+再到「抓取」页跑一轮，岗位库就有数据了。
+
+### 开发（双进程，前后端完全分离）
 
 ### 开发（双进程，前后端完全分离）
 
@@ -136,3 +154,10 @@ Hunter1 是对旧项目 `RecruitOps` 的重做：**迁移抓取资产与数据�
 - 🤖 **[协作宪法 →](AGENTS.md)** ← 切片地图、契约规则、门禁矩阵
 - 🛠 **[开发指引 →](docs/DEVELOPMENT.md)** ← 环境、命令、打包细节
 - 📄 **[历史规划 →](docs/DEVELOPMENT-PLAN.md)** ← v1 基线（已被 v2 取代）
+
+其他：
+
+- 📋 **[变更日志](CHANGELOG.md)** ← 各版本改了什么
+- 🤝 **[贡献指南](CONTRIBUTING.md)** ← 提 PR / 报 Issue 的流程与硬性约束
+- 🔒 **[安全策略](SECURITY.md)** ← 漏洞报告通道与威胁模型边界
+- ⚖️ **[MIT License](LICENSE)**

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/shhjjs111/hunter1/security/advisories/new
+    about: 请勿开公开 Issue 报告安全漏洞，走私有通道（见 SECURITY.md）
+  - name: 使用与开发文档
+    url: https://github.com/shhjjs111/hunter1/blob/main/docs/DEVELOPMENT.md
+    about: 环境搭建、命令细节、打包与常见坑

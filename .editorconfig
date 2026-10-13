@@ -1,0 +1,46 @@
+# .editorconfig —— 跨编辑器的基础格式约定
+#
+# 目标：让任何编辑器都产出**同一份**缩进、行尾、编码，避免无关的格式 diff。
+# 不替代 formatter（后端 ruff format / 前端 eslint + prettier 风格），
+# 只兜住 formatter 管不到的基础项。
+#
+# 行尾说明：仓库用 .gitattributes 的 `* text=auto eol=lf` 统一入库为 LF；
+# 此处声明 eol=lf 让编辑器本地也不必生成 CRLF（Windows 用户尤其受益）。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{py,pyi}]
+indent_size = 4
+max_line_length = 100
+
+[*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css,html}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.md]
+# Markdown 里行尾空格是有语义的（硬换行），不裁剪。
+trim_trailing_whitespace = false
+indent_size = 2
+
+[*.{toml,cfg,ini}]
+indent_size = 2
+
+[*.sh]
+indent_size = 4
+# shell 脚本必须保持 LF —— CRLF 会让 shellcheck 报 SC1017 并让 bash 解析失败。
+end_of_line = lf
+
+[*.{cmd,bat}]
+end_of_line = crlf
+
+[Makefile]
+indent_style = tab
