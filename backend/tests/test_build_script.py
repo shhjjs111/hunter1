@@ -781,7 +781,7 @@ class TestProduceZipKeepsBadArchivesOut:
 class TestPreferRealNodeDir:
     """打包脚本必须把**真 node** 目录提到 PATH 最前 —— 否则 npm.cmd 内部经 cmd
     解析 `node` 时可能命中的是别的「node 包装」（如 `node.cmd` → 找不到
-    `tianshu-runtime.exe`），前端烘焙失败（实测 exit 1）。
+    其附带运行时），前端烘焙失败（实测 exit 1）。
 
     这是 `scripts/check.sh` 早有的那道防线（bash 的 `command -v node` 命中真 node
     并把其目录前置）；`build.py` 此前没做，同一模式漏了一处。
@@ -792,7 +792,7 @@ class TestPreferRealNodeDir:
     ) -> None:
         """关键是**提到最前**，不是「不在 PATH 里才加」。
 
-        本机 `D:\nodejs` 本就在 PATH 中、只是排在包装器目录之后 —— 「不在才加」
+        真 node 目录本就在 PATH 中、只是排在包装器目录之后 —— 「不在才加」
         的写法会跳过前置，包装器仍在前，问题原样复现。
         """
         real_dir = tmp_path / "real-node"

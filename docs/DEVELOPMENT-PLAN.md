@@ -7,7 +7,7 @@
 
 > **状态：规划稿，尚未实现。** 本文件是全新项目 `hunter1` 的架构与路线基线。
 > 生成时间：2026-10-05　｜　v0.2：将 **AI 求职助手**提升为核心功能（v0.1 曾列为待定）
-> 基线来源：对旧系统 `D:\RecruitOps` 的实地勘察（含 file:line 可核销）
+> 基线来源：对旧系统 `RecruitOps` 的实地勘察（含 file:line 可核销）
 > 目标读者：项目作者本人 + 后续协作者 / agent
 
 ---
@@ -390,7 +390,7 @@ recruitment-mail / schedule-management）。工具面见 `packages/mcp/server.py
 
 | 结论 | 依据 |
 |---|---|
-| 64 个适配器、46 纯 HTTP / 18 涉及浏览器 | `D:\RecruitOps\resources\desktop-runtime\app\packages\recruitment_core\crawlers\` |
+| 64 个适配器、46 纯 HTTP / 18 涉及浏览器 | `RecruitOps\resources\desktop-runtime\app\packages\recruitment_core\crawlers\` |
 | 适配器接口 `BaseCrawler.fetch() -> list[dict]` | `crawlers\base.py` |
 | 可复用系统 Edge | `crawlers\base.py` 的 `launch_browser`（`HUNTER_BROWSER_CHANNEL=msedge`） |
 | 资源治理精良 | `recruitment_core\resources.py`（FileLease/ResourcePool/cooldown） |

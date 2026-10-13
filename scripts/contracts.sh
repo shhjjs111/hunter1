@@ -22,7 +22,7 @@ fi
 
 # 把**真 node** 的目录提到 PATH 最前（与 check.sh 同名段落，那边有完整推导）。
 # 简短版：npm / npx 在 Windows 上交给 cmd.exe 跑 script，而 **cmd 按 PATH 解析 `node`**；
-# PATH 里若有别的「node 包装」排在真 node 之前（实测本机：天枢运行时的 node.cmd 在第 5 位、
+# PATH 里若有别的「node 包装」排在真 node 之前（实测本机：某工具链的 node.cmd 在第 5 位、
 # 真 node 在第 18 位），cmd 会命中它，而那个包装的 `%~dp0` 经 PATH 调用时展开为空 →
 # 退化成相对名 → 在 cwd 找不到。本节（前端类型生成走 `npx openapi-typescript`）随之必挂，
 # 表现为整条契约门禁在本机红、CI 绿。

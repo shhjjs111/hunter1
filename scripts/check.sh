@@ -105,12 +105,12 @@ fi
 #
 # 为什么需要：npm / npx 执行 script 时用的 shell 在 Windows 上是 cmd.exe，
 # 而 **cmd 按 PATH 解析 `node`** —— 若 PATH 里存在别的「node 包装」且排在真 node
-# 之前，cmd 会命中它。实测（本机装了天枢运行时，两个 node 不同源）：
-#     where node → D:\tianshu\node-runtime\win-x64\node.cmd   （PATH 第 5）
-#                  D:\nodejs\node.exe                          （PATH 第 18）
-# 那个 node.cmd 只有一行 `"%~dp0tianshu-runtime.exe" %*`，而经 PATH 调用时 `%~dp0`
-# 展开为空 → 退化成相对名 `tianshu-runtime.exe` → 在 cwd 下找不到：
-#     '"D:\hunter1\frontend\tianshu-runtime.exe"' 不是内部或外部命令
+# 之前，cmd 会命中它。实测（本机装了两个不同源的 node）：
+#     where node → <工具链目录>\node.cmd                      （PATH 第 5）
+#                  <nodejs 安装目录>\node.exe                 （PATH 第 18）
+# 那个 node.cmd 只有一行 `"%~dp0<某运行时>.exe" %*`，而经 PATH 调用时 `%~dp0`
+# 展开为空 → 退化成相对名 `<某运行时>.exe` → 在 cwd 下找不到：
+#     '"<cwd>\<某运行时>.exe"' 不是内部或外部命令
 # 于是整段前端检查必挂（bash 侧的 `node` 与 cmd 侧的 `node` 不是同一个 —— 而
 # `command -v npm` 看起来完全正常）。前置真 node 的目录后两边解析到同一个解释器；
 # Linux/CI 上 /usr/bin 本就在最前，本段无副作用。

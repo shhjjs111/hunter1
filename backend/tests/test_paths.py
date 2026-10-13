@@ -21,7 +21,7 @@ class TestDevelopmentLayout:
 
     def test_app_dir_is_repository_root(self) -> None:
         # src/hunter1/paths.py → 上溯找到含 pyproject.toml 的工程根（本仓 monorepo
-        # 里那是 `backend/`，Python 工程根；仓库根再往上一级是 D:\hunter1）
+        # 里那是 `backend/`，Python 工程根；仓库根再往上一级才是 checkout 目录）
         assert (paths.app_dir() / "pyproject.toml").is_file()
 
     def test_data_dir_is_repository_local_dot_data(self) -> None:
