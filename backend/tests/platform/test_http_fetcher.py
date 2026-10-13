@@ -5,6 +5,9 @@ TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应�
 
 from __future__ import annotations
 
+import gzip
+import zlib
+
 import httpx
 import pytest
 
@@ -688,6 +691,111 @@ class TestRedirectBodyIsNotRead:
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(302, content=b"<html>no location</html>")
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        response = fetcher.get("https://a.com/x")
+        assert response.status_code == 302
+        assert response.content == b"<html>no location</html>"
+
+
+class TestCompressedResponse:
+    """带 `Content-Encoding` 的响应此前会**双重解压**而失败。
+
+    现象（修复前）：`_read_capped` 用 `iter_bytes()` 读取 —— httpx 已按
+    `Content-Encoding` 解压，拿到的 body 是**明文**；但 `_fetch_once` 重建
+    `httpx.Response` 时把**原始响应头**（含 `Content-Encoding: gzip`）一并传了过去，
+    httpx 于是在 `read()` 里对明文再解压一次 → `DecodingError`。它又是
+    `httpx.HTTPError` 的子类，被 `except httpx.HTTPError` 兜成
+    `FetchError("transport_failed")` —— 界面报「网络传输失败」，而网络完全正常。
+
+    实测（本机，httpx 0.28.1）：6 个真实站点全部返回 gzip，其中 5 个因此报
+    `transport_failed`，唯有 1 个响应未压缩的站点走完了读取。`Accept-Encoding:
+    gzip` 是 httpx 的默认行为，所以这一族缺陷对**任何压缩站点**都必现 ——
+    而 mock 响应此前从不带 `Content-Encoding`，门禁因此一直全绿。
+    """
+
+    def test_gzip_encoded_response_is_decoded(self, clock: FakeClock) -> None:
+        """站点按 gzip 压缩时，抓取应成功并拿到正确明文。"""
+        payload = "<html>中文测试</html>".encode()
+        compressed = gzip.compress(payload)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"Content-Encoding": "gzip", "Content-Type": "text/html"},
+                stream=httpx.ByteStream(compressed),
+            )
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        assert fetcher.get_text("https://a.com/x") == "<html>中文测试</html>"
+
+    def test_deflate_encoded_response_is_decoded(self, clock: FakeClock) -> None:
+        """deflate 与 gzip 同属 httpx 默认请求的编码，走同一条读取路径。"""
+        payload = "<html>deflate 测试</html>".encode()
+        compressed = zlib.compress(payload)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"Content-Encoding": "deflate", "Content-Type": "text/html"},
+                stream=httpx.ByteStream(compressed),
+            )
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        assert fetcher.get_text("https://a.com/x") == "<html>deflate 测试</html>"
+
+    def test_returned_response_does_not_claim_an_encoding(self, clock: FakeClock) -> None:
+        """交出去的响应体已是明文，就不该再声称 `Content-Encoding`。
+
+        这不是洁癖：`headers` 是调用方可见的公共面，一个「声称 gzip、实为明文」的
+        响应会把这个坑原样转嫁给下一个读它的人（第二次 `.read()` 同样炸）。
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"Content-Encoding": "gzip", "Content-Type": "text/html"},
+                stream=httpx.ByteStream(gzip.compress(b"<html>ok</html>")),
+            )
+
+        fetcher = _fetcher(clock, handler, retries=1)
+        response = fetcher.get("https://a.com/x")
+        assert "content-encoding" not in response.headers
+        assert "transfer-encoding" not in response.headers
+
+    def test_cap_applies_to_decompressed_body(self, clock: FakeClock) -> None:
+        """体积上限卡的是**解压后**的大小，不是压缩体。
+
+        判据：一个压缩后很小、解压后超过上限的响应必须报 `too_large`。
+        若改为 `iter_raw()` 读压缩体，上限就只管压缩后的大小 —— 一个几 KB 的
+        gzip 炸弹能解出任意大的明文，上限形同虚设。
+        """
+        # 高度可压缩：明文 200KB，gzip 后只有几百字节
+        compressed = gzip.compress(b"x" * (200 * 1024))
+        assert len(compressed) < 1024
+        assert len(compressed) < 200 * 1024
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"Content-Encoding": "gzip"},
+                stream=httpx.ByteStream(compressed),
+            )
+
+        fetcher = _fetcher(clock, handler, retries=1, max_bytes=1024)
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://a.com/bomb")
+        assert excinfo.value.code == "too_large"
+
+    def test_gzip_redirect_without_location_still_returns_body(self, clock: FakeClock) -> None:
+        """压缩的 3xx（无 Location）走同一条重建路径，同样不该炸。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                302,
+                headers={"Content-Encoding": "gzip"},
+                stream=httpx.ByteStream(gzip.compress(b"<html>no location</html>")),
+            )
 
         fetcher = _fetcher(clock, handler, retries=1)
         response = fetcher.get("https://a.com/x")

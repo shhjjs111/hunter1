@@ -143,6 +143,11 @@ def _read_capped(response: httpx.Response, limit: int, url: str) -> bytes:
 
     刻意**不**静默截断：半截 HTML 会让解析器产出一个看起来正常、实际缺了一半的
     岗位列表 —— 比直接失败危险得多。
+
+    读的是 `iter_bytes()`（**解压后**的明文），不是 `iter_raw()`：上限必须卡在
+    解压后的大小上，否则一个几百字节的 gzip 炸弹能解出任意大的明文，上限形同虚设。
+    代价是调用方重建响应时**必须**把描述原始响应体的头剥掉 —— 见
+    `_headers_for_decoded_body`。
     """
     declared_length = response.headers.get("content-length")
     if declared_length and declared_length.isdigit() and int(declared_length) > limit:
@@ -155,6 +160,39 @@ def _read_capped(response: httpx.Response, limit: int, url: str) -> bytes:
             raise FetchError("too_large", url)
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+#: 重建响应时**必须剥掉**的头 —— 它们描述的是「原始响应体」。
+#:
+#: `iter_bytes()` 交给我们的 `content` 已经按 `Content-Encoding` 解压过了，
+#: 而原样带过去的头仍在声称「这个体是 gzip」：httpx 于是会在 `Response.read()`
+#: 里对明文再解压一次，抛 `DecodingError`。而它是 `httpx.HTTPError` 的子类，
+#: 会被 `_fetch_once` 兜成 `FetchError("transport_failed")` —— 界面报「网络传输
+#: 失败」，真实原因却是本地解压炸了。实测（httpx 0.28.1，本机）：6 个真实站点
+#: 全部返回 gzip，其中 5 个因此报 `transport_failed`，唯有唯一未压缩的那个走完。
+#: `Accept-Encoding: gzip` 本就是 httpx 的默认行为 —— 这一族缺陷对**任何**压缩
+#: 站点必现，而 mock 响应此前从不带 `Content-Encoding`，测试因此一直全绿。
+#:
+#: - `Content-Encoding`：解压已由 `iter_bytes()` 完成，交出去的是明文；
+#: - `Content-Length`：它是**压缩后**的长度，与明文长度矛盾（`httpx` 会依
+#:   `content=` 自行填出正确的 `Content-Length`）；
+#: - `Transfer-Encoding`：分块是逐跳的传输细节，体已被完整读进内存了。
+#:
+#: **不剥 `Content-Type`**：`charset` 就在里面，`_decode_text` 的编码回退依赖它。
+_BODY_DESCRIBING_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def _headers_for_decoded_body(headers: httpx.Headers) -> list[tuple[str, str]]:
+    """去掉描述原始响应体的头，保留其余（含 `Content-Type`）。
+
+    用 `multi_items()` 而非 `dict()`：同一个头出现多次（如多个 `Set-Cookie`、
+    `Vary`）时不能折叠 —— 那会悄悄丢掉除最后一个之外的所有取值。
+    """
+    return [
+        (key, value)
+        for key, value in headers.multi_items()
+        if key.lower() not in _BODY_DESCRIBING_HEADERS
+    ]
 
 
 def _resolve_redirect(current: str, location: str) -> str | None:
@@ -321,7 +359,10 @@ class HttpFetcher:
                     body = b"" if followed_redirect else _read_capped(stream, self.max_bytes, url)
                     response = httpx.Response(
                         status,
-                        headers=stream.headers,
+                        # 体已在 `_read_capped` 里解压成明文，描述原始体的头必须剥掉，
+                        # 否则 httpx 会对明文再解压一次并抛 `DecodingError`（详见
+                        # `_headers_for_decoded_body`）。
+                        headers=_headers_for_decoded_body(stream.headers),
                         content=body,
                         request=stream.request,
                     )
