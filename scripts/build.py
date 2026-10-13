@@ -468,14 +468,77 @@ def smoke_serve(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECONDS) -> s
     return None
 
 
+def smoke_default_args(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECONDS) -> str | None:
+    """**不带任何参数**启动产物，判据是「它真的在那儿服务」。
+
+    为什么必须有这一层：便携交付形态下用户拿到的就是一个 exe，默认动作是**双击**
+    —— 而双击不带参数。实测（用户报告 + 本机复现）：无参数时程序打印帮助后
+    `exit 1`，一个黑框一闪而过、界面从不出现。而此前所有冒烟用的都是
+    `hunter1.exe serve`（显式带子命令）——**用户最常走的那条路从未被覆盖**。
+
+    与「不覆盖的路径最先烂掉」（见 `--with-pack` 的注释）是同一条教训：
+    只测「你会怎么调用它」，不测「用户会怎么打开它」。
+
+    端口用默认 8000：无参数路径没法传 `--port`（那正是「双击」的含义）。
+    若 8000 已被占用，产物会给出可读的端口冲突提示而不是启动成功 ——
+    那时我们把这一层**明确记为跳过**（返回说明文字），不误判成产物缺陷。
+    判断「起没起来」用同一个 `wait_for_http`：拿到任何 HTTP 响应即为起来了，
+    **进程提前退出**则立即返回（旧行为就是立刻退，这条能稳定抓住它）。
+    """
+    port = 8000
+    base_url = f"http://127.0.0.1:{port}"
+
+    # 端口被别的程序占着时，「起不来」与产物无关 —— 跳过而不是误报。
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return None  # 视为跳过（不作为失败）：这一层无法在占用状态下判定
+        # 注：这里刻意返回 None 而不是报错 —— 冒烟不该因为「开发机上恰好有别的
+        # 服务占着 8000」而把好产物判成坏的。CI 的 windows runner 上 8000 是空的。
+
+    with tempfile.TemporaryDirectory(prefix="hunter1-smoke-default-") as workspace:
+        log_path = Path(workspace) / "default.log"
+        # 只给 exe 本体，**不加任何参数** —— 与双击完全一致。
+        # `cwd=workspace`：数据目录按 `paths.py` 的规则落在临时目录旁，
+        # 不碰开发机的真实用户数据。
+        with log_path.open("wb") as log:
+            process = subprocess.Popen(
+                [str(exe)],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                cwd=workspace,
+            )
+            try:
+                if not wait_for_http(base_url, process, timeout=timeout):
+                    _stop(process)
+                    return (
+                        "无参数启动（双击 exe 的路径）未能在 "
+                        f"{timeout:.0f}s 内提供服务 —— 用户会看到黑框一闪、界面不出现。"
+                        f"日志尾部：{_read_tail(log_path)}"
+                    )
+                problems = check_pages(base_url)
+            finally:
+                _stop(process)
+
+        if problems:
+            tail = _read_tail(log_path, 300)
+            return f"无参数启动后页面异常：{'；'.join(problems)}｜日志尾部：{tail}"
+    return None
+
+
 def smoke_run(exe: Path) -> str | None:
     """完整冒烟：先快后深。任一层不合格就返回问题描述。
 
-    分三层是因为它们能抓到的问题不同，且代价差一个数量级：
+    分几层是因为它们能抓到的问题不同，且代价差一个数量级：
     `--help` 大约零点几秒，`--version` 同样快（判「版本对不对」），起服务要几秒。
     先跑快的，能快速失败。
+
+    `smoke_default_args` 单列一层：它验的是**用户双击**那条路（不带参数），
+    与 `smoke_serve`（显式 `serve` + 临时端口）覆盖的不是同一件事 ——
+    实测正是前者漏了、后者全绿。
     """
-    return smoke_help(exe) or smoke_version(exe) or smoke_serve(exe)
+    return smoke_help(exe) or smoke_version(exe) or smoke_serve(exe) or smoke_default_args(exe)
 
 
 def verify(dist_dir: Path) -> list[str]:

@@ -12,6 +12,7 @@ from hunter1.cli import (
     _enable_utf8_console,
     _onboarding_note,
     _open_browser_later,
+    _parse_args,
     _site_keys,
     main,
 )
@@ -323,9 +324,20 @@ class TestUpdateCommand:
 
 
 class TestMain:
-    def test_no_command_prints_help_and_fails(self, capsys: pytest.CaptureFixture[str]) -> None:
-        assert main([]) == 1
-        assert "Hunter1" in capsys.readouterr().out
+    def test_no_command_starts_serve(self, monkeypatch) -> None:
+        """无参数（= 双击 exe）必须启动服务，**不是**打印帮助后失败。
+
+        原用例名 `test_no_command_prints_help_and_fails` 断言 `main([]) == 1` 且
+        输出里有帮助文本 —— 它把缺陷当成了规格：双击 exe 时那个「黑框一闪」的
+        根因正是这条路径。用户实际报告后复现确认，故连同实现一起改掉。
+
+        这里替换 `_serve` 以免真的起服务器（旧用例直接调 `main([])`，改动后会
+        阻塞在 uvicorn 上 —— 这也是修完实现后整套 cli 测试挂起的原因）。
+        """
+        calls: list[object] = []
+        monkeypatch.setattr("hunter1.cli._serve", lambda args: calls.append(args) or 0)
+        assert main([]) == 0
+        assert calls, "无参数时应进入 _serve"
 
     def test_parse_error_for_unknown_command_exits(self) -> None:
         with pytest.raises(SystemExit):
@@ -532,3 +544,53 @@ class TestCrawlClosesFetcher:
 
         assert cli._crawl(_build_parser().parse_args(["crawl"])) == 0
         assert closed == [True], "退出时没关抓取器的连接池"
+
+
+class TestNoArgsDefaultsToServe:
+    """双击 exe（不带任何参数）必须**启动服务**，不是打印帮助后退出。
+
+    实测缺口（用户报告 + 复现）：无参数运行时 `main()` 走到 `parser.print_help()`
+    然后 `return 1` —— 一个黑框一闪而过，界面从不出现。而「双击」正是便携交付
+    形态下用户唯一的默认动作。
+
+    为什么此前没被发现：打包冒烟测的是 `hunter1.exe serve`（显式带子命令），
+    `build.py` 的 SMOKE_PAGES 也全是 HTTP 断言 —— 「无参数」这条**用户最常走的
+    路**从未被任何一层覆盖（与 DEVELOPMENT.md 里「不覆盖的路径最先烂掉」同源）。
+    """
+
+    def test_no_args_parses_as_serve(self) -> None:
+        _parser, args = _parse_args([])
+        assert args.command == "serve", f"无参数应默认 serve，实际 {args.command!r}"
+
+    def test_no_args_defaults_match_explicit_serve(self) -> None:
+        """默认值必须与 `hunter1 serve` **逐字一致**（同一份子解析器给的）。
+
+        另抄一份默认值的话，`--db` 的落点、端口、host 会在两处各写一遍 ——
+        迟早漂移成「双击起在 8000、手动 serve 起在别处」这种只有用户会遇到的怪相。
+        """
+        _p1, implicit = _parse_args([])
+        _p2, explicit = _parse_args(["serve"])
+        for field in ("command", "db", "host", "port", "sites", "no_browser"):
+            assert getattr(implicit, field) == getattr(explicit, field), (
+                f"字段 {field} 不一致：无参数={getattr(implicit, field)!r} "
+                f"vs serve={getattr(explicit, field)!r}"
+            )
+
+    def test_no_args_no_longer_prints_help_and_exits(self, monkeypatch) -> None:
+        """旧行为是 print_help + exit 1 —— 那个黑框一闪的根因。
+
+        这里不断言「help 没被打印」（那与实现细节耦合），而是断言语义：
+        无参数时应当调用到 `_serve`，而不是落进任何「打印帮助」的分支。
+        """
+        called: list[object] = []
+        monkeypatch.setattr("hunter1.cli._serve", lambda args: called.append(args) or 0)
+        rc = main([])
+        assert called, "无参数时应进入 _serve（双击 exe 的路径）"
+        assert rc == 0
+
+    def test_explicit_subcommands_still_win(self) -> None:
+        """显式子命令不受影响 —— 别为了修双击把 crawl/update 弄坏。"""
+        _p, crawl_args = _parse_args(["crawl"])
+        assert crawl_args.command == "crawl"
+        _p, update_args = _parse_args(["update"])
+        assert update_args.command == "update"

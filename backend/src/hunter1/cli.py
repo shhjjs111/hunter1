@@ -53,7 +53,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"hunter1 {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    serve = sub.add_parser("serve", help="启动本地 Web UI")
+    serve = sub.add_parser("serve", help="启动本地 Web UI（不带参数直接运行 = 这个）")
     serve.add_argument("--db", default=str(default_db_path()), help="SQLite 路径")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -76,6 +76,28 @@ def _build_parser() -> argparse.ArgumentParser:
     update.add_argument("--dest", default="", help="下载目标目录（默认 data/updates）")
 
     return parser
+
+
+def _parse_args(argv: Sequence[str] | None) -> tuple[argparse.ArgumentParser, argparse.Namespace]:
+    """解析命令行；**不带子命令时默认走 `serve`**。
+
+    便携交付形态下，用户拿到的就是一个 `hunter1.exe`，默认动作是**双击**——
+    而双击不带任何参数。此前那种情况会 `print_help()` 然后 exit 1：一个黑框
+    一闪而过，用户以为程序坏了（实测：双击后只看到黑框，界面从不出现）。
+
+    这与打包冒烟形成一个盲区闭环：冒烟测的是 `hunter1.exe serve`（显式带子命令），
+    所以「无参数」这条**用户最常走的路**从未被任何测试覆盖。
+
+    默认值直接从 `serve` 子解析器取（`parse_args([])`），不另抄一份 —— 否则
+    `--db` 的默认路径、端口、host 会在两处各写一遍，迟早漂移。
+    """
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:
+        # 借用 serve 子解析器自己的默认值，保证与 `hunter1 serve` 完全一致。
+        serve_defaults = parser.parse_args(["serve"])
+        args = serve_defaults
+    return parser, args
 
 
 def _onboarding_note(*, is_new_db: bool, configured: bool) -> str | None:
@@ -336,8 +358,8 @@ def _enable_utf8_console(*streams: object) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     _enable_utf8_console()
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    # 不带子命令（= 双击 exe）**默认进 serve**，见 `_parse_args`。
+    _parser, args = _parse_args(argv)
     try:
         if args.command == "serve":
             return _serve(args)
@@ -358,8 +380,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"数据库初始化失败（结构性错误，换 --db 路径没有用）：{exc}")
         print("这更像实现或数据迁移缺陷；请把上面这行原文附在问题里。")
         return 2
-    parser.print_help()
-    return 1
+    # 三个子命令都在上面分派掉了，走到这里是**实现缺陷**（新增子命令忘了接线）。
+    # 原先这里 print_help + return 1 —— 那是「无参数」走的路径，现在无参数已归
+    # 到 serve，所以这里只剩「新子命令没接」这种情况。大声说出来，别伪装成帮助。
+    print(f"内部错误：子命令 {args.command!r} 没有对应的处理函数。", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
