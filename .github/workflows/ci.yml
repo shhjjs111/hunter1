@@ -5,8 +5,30 @@ on:
     branches: ["main"]
   pull_request:
 
+# 同一分支连推多次时，取消**仍在排队/运行**的旧 run，只保留最新的。
+#
+# 为什么必需：本 workflow 一次要真打包（PyInstaller，数分钟），而提交常常连着来。
+# 没有这一条时实测出现「同一分支 3 个 run 同时 in_progress」—— 它们互相抢
+# windows runner 配额，既拖慢最新那次，也在 Actions 页面上制造噪音。
+#
+# `github.ref` 对 push 是分支、对 PR 是 refs/pull/<n>/merge，两组各自独立取消，
+# 不会出现「PR 的 run 把 main 的 run 杀了」。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
+    # 硬超时。**默认值（360 分钟 = 6 小时）太长了**，实测吃过一次：
+    # 一个卡住的 job 静默烧满 6 小时才被 GitHub 取消，期间只看到 Actions 一直
+    # 转圈，且日志里没有失败信息（pytest 的进度点停在原地）。
+    #
+    # 25 分钟的依据：正常一次全量（含 --with-pack 真打包）在本机约 2~4 分钟，
+    # windows runner 冷启动 + 装依赖约 3~5 分钟，总余量充足。
+    # 超时会让 job 以 failure 结束 —— 这比「转 6 小时」好得多：失败是**信号**，
+    # 转圈是**噪音**。真需要更久时调大这个数字，而不是删掉它。
+    timeout-minutes: 25
+
     # 跑在 **windows-latest**，不是 ubuntu —— 本工具的用户只有 Windows
     # （README 的「跨平台」是历史声明；实际交付目标是 Windows 便携包）。
     #
