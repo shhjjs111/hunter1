@@ -88,6 +88,22 @@ testpaths = ["tests"]
 addopts = "-q"
 # 允许不安装即可从 src 导入（配合 `pip install -e .` 双保险）；"." 让 tests 包可导入
 pythonpath = ["src", "."]
+# 任何**单个测试**超过 300 秒就 dump 全部线程堆栈（pytest 内置 faulthandler 插件）。
+#
+# 为什么需要：实测吃过一次 —— CI 上一个 job 卡到 GitHub 的 6 小时上限才被取消，
+# 而日志里只有一串进度点，看不出卡在哪个用例、卡在哪一行。**挂死的诊断成本
+# 远高于挂死本身**，这条把「静默等待」变成「超时即打印堆栈，精确指到那一行」。
+#
+# 实测行为（不是推测）：`-o faulthandler_timeout=4` 对一个 `time.sleep(60)` 的
+# 用例，4 秒后打印 `Timeout (0:00:04)!` + 完整堆栈（精确指出
+# `test_hangs` 那一行），但**进程不会因此终止** —— 它只 dump，不 kill。
+# 所以它是**诊断**手段，不是 fail-fast 机制；真正的硬超时由 CI 的
+# `timeout-minutes` 兜底（见 .github/workflows/ci.yml）。
+#
+# 300 秒的依据：本机全量最慢的单用例约 2.2 秒（见 `--durations` 输出），
+# CI 上放大约 3~5 倍仍在 15 秒内。300 秒给足了慢 runner 的余量，
+# 又能让「真挂住」在 5 分钟内自报位置，而不是等 6 小时。
+faulthandler_timeout = 300
 
 [tool.coverage.run]
 source = ["src/hunter1"]

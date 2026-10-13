@@ -50,6 +50,7 @@ def _ruff_exit_code(cwd: Path, target: Path) -> int:
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=180,
     )
     return completed.returncode
 

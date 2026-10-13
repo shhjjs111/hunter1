@@ -176,5 +176,6 @@ def _id_from_fresh_process() -> str:
         encoding="utf-8",
         errors="replace",
         check=True,
+        timeout=120,
     )
     return completed.stdout.strip()

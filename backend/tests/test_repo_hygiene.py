@@ -158,6 +158,11 @@ def _git(*args: str) -> str:
     显式 `encoding="utf-8"`：`text=True` 不给 encoding 时按宿主 locale 解码，
     Windows 简中是 cp936 —— 这个坑本仓已踩过（见 `test_gate_guards.py` 的注释），
     别再踩一次。
+
+    显式 `timeout`：没有它，一个挂住的子进程会让**整个测试会话无限等待** ——
+    CI 上表现为 job 一直 `in_progress` 直到 GitHub 6 小时上限把它取消，
+    而日志里只有进度点，看不出卡在哪。加了它，挂起在 N 秒后就变成一次
+    明确的 `TimeoutExpired` 失败，指向具体是哪个调用。
     """
     proc = subprocess.run(
         ["git", *args],
@@ -167,6 +172,7 @@ def _git(*args: str) -> str:
         errors="replace",
         cwd=ROOT,
         check=True,
+        timeout=120,
     )
     return proc.stdout
 

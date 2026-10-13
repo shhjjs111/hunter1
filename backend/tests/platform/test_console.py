@@ -72,6 +72,7 @@ class TestEnableUtf8Console:
             capture_output=True,
             text=True,
             check=False,
+            timeout=180,
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "", f"console 模块拖进了重依赖：{result.stdout!r}"

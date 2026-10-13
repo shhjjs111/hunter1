@@ -90,6 +90,7 @@ def test_exporter_is_runnable_as_a_script(tmp_path: Path) -> None:
         errors="replace",
         check=False,
         cwd=ROOT,
+        timeout=180,
     )
     assert proc.returncode == 0, proc.stderr
     assert b"\r\n" not in out.read_bytes()
