@@ -7,11 +7,13 @@
 用 `SiteDefinition.crawler_class` 挂进来。
 
 选择器的可核销依据：每个站点的选择器都对**真实页面**核对过，
-并在 `tests/slices/crawl/fixtures/<key>.html` 留了 HTML 快照供离线回归
-（见 tests/slices/crawl/test_sites.py）。
+并在 `tests/slices/crawl/fixtures/<key>.html` 留了 HTML 快照供离线回归；
+声明了 `detail_selector` 的站点另有 `<key>_detail.html` 详情页快照
+（见 tests/slices/crawl/test_sites.py，用 `scripts/refresh_fixtures.py` 刷新）。
 
-合规提示：这些站点只抓**公开列表页**上的岗位信息，不做登录、不绕验证码、
-不做自动投递。`max_pages` 刻意压低，避免给站点压力。
+合规提示：这些站点只抓**公开列表页与公开详情页**上的岗位信息 ——
+不做登录、不绕验证码、不做自动投递。`max_pages` 刻意压低，
+详情页每站每轮另有 `DETAIL_LIMIT` 上限（见 service.py），避免给站点压力。
 """
 
 from __future__ import annotations

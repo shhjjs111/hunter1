@@ -40,15 +40,15 @@ KEEP = 3
 FIXTURES = ROOT / "backend" / "tests" / "slices" / "crawl" / "fixtures"
 
 
-def prune(html: str, item_selector: str) -> str:
-    """保留前 KEEP 个条目及其祖先/后代，其余节点全部删除。"""
+def prune(html: str, item_selector: str, count: int = KEEP) -> str:
+    """保留前 `count` 个条目及其祖先/后代，其余节点全部删除。"""
     soup = BeautifulSoup(html, "lxml")
     items = soup.select(item_selector)
-    if len(items) < KEEP:
-        raise ValueError(f"页面里只找到 {len(items)} 条，少于 {KEEP}")
+    if len(items) < count:
+        raise ValueError(f"页面里只找到 {len(items)} 条，少于 {count}")
 
     keep: set[int] = set()
-    for item in items[:KEEP]:
+    for item in items[:count]:
         keep.add(id(item))
         keep.update(id(anc) for anc in item.parents)
         keep.update(id(desc) for desc in item.find_all(True))
@@ -60,6 +60,39 @@ def prune(html: str, item_selector: str) -> str:
             continue
         element.decompose()
     return str(soup)
+
+
+def refresh_detail(key: str, http: HttpFetcher, detail_url: str) -> tuple[int, int]:
+    """抓一个详情页并裁成快照（保留 JD 正文容器 + 其祖先链）。
+
+    快照名与列表页区分开：`<key>_detail.html`。列表页快照是「列表选择器还认得
+    真实页面」的证据，这一份是「**详情选择器**还认得真实页面」的证据 ——
+    站点改版时它会先红，比用户发现「JD 全空了」早得多。
+
+    裁剪保留**全部**命中容器（`count` 传该选择器的命中数），不是只留第一个：
+    实测高校人才网一个详情页有 4 个 `.detail-item`（基本信息 / 其他要求 /
+    岗位职责 / 任职要求），只留第一个会让快照只能解析出 76 字而非 1068 字 ——
+    快照与实际抓取行为不符，回归用例就守不住「多容器拼接」这条语义。
+    保留祖先链也是必要的：正文容器常靠父级 class 定位。
+    """
+    site = SITES[key]
+    selector = site.spec.detail_selector
+    assert selector is not None, f"{key} 没声明 detail_selector"  # noqa: S101
+    headers = {"Referer": site.spec.detail_referer} if site.spec.detail_referer else None
+    html = http.get_text(detail_url, headers=headers)
+    ensure_not_blocked(html, url=detail_url)
+
+    # 有多少个命中容器就留多少个 —— 与 `parse_detail_page` 的「拼接全部」对齐。
+    hit_count = len(BeautifulSoup(html, "lxml").select(selector))
+    if hit_count == 0:
+        raise ValueError(f"页面里找不到 {selector!r} —— 详情选择器可能已失效")
+    pruned = prune(html, selector, count=hit_count)
+
+    path = FIXTURES / f"{key}_detail.html"
+    before = path.stat().st_size if path.exists() else 0
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    path.write_text(pruned, encoding="utf-8", newline="\n")
+    return before, path.stat().st_size
 
 
 def refresh(key: str, http: HttpFetcher) -> tuple[int, int]:
@@ -101,6 +134,28 @@ def main(argv: list[str]) -> int:
             except Exception as exc:  # 站点改版/风控属预期失败，逐站报告即可
                 failed.append(key)
                 print(f"[FAIL] {key:<16} {type(exc).__name__}: {exc}")
+                continue
+
+            # 详情页快照：只对**声明了 detail_selector 且列表快照刷新成功**的站做。
+            # 详情页抓不到不算「刷新失败」——它在生产里也只是让该条没 JD
+            # （见 `crawl_company` 的 per-job 隔离），不该拦住列表快照的成果。
+            if SITES[key].spec.detail_selector is None:
+                continue
+            try:
+                jobs = parse_list_page(
+                    (FIXTURES / f"{key}.html").read_text(encoding="utf-8"),
+                    SITES[key].spec,
+                    company=SITES[key].label,
+                    page_url=SITES[key].careers_url,
+                )
+                if not jobs:
+                    print(f"[SKIP] {key:<16} 列表快照解析不出岗位，跳过详情页快照")
+                    continue
+                before, after = refresh_detail(key, http, jobs[0].detail_url)
+                delta = f"{before} → {after}" if before else f"新建 {after}"
+                print(f"[OK  ] {key:<16} 详情页 {delta} 字节")
+            except Exception as exc:
+                print(f"[WARN] {key:<16} 详情页快照未更新：{type(exc).__name__}: {exc}")
 
     if failed:
         print(f"\n{failed} 刷新失败；旧快照保留，请人工核对选择器。")
