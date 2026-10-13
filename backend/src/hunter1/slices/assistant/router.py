@@ -260,14 +260,21 @@ def build_router(
             raise
         except LLMError as exc:
             # 上游模型失败（端口契约 `LLMProvider` 约定失败抛 `LLMError`）：
-            # 与 scoring 切片**同一状态码** 422 + 可读原因 —— 同一个上游故障在
-            # 两处给两种码，前端与文档就都得各记一套（原先这里是 502）。
+            # 与 scoring 切片**同一状态码** 422 + **同一文案来源**
+            # （`describe_llm_error`）—— 同一个上游故障在两处给两种码/两种文案，
+            # 前端与文档就都得各记一套。
+            #
+            # 文案必须过 `describe_llm_error`：原先这里是裸 `str(exc)`，用户看到的是
+            # `"transport_failed"` 这种机器码，读不出「该去检查什么」。同文件的
+            # `_stream_error_message` 与 scoring 的 `run_scoring` 都已这么做，
+            # 只有这两个端点的**入口**漏了（实测：POST /api/assistant/turn 返回
+            # `{"detail":"transport_failed"}`）。
             #
             # 刻意**不**捕宽泛的 `Exception`：抛别的说明是实现 bug（TypeError…），
             # 那种情况应当响亮地 500，而不是被伪装成「上游故障」—— 伪装会让人
             # 拿着错误的线索去查网络与厂商。
             # 不落库：失败的尝试不留会话（免得下次把失败那句当上下文）。
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=describe_llm_error(exc)) from exc
         finally:
             # 客户端每请求新建 —— 用完释放，别把连接池攒在进程里。
             # `llm` 可能仍是 None：工厂自己抛错时没有任何东西可关。
@@ -343,7 +350,9 @@ def build_router(
         try:
             llm = llm_factory()
         except LLMError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            # 同 `/turn`：走 `describe_llm_error` 给可行动中文，不吐裸机器码
+            # （`str(exc)` 会是 `"transport_failed"` 这种东西）。
+            raise HTTPException(status_code=422, detail=describe_llm_error(exc)) from exc
         # 所有权交给 generator：真正的消费发生在响应体被读取时（端点这时早已返回），
         # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
         # 会 close 这个 generator，finally 同样会跑到。

@@ -310,6 +310,27 @@ class TestTurnEndpoint:
             assert "upstream_failed" in response.json()["detail"]
             assert db.conversations().list() == []
 
+    def test_model_failure_detail_is_actionable_chinese(self, db: Database) -> None:
+        """失败文案必须是**可行动的中文**，不能是裸机器码。
+
+        原先 `detail=str(exc)`，用户拿到的是 `"transport_failed"` / 本例的
+        `"upstream_failed: 模型不可用"` —— 读不出「该去检查什么」。同文件的
+        `_stream_error_message` 与 scoring 的 `run_scoring` 都已走
+        `describe_llm_error`，只有这个端点的入口漏了。
+
+        ⚠️ 上面那条用例断言的是 `"upstream_failed" in detail` —— 裸 `str(exc)`
+        同样包含该子串，**所以它拦不住这个缺陷**（实测：修复前后它都是绿的）。
+        这一条改为断言「包了中文说明的括号格式」，才能真正钉住文案来源。
+        """
+        for client in _client(db, ScriptedLLM(boom=True)):
+            response = client.post("/api/assistant/turn", json={"message": "你好"})
+            detail = response.json()["detail"]
+            # `describe_llm_error` 的产出形如「<可行动中文>（<code>：<原始说明>）」——
+            # 中文全角括号是它独有的标记，且 code 仍保留（排查要靠它）。
+            assert "（" in detail and "）" in detail, f"文案未过 describe_llm_error：{detail!r}"
+            assert "upstream_failed" in detail, "原始 code 应保留在括号里供排查"
+            assert detail != "upstream_failed: 模型不可用", "不能是裸的 str(exc)"
+
     def test_non_contract_failure_is_not_masked_as_upstream(self, db: Database) -> None:
         """实现 bug（TypeError 之类）必须响亮地失败，不能伪装成「上游故障」。
 
