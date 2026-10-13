@@ -481,3 +481,125 @@ def test_blocked_page_is_reported_as_error_not_empty_result(db: Database) -> Non
     assert result.error is not None
     assert "blocked" in result.error
     assert result.fetched == 0
+
+
+class DetailCrawler:
+    """带 `fetch_detail` 的替身 —— 模拟「声明了详情能力的适配器」。
+
+    刻意用 `fetch_detail` 属性而非继承：真实实现是 `StaticHtmlCrawler` 的方法，
+    而另一些适配器（自定义 `BaseCrawler` 子类）没有它 —— `crawl_company` 用
+    `getattr` 探测，这个替身正是那条探测路径的正面样本。
+    """
+
+    def __init__(
+        self,
+        company: str,
+        jobs: list[RawJob],
+        *,
+        details: dict[str, str | None] | None = None,
+        boom_on: str | None = None,
+        key: str = "",
+    ) -> None:
+        self.key = key or company
+        self.company = company
+        self.careers_url = "https://example.com/careers"
+        self._jobs = jobs
+        self._details = details or {}
+        self._boom_on = boom_on
+        self.detail_calls: list[str] = []
+
+    def fetch(self) -> list[RawJob]:
+        return list(self._jobs)
+
+    def fetch_detail(self, url: str) -> str | None:
+        self.detail_calls.append(url)
+        if self._boom_on is not None and url == self._boom_on:
+            raise RuntimeError("详情页炸了")
+        return self._details.get(url)
+
+
+class TestDetailBackfill:
+    """抓取时回填 JD 正文 —— `jd_raw` 此前恒为空（实测用户库 477 条全空）。"""
+
+    def test_fills_jd_raw_on_new_job(self, db: Database) -> None:
+        """新增岗位：详情抓到正文 → 落库后 `jd_raw` 非空。"""
+        url = "https://example.com/j/1"
+        crawler = DetailCrawler(
+            "甲", [_raw("AI产品经理", url)], details={url: "岗位职责：负责产品规划"}
+        )
+        crawl_company(crawler, jobs=db.jobs())  # type: ignore[arg-type]
+
+        stored = db.jobs().get_many(
+            [job_identity(detail_url=url, company="甲", title="AI产品经理")]
+        )
+        job = next(iter(stored.values()))
+        assert job.jd_raw == "岗位职责：负责产品规划"
+
+    def test_marks_complete_when_detail_captured(self, db: Database) -> None:
+        """详情抓成功 → `CaptureStatus.COMPLETE`。
+
+        这个枚举早已定义却**全仓零写入点**（实测 grep 只有 PENDING 一处）——
+        不回填状态，「已抓 JD」和「待抓」在界面上就分不开。
+        """
+        from hunter1.domain.models import CaptureStatus
+
+        url = "https://example.com/j/1"
+        crawler = DetailCrawler("甲", [_raw("岗位", url)], details={url: "JD 正文"})
+        crawl_company(crawler, jobs=db.jobs())  # type: ignore[arg-type]
+
+        stored = db.jobs().get_many([job_identity(detail_url=url, company="甲", title="岗位")])
+        assert next(iter(stored.values())).capture_status == CaptureStatus.COMPLETE
+
+    def test_marks_failed_when_detail_returns_none(self, db: Database) -> None:
+        """详情抓不到（改版/风控/无选择器）→ `FAILED`，但仍正常入库。"""
+        from hunter1.domain.models import CaptureStatus
+
+        url = "https://example.com/j/1"
+        crawler = DetailCrawler("甲", [_raw("岗位", url)], details={url: None})
+        result = crawl_company(crawler, jobs=db.jobs())  # type: ignore[arg-type]
+
+        assert result.ok, "详情抓不到不该让整站失败"
+        stored = db.jobs().get_many([job_identity(detail_url=url, company="甲", title="岗位")])
+        job = next(iter(stored.values()))
+        assert job.capture_status == CaptureStatus.FAILED
+        assert job.jd_raw is None
+
+    def test_detail_exception_does_not_fail_the_site(self, db: Database) -> None:
+        """**最关键的一条**：详情抛错 → 该站仍 ok，其余岗位照常入库。
+
+        防的是「整站被连累」：`crawl_company` 的 `except` 会把整站标红，
+        若回填不在 per-job 隔离里，一条详情失败 = 几百条岗位全不落库。
+        """
+        bad = "https://example.com/j/bad"
+        good = "https://example.com/j/good"
+        crawler = DetailCrawler(
+            "甲",
+            [_raw("坏岗", bad), _raw("好岗", good)],
+            details={good: "好岗 JD"},
+            boom_on=bad,
+        )
+        result = crawl_company(crawler, jobs=db.jobs())  # type: ignore[arg-type]
+
+        assert result.ok, f"详情抛错连累了整站：{result.error}"
+        assert result.created == 2, "另一条岗位必须照常入库"
+
+    def test_existing_jd_is_not_overwritten(self, db: Database) -> None:
+        """已有 JD 不被覆盖，且**不重复请求详情页**（省请求量）。"""
+        url = "https://example.com/j/1"
+        jobs = db.jobs()
+        seeded = DetailCrawler("甲", [_raw("岗位", url)], details={url: "第一版 JD"})
+        crawl_company(seeded, jobs=jobs)  # type: ignore[arg-type]
+
+        again = DetailCrawler("甲", [_raw("岗位", url)], details={url: "第二版 JD"})
+        crawl_company(again, jobs=jobs)  # type: ignore[arg-type]
+
+        stored = jobs.get_many([job_identity(detail_url=url, company="甲", title="岗位")])
+        assert next(iter(stored.values())).jd_raw == "第一版 JD"
+        assert again.detail_calls == [], "已有 JD 的岗位不该再打一次详情页"
+
+    def test_crawler_without_fetch_detail_is_untouched(self, db: Database) -> None:
+        """没有 `fetch_detail` 的适配器照常工作（getattr 探测的负面样本）。"""
+        result = crawl_company(
+            FakeCrawler("乙", [_raw("岗位", "https://example.com/j/9")]), jobs=db.jobs()
+        )  # type: ignore[arg-type]
+        assert result.ok and result.created == 1
