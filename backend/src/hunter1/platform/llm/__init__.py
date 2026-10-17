@@ -365,6 +365,11 @@ class OpenAICompatibleClient:
                         yield event
                     return
                 body = response.read()
+        except LLMError as exc:
+            # SSE 的 error 帧由纯解析器构造，解析器不知道 API Key。所有 LLMError
+            # 在离开客户端边界前统一脱敏，避免网关把 Authorization 回显进错误帧后，
+            # 完整 Key 经助手界面、日志或用户复制而外泄。
+            raise self._redacted_error(exc) from exc
         except httpx.InvalidURL as exc:
             # 建连前 URL 非法（坏端口、坏 IDNA 主机名…）。`InvalidURL` 的 mro 是
             # `InvalidURL → Exception` —— **不是** `httpx.HTTPError`，只 catch HTTPError
@@ -379,7 +384,13 @@ class OpenAICompatibleClient:
             yield from self._degraded_stream(messages=messages, tools=tools, max_tokens=max_tokens)
             return
 
-        yield from self._stream_from_body(body)
+        try:
+            # 这条兜底路径专门接住「正文是 SSE，但代理没标 event-stream」的网关。
+            # 它和上面的标准 SSE 分支一样可能从 error 帧里读到 Authorization 回显，
+            # 因此必须处在同一脱敏边界内。
+            yield from self._stream_from_body(body)
+        except LLMError as exc:
+            raise self._redacted_error(exc) from exc
 
     def _stream_from_body(self, body: bytes) -> Iterator[TextDelta | StreamComplete]:
         """响应体不是 SSE 分支时的处理。
@@ -513,6 +524,14 @@ class OpenAICompatibleClient:
     def _redact(self, text: str) -> str:
         """把厂商回显在错误体里的 API Key 抹掉（见 `platform.text.redact_secret`）。"""
         return redact_secret(text, self.api_key)
+
+    def _redacted_error(self, exc: LLMError) -> LLMError:
+        """保留错误码，只对错误详情做一次客户端级脱敏。"""
+        detail = str(exc)
+        prefix = f"{exc.code}: "
+        if detail.startswith(prefix):
+            detail = detail[len(prefix) :]
+        return LLMError(exc.code, self._redact(detail))
 
     def _retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
         """这次失败之后等多久再试。三件事，按优先级：

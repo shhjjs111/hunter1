@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 import pytest
 
+from hunter1.domain.assistant import Message, Role
 from hunter1.domain.llm import LLMError, StreamComplete, TextDelta
 from hunter1.platform.llm import OpenAICompatibleClient, parse_sse_lines
 
@@ -344,6 +345,67 @@ class TestParseSseLines:
             with pytest.raises(LLMError) as excinfo:
                 self._run(_wire(json.dumps(payload)))
             assert excinfo.value.code == "stream_error"
+
+    def test_provider_error_frame_is_redacted_at_client_boundary(self) -> None:
+        """SSE error 帧也可能回显 Authorization —— 离开客户端前必须抹掉 Key。"""
+        api_key = "sk-SECRET-in-stream-error-123456"
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return _sse(
+                [
+                    json.dumps(
+                        {
+                            "error": {
+                                "message": f"invalid organization for key {api_key}",
+                            }
+                        }
+                    )
+                ]
+            )
+
+        client = _client(handler, api_key=api_key)
+        with pytest.raises(LLMError) as excinfo:
+            list(
+                client.stream_with_tools(
+                    messages=[Message(Role.USER, "你好")],
+                    tools=[],
+                )
+            )
+        assert api_key not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {},
+            {"content-type": "text/plain"},
+        ],
+    )
+    def test_fallback_sse_error_is_redacted_at_client_boundary(
+        self, headers: dict[str, str]
+    ) -> None:
+        """缺失/错误的 Content-Type 走 SSE 兜底解析时也不能漏 Key。
+
+        这条分支存在的目的就是接住「正文是 SSE，但代理没标 event-stream」的网关；
+        解析器同样会从错误帧里读到完整的 Authorization 回显。脱敏不能只包住
+        标了 `text/event-stream` 的那一条路径。
+        """
+        api_key = "sk-SECRET-in-fallback-sse-123456"
+        body = json.dumps({"error": {"message": f"invalid key {api_key}"}})
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=f"data: {body}\n\n", headers=headers)
+
+        client = _client(handler, api_key=api_key)
+        with pytest.raises(LLMError) as excinfo:
+            list(
+                client.stream_with_tools(
+                    messages=[Message(Role.USER, "你好")],
+                    tools=[],
+                )
+            )
+        assert api_key not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
 
     def test_null_error_field_is_not_a_failure(self) -> None:
         """`"error": null` 是常见的字段占位 —— 不能误判成失败。"""
