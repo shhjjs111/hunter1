@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import sys
 import time
 from collections.abc import Iterator
@@ -25,6 +27,20 @@ from hunter1.platform.db.settings import SqliteSettingsRepository
 #: 写锁忙等待上限（毫秒）。显式设置，不依赖驱动隐式默认（5 秒）——
 #: 抓取线程与 FastAPI 线程池并发写同一库时，5 秒一到就抛 `database is locked`。
 BUSY_TIMEOUT_MS = 30_000
+
+
+def _restrict_permissions(path: Path, mode: int, *, posix: bool | None = None) -> None:
+    """在 POSIX 上收紧敏感文件/目录权限。
+
+    Windows 使用 ACL，`chmod` 的 POSIX 位没有等价语义，因此直接跳过。
+    `posix` 参数只给单测确定分支使用。
+    """
+    if posix is None:
+        posix = os.name != "nt"
+    if not posix or not path.exists():
+        return
+    with contextlib.suppress(OSError):
+        path.chmod(mode)
 
 
 class DatabaseLocationError(RuntimeError):
@@ -113,12 +129,16 @@ class Database:
             raise DatabaseLocationError(
                 self.path, reason="这是一个目录，不是一个数据库文件（--db 要指向文件）"
             )
+        parent_existed = self.path.parent.exists()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             # 裸的 PermissionError / FileExistsError 对用户毫无意义 ——
             # 他不知道是哪个路径、也不知道该改什么。
             raise DatabaseLocationError(self.path, exc) from exc
+        if not parent_existed:
+            # 只收紧**本次创建**的数据目录；用户显式指定的既有目录不擅自改权限。
+            _restrict_permissions(self.path.parent, 0o700)
         # 用 `URL.create` 而不是 f-string 拼 `sqlite:///{path}`：字符串 URL 会让
         # SQLAlchemy 对 database 分量做 percent-decode —— 路径里的 `%20` 会被解成
         # 空格、`%2F` 解成 `/`（实测：`D:/bak%20up/hunter1.db` → `D:/bak up/hunter1.db`）。
@@ -129,6 +149,9 @@ class Database:
             URL.create("sqlite", database=str(self.path)), future=True
         )
         _enable_sqlite_pragmas(self.engine)
+        # 旧版本可能已经留下宽权限文件。尽早收紧，别等 schema 初始化成功；
+        # 即使库损坏、初始化失败，里面的 API Key 也不该保持可被其他用户读取。
+        self._restrict_database_files()
 
     def initialize(self) -> None:
         """建表（幂等）+ 补写无法由 create_all 施加的唯一索引。
@@ -141,6 +164,7 @@ class Database:
         for attempt in range(1, _CONCURRENT_RETRIES + 1):
             try:
                 self._initialize_schema()
+                self._restrict_database_files()
                 return
             except DatabaseError as exc:
                 original = str(getattr(exc, "orig", None) or exc)
@@ -361,6 +385,15 @@ class Database:
     def dispose(self) -> None:
         self.engine.dispose()
 
+    def _restrict_database_files(self) -> None:
+        """数据库、WAL 与 SHM 都可能包含 API Key / 对话正文。"""
+        for path in (
+            self.path,
+            self.path.with_name(self.path.name + "-wal"),
+            self.path.with_name(self.path.name + "-shm"),
+        ):
+            _restrict_permissions(path, 0o600)
+
 
 def _enable_sqlite_pragmas(engine: Engine) -> None:
     """开启 WAL（并发读写）、外键约束与显式的忙等待上限；SQLite 默认不检查外键。
@@ -384,4 +417,4 @@ def _enable_sqlite_pragmas(engine: Engine) -> None:
             cursor.close()
 
 
-__all__ = ["Database", "DatabaseLocationError"]
+__all__ = ["Database", "DatabaseLocationError", "_restrict_permissions"]

@@ -26,7 +26,7 @@ from sqlalchemy.exc import OperationalError
 
 from hunter1.domain.models import Job
 from hunter1.platform.db import BUSY_TIMEOUT_MS, Database
-from hunter1.platform.db.database import DatabaseLocationError
+from hunter1.platform.db.database import DatabaseLocationError, _restrict_permissions
 
 
 def test_busy_timeout_pragma_is_explicit(tmp_path: Path) -> None:
@@ -436,3 +436,50 @@ class TestConcurrentInitialization:
             check.initialize()
         finally:
             check.dispose()
+
+
+def test_posix_permissions_are_restricted_for_sensitive_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "hunter1.db"
+    target.write_text("contains-api-key", encoding="utf-8")
+    seen: list[tuple[Path, int]] = []
+
+    def fake_chmod(path: Path, mode: int) -> None:
+        seen.append((path, mode))
+
+    monkeypatch.setattr(Path, "chmod", fake_chmod)
+    _restrict_permissions(target, 0o600, posix=True)
+
+    assert seen == [(target, 0o600)]
+
+
+def test_permission_hardening_is_a_noop_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "hunter1.db"
+    target.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        Path, "chmod", lambda *_args, **_kwargs: pytest.fail("Windows 分支不该 chmod")
+    )
+    _restrict_permissions(target, 0o600, posix=False)
+
+
+def test_existing_database_permissions_are_tightened_before_schema_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hunter1.platform.db.database as database_module
+
+    path = tmp_path / "existing.db"
+    path.write_text("not a real database", encoding="utf-8")
+    tightened: list[tuple[Path, int]] = []
+
+    def record(target: Path, mode: int, *, posix: bool | None = None) -> None:
+        tightened.append((target, mode))
+
+    monkeypatch.setattr(database_module, "_restrict_permissions", record)
+    database = Database(path)
+    try:
+        assert (path, 0o600) in tightened
+    finally:
+        database.dispose()
