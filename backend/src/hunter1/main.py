@@ -33,6 +33,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
 from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db import Database
+from hunter1.platform.web_security import SecurityBoundaryMiddleware
 from hunter1.slices.applications.router import build_router as build_applications_router
 from hunter1.slices.applications.store import ApplicationStore
 from hunter1.slices.assistant.job_tools import build_tools
@@ -186,7 +187,13 @@ class AppContext:
 
             # 生产装配在这里定「对站点多礼貌」：每主机 1 req/s + 遵守 robots.txt。
             # 平台层的默认值是「不额外等待」（测试要确定性、要快），策略留在组装根。
-            fetcher = HttpFetcher(timeout=20, retries=2, min_interval=1.0, respect_robots=True)
+            fetcher = HttpFetcher(
+                timeout=20,
+                retries=2,
+                min_interval=1.0,
+                respect_robots=True,
+                block_private_hosts=True,
+            )
         return cls(
             db=database,
             fetcher=fetcher,
@@ -224,6 +231,9 @@ def create_app(context: AppContext) -> FastAPI:
     # 单标签名（浏览器对它的请求根本发不出去），DNS rebinding 的攻击者既不能注册它、
     # 也不能让浏览器把请求的 Host 写成它；而真实攻击的 Host 永远是攻击者域名。
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(context.trusted_hosts))
+    # 纯 ASGI 中间件：校验跨站写入并补安全头。放在 TrustedHost 之后注册，
+    # 因此位于更外层 —— Host 被拒的 400 响应也带同一组安全头。
+    app.add_middleware(SecurityBoundaryMiddleware)
 
     def _runtime_llm() -> LLMProvider:
         """取当前模型配置构造客户端。

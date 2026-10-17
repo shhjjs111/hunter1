@@ -160,6 +160,33 @@ class TestSliceApisAreMounted:
         assert payload["items"] == []
         assert payload["total"] == 0 and payload["has_next"] is False
 
+    def test_security_headers_are_present(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        response = test_client.get("/api/jobs")
+        assert response.headers["x-frame-options"] == "DENY"
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+    def test_cross_site_bodyless_post_is_rejected(self, client) -> None:  # type: ignore[no-untyped-def]
+        """恶意页面用简单表单 POST 也不能触发抓取等无请求体写操作。"""
+        test_client, _db = client
+        response = test_client.post(
+            "/api/crawl",
+            headers={"Origin": "https://evil.example"},
+            content=b"x=1",
+        )
+        assert response.status_code == 403
+        assert "不受信任" in response.json()["detail"]
+
+    def test_development_origin_is_allowed(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        response = test_client.post(
+            "/api/crawl",
+            headers={"Origin": "http://127.0.0.1:5173"},
+            content=b"x=1",
+        )
+        assert response.status_code == 200
+
 
 class TestRealCrawlThroughApi:
     """抓取端点跑的是**真链路**：runner → crawl 用例 → SQLite。"""
