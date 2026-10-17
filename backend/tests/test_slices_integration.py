@@ -409,6 +409,10 @@ def _raw_asgi_get(
         "query_string": b"",
         "root_path": "",
         "headers": [(b"host", host.encode("ascii"))],
+        # 声明 ASGI pathsend 扩展，让 FileResponse 把文件路径交回测试端。
+        # CI 上曾实测 `anyio.open_file()` 的文件流在 `await send` 处卡住数分钟；
+        # 这里验证的是路由选了**哪一个文件**，不需要再经过一次文件流复制。
+        "extensions": {"http.response.pathsend": {}},
         "server": ("127.0.0.1", 8000),
         "client": ("127.0.0.1", 12345),
     }
@@ -418,6 +422,16 @@ def _raw_asgi_get(
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message: dict[str, Any]) -> None:
+        if message["type"] == "http.response.pathsend":
+            body = Path(str(message["path"])).read_bytes()
+            messages.append(
+                {
+                    "type": "http.response.body",
+                    "body": body,
+                    "more_body": False,
+                }
+            )
+            return
         messages.append(message)
 
     # 显式超时护栏。实测教训（CI，faulthandler 抓到的堆栈）：这个调用**可能在
