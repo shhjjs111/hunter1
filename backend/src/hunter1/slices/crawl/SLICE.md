@@ -53,8 +53,12 @@
 | 每主机请求间隔 | `min_interval=1.0` | UA 按主机固定 + 自动重试会放大请求密度 |
 | 遵守 `robots.txt` | `respect_robots=True` | 站点明确禁止 → `FetchError("robots_disallowed")`，不重试、不计主机故障 |
 | 单响应体积上限 | `max_bytes`（默认 8MB，**始终开**） | 重定向落到大文件会吃满内存；超限报 `too_large`，刻意**不静默截断**（半截 HTML 会产出看起来正常的残缺列表） |
+| 私网地址拦截 | `block_private_hosts=True` | 详情链接与每一跳重定向都来自外部页面；回环、内网、链路本地与云元数据地址一律拒绝（SSRF）。IP 固定发生在传输层，Client 仍保留原始域名，Cookie 按站点隔离；重试会在多个已校验公网地址间轮换 |
 
 加站点或改站点时别绕开 `HttpFetcher`（例如直接 `httpx.get`）—— 那会把这三条一起丢掉。
+
+单条 JD 在解析边界截断到 `MAX_JD_CHARS`（20 万字符），并附明确截断标记；
+HTTP 层 8 MiB 上限防的是单个响应，这一层防的是“合法大页面”放大成巨大的库行与 API 响应。
 
 ## 独立验证命令
 

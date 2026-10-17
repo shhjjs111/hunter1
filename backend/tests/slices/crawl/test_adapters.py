@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 
 from hunter1.slices.crawl.adapters import (
+    JD_TRUNCATED_NOTICE,
+    MAX_JD_CHARS,
     ListPageSpec,
     StaticHtmlCrawler,
     parse_detail_page,
@@ -715,6 +717,13 @@ class TestParseDetailPage:
         assert "基本信息" in text
         assert "岗位职责" in text, "第二个命中块被丢掉了"
         assert "任职要求" in text, "第三个命中块被丢掉了"
+
+    def test_oversized_jd_is_capped_with_explicit_notice(self) -> None:
+        html = '<div class="job-desc">' + ("A" * (MAX_JD_CHARS + 500)) + "</div>"
+        text = parse_detail_page(html, ".job-desc")
+        assert text is not None
+        assert len(text) == MAX_JD_CHARS + len(JD_TRUNCATED_NOTICE)
+        assert text.endswith(JD_TRUNCATED_NOTICE)
 
 
 class TestFetchDetail:

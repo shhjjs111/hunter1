@@ -26,6 +26,12 @@ from hunter1.application.ports import TextFetcher
 from hunter1.domain.crawl import RawJob, normalize_detail_url
 from hunter1.slices.crawl.guards import CrawlEmptyPageError, ensure_not_blocked
 
+#: 单条 JD 的落库上限。HTTP 响应已有 8 MiB 防护，但详情正文仍可能合法地
+#: 远大于一个岗位所需的文本；不设上限会让数量级更小的列表页放大成巨大的
+#: SQLite 行与 API 响应。截断会保留明确标记，避免静默丢内容。
+MAX_JD_CHARS = 200_000
+JD_TRUNCATED_NOTICE = "\n…（岗位描述过长，已截断）"
+
 
 class BaseCrawler:
     """所有站点适配器的基类。
@@ -255,7 +261,11 @@ def parse_detail_page(html: str, selector: str | None) -> str | None:
     soup = BeautifulSoup(html, "lxml")
     parts = [" ".join(node.get_text(" ", strip=True).split()) for node in soup.select(selector)]
     text = " ".join(part for part in parts if part)
-    return text or None
+    if not text:
+        return None
+    if len(text) > MAX_JD_CHARS:
+        text = text[:MAX_JD_CHARS] + JD_TRUNCATED_NOTICE
+    return text
 
 
 class StaticHtmlCrawler(BaseCrawler):
@@ -335,6 +345,8 @@ class StaticHtmlCrawler(BaseCrawler):
 
 
 __all__ = [
+    "JD_TRUNCATED_NOTICE",
+    "MAX_JD_CHARS",
     "BaseCrawler",
     "ListPageSpec",
     "StaticHtmlCrawler",
