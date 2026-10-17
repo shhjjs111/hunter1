@@ -34,7 +34,7 @@ class TestOriginPolicy:
         [
             "null",
             "file:///tmp/evil.html",
-            "https://user:pass@evil.example",
+            "https://user:pass@example.com",
             "https://evil.example:not-a-port",
         ],
     )
