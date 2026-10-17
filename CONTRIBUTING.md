@@ -76,11 +76,20 @@ docs/DEVELOPMENT.md。
 
 ## 提交变更
 
-1. Fork 仓库，从 `main` 建分支。
+仓库采用受保护主分支与 Pull Request 流程。`main` 上的提交必须来自 PR，
+并通过 `quality (3.12)` 门禁。
+
+1. Fork 仓库，从 `main` 建分支；分支名使用
+   `feat/<topic>`、`fix/<topic>`、`docs/<topic>`、`test/<topic>` 等前缀。
 2. 改代码 + 补测试。**新行为与缺陷修复都要有测试**；缺陷修复的测试应当
    **先能复现原缺陷**（RED），改完转绿（GREEN）。
 3. 跑 `bash scripts/check.sh` 至全绿。
-4. 开 Pull Request，说明动机、改动点、验证方式；关联相关 Issue。
+4. 开 Pull Request，标题使用 Conventional Commits，说明动机、改动点、验证方式；
+   关联相关 Issue。
+5. 等待 `quality (3.12)`、CodeQL 与 Dependency Review 完成。维护者使用 squash
+   merge 合并，远端分支自动删除。
+
+直接向 `main` push、force-push、删除受保护 tag 都会被 GitHub 规则集拒绝。
 
 ## 报告问题
 
