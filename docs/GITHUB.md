@@ -22,6 +22,7 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
   `CHANGELOG.md`。
 - Release tag 使用 annotated tag `vX.Y.Z`，指向待发布的 `main` 提交。
 - `v*` tag 受 active tag ruleset 保护，禁止删除和移动。
+- 已启用 immutable releases；正式发布后不得替换资产或改写说明。
 - Release 必须包含平台产物与 `manifest.json`，说明与 `CHANGELOG.md` 对应。
 - 已发布版本不移动 tag；修复通过新版本发布。
 
@@ -29,8 +30,9 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
 
 - `quality (3.12)` 在 Windows runner 上执行完整门禁，包括打包与冒烟。
 - CodeQL 对 Python 与 JavaScript/TypeScript 做安全扫描。
-- Dependency Review 拦截高风险依赖变更；Dependabot 每周更新 Python、npm 与
-  GitHub Actions 依赖。
+- Dependency graph 为 Dependency Review 提供依赖差异；Dependency Review 拦截
+  高风险依赖变更。
+- Dependabot 每周更新 Python、npm 与 GitHub Actions 依赖。
 - 第三方 action 必须固定到完整 40 位 commit SHA，由测试门禁检查。
 - Actions 只允许 GitHub 官方 action，并强制 SHA 固定；默认 token 仅有只读权限。
 
