@@ -6,6 +6,7 @@ TDD：本文件先于实现编写（当时为 RED；实现已落地，此后应�
 from __future__ import annotations
 
 import gzip
+import socket
 import zlib
 
 import httpx
@@ -389,6 +390,47 @@ class TestRobots:
         fetcher = self._fetcher_with_robots(clock, handler)
         assert fetcher.get_text("https://a.com/jobs") == "<html>ok</html>"
 
+    def test_robots_uses_the_same_host_pinned_user_agent(self, clock: FakeClock) -> None:
+        """robots 组选择与页面请求必须看到同一个 UA。"""
+        seen: dict[str, str | None] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen[request.url.path] = request.headers.get("user-agent")
+            if request.url.path == "/robots.txt":
+                return httpx.Response(200, text="User-agent: *\nAllow: /")
+            return httpx.Response(200, text="ok")
+
+        fetcher = self._fetcher_with_robots(clock, handler)
+        assert fetcher.get_text("https://a.com/jobs") == "ok"
+        assert seen["/robots.txt"] == seen["/jobs"]
+        assert seen["/robots.txt"] != "python-httpx/0.28.1"
+
+    def test_robots_and_page_use_the_private_network_guard(self, clock: FakeClock) -> None:
+        """生产装配同时开启 robots 与私网拦截时，两条请求都要走 IP 固定层。"""
+        seen: list[tuple[str, str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.url.host or "", request.headers["host"]))
+            if request.url.path == "/robots.txt":
+                return httpx.Response(200, text="User-agent: *\nAllow: /")
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            respect_robots=True,
+            retries=1,
+            block_private_hosts=True,
+            resolver=lambda _host: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+            ],
+        )
+        assert fetcher.get_text("https://a.com/jobs") == "ok"
+        assert seen == [
+            ("93.184.216.34", "a.com"),
+            ("93.184.216.34", "a.com"),
+        ]
+
     def test_unreachable_robots_is_reported_but_not_blocking(
         self, clock: FakeClock, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -601,6 +643,155 @@ class TestRedirects:
         with pytest.raises(FetchError) as excinfo:
             fetcher.get_text("https://a.com/x")
         assert excinfo.value.code == "invalid_redirect"
+
+    def test_redirect_to_private_address_is_rejected(self, clock: FakeClock) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.headers.get("host") == "a.com":
+                return httpx.Response(302, headers={"Location": "http://127.0.0.1/secret"})
+            return httpx.Response(200, text="secret")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            block_private_hosts=True,
+            resolver=lambda _host: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+            ],
+        )
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://a.com/jobs")
+        assert excinfo.value.code == "private_address_blocked"
+
+
+class TestPrivateNetworkGuard:
+    def test_literal_loopback_is_rejected_without_network_io(self, clock: FakeClock) -> None:
+        called = False
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal called
+            called = True
+            return httpx.Response(200, text="secret")
+
+        fetcher = _fetcher(clock, handler, block_private_hosts=True)
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("http://127.0.0.1:8080/admin")
+        assert excinfo.value.code == "private_address_blocked"
+        assert called is False
+
+    def test_hostname_resolving_to_private_address_is_rejected(self, clock: FakeClock) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text="secret")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            block_private_hosts=True,
+            resolver=lambda _host: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.7", 0))],
+        )
+        with pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://internal.example/jobs")
+        assert excinfo.value.code == "private_address_blocked"
+
+    def test_request_connects_to_the_validated_ip_with_original_host(
+        self, clock: FakeClock
+    ) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            block_private_hosts=True,
+            resolver=lambda _host: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+            ],
+        )
+        assert fetcher.get_text("https://public.example/jobs") == "ok"
+        assert seen[0].url.host == "93.184.216.34"
+        assert seen[0].headers["host"] == "public.example"
+        assert seen[0].extensions["sni_hostname"] == "public.example"
+
+    def test_connection_does_not_resolve_the_hostname_a_second_time(self, clock: FakeClock) -> None:
+        answers = iter(
+            [
+                [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))],
+                [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.9", 0))],
+            ]
+        )
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            block_private_hosts=True,
+            resolver=lambda _host: next(answers),
+        )
+        assert fetcher.get_text("https://rebind.example/jobs") == "ok"
+        assert len(calls) == 1
+        assert calls[0].url.host == "93.184.216.34"
+
+    def test_retries_fail_over_across_validated_public_addresses(self, clock: FakeClock) -> None:
+        """首个 A 记录连不上时，下一次尝试应换用另一个已校验的公网地址。"""
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            host = request.url.host or ""
+            seen.append(host)
+            if host == "93.184.216.34":
+                raise httpx.ConnectError("first address is down")
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            retries=2,
+            block_private_hosts=True,
+            resolver=lambda _host: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.35", 0)),
+            ],
+        )
+        assert fetcher.get_text("https://multi.example/jobs") == "ok"
+        assert seen == ["93.184.216.34", "93.184.216.35"]
+
+    def test_cookie_jar_keeps_original_host_isolation(self, clock: FakeClock) -> None:
+        """连接地址换成 IP 后，Cookie 仍必须按原始域名隔离并正常回传。"""
+        seen: list[tuple[str, str | None]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            host = request.headers["host"]
+            seen.append((host, request.headers.get("cookie")))
+            if host == "a.example" and request.url.path == "/start":
+                return httpx.Response(
+                    200,
+                    text="a",
+                    headers={"Set-Cookie": "sid=A; Domain=a.example; Path=/"},
+                )
+            return httpx.Response(200, text="ok")
+
+        fetcher = _fetcher(
+            clock,
+            handler,
+            block_private_hosts=True,
+            resolver=lambda _host: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+            ],
+        )
+        assert fetcher.get_text("https://a.example/start") == "a"
+        assert fetcher.get_text("https://a.example/next") == "ok"
+        assert fetcher.get_text("https://b.example/next") == "ok"
+        assert seen == [
+            ("a.example", None),
+            ("a.example", "sid=A"),
+            ("b.example", None),
+        ]
 
 
 class TestUserAgentStability:

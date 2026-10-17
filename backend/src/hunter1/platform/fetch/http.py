@@ -10,10 +10,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import random
 import re
+import socket
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -71,6 +73,79 @@ class FetchError(RuntimeError):
         super().__init__(f"{code}: {url}")
         self.code = code
         self.url = url
+
+
+_PINNED_IP_EXTENSION = "hunter1_pinned_ip"
+
+
+class _PinnedAddressTransport(httpx.BaseTransport):
+    """把已校验 IP 固定到传输层，同时保留原始 URL 的 Cookie 语义。
+
+    如果直接在 `Client.stream()` 之前把 URL host 改成 IP，httpx 的 Cookie Jar 会
+    按 IP 归属 Cookie：同一 IP 上不同虚拟主机会互相串 Cookie，带 `Domain=` 的
+    Cookie 也会因为域名不匹配而丢失。这里让 Client 始终看到原始 URL，等 Cookie
+    已经按正确域名取出、响应即将回到 Client 之前，才在传输层替换连接地址。
+
+    响应上的 `request` 会被恢复成原始 URL，因此 Set-Cookie 仍按原域名入库。
+    `Host` 与 TLS `sni_hostname` 同时保留原域名，证书校验和虚拟主机路由不受影响。
+    """
+
+    def __init__(self, transport: httpx.BaseTransport) -> None:
+        self._transport = transport
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        address = request.extensions.get(_PINNED_IP_EXTENSION)
+        if not isinstance(address, str) or not address:
+            return self._transport.handle_request(request)
+
+        host = (request.url.host or "").rstrip(".").lower()
+        host_header = f"[{host}]" if ":" in host else host
+        if request.url.port is not None:
+            host_header = f"{host_header}:{request.url.port}"
+
+        headers = request.headers.copy()
+        headers["host"] = host_header
+        extensions = {
+            key: value for key, value in request.extensions.items() if key != _PINNED_IP_EXTENSION
+        }
+        if request.url.scheme == "https":
+            extensions["sni_hostname"] = host
+
+        pinned_request = httpx.Request(
+            method=request.method,
+            url=request.url.copy_with(host=address),
+            headers=headers,
+            stream=request.stream,
+            extensions=extensions,
+        )
+        response = self._transport.handle_request(pinned_request)
+        # Client 在 transport 返回之后才抽取 Set-Cookie。恢复 original request，
+        # Cookie 才会按原域名归属，而不是按连接 IP 归属。
+        response.request = request
+        return response
+
+    def close(self) -> None:
+        self._transport.close()
+
+
+def _install_pinned_transport(client: httpx.Client) -> None:
+    """给 Client 的基础 transport 与已配置 mounts 同时加 IP 固定层。"""
+
+    def wrap(current: object) -> object:
+        if isinstance(current, httpx.BaseTransport) and not isinstance(
+            current, _PinnedAddressTransport
+        ):
+            return _PinnedAddressTransport(current)
+        return current
+
+    base = getattr(client, "_transport", None)
+    if base is not None:
+        client._transport = wrap(base)  # type: ignore[assignment]
+
+    mounts = getattr(client, "_mounts", None)
+    if isinstance(mounts, dict):
+        for prefix, mounted in tuple(mounts.items()):
+            mounts[prefix] = wrap(mounted)
 
 
 def _decode_text(response: httpx.Response) -> str:
@@ -221,6 +296,8 @@ class HttpFetcher:
         client: httpx.Client | None = None,
         min_interval: float = 0.0,
         respect_robots: bool = False,
+        block_private_hosts: bool = False,
+        resolver: Callable[[str], list[tuple[object, ...]]] | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> None:
         # 「对站点多礼貌」的两个开关默认**关**：平台层的默认值要保测试的确定性
@@ -231,6 +308,10 @@ class HttpFetcher:
         self.retries = max(1, int(retries))
         self.user_agents = tuple(user_agents)
         self.max_bytes = max(1, int(max_bytes))
+        #: 生产装配打开：拒绝回环、内网、链路本地与云元数据地址。平台层默认关闭
+        #: 以保持离线单测可注入任意主机名；组装根负责把生产策略显式打开。
+        self.block_private_hosts = bool(block_private_hosts)
+        self._resolver = resolver or self._resolve_host
         self._owns_client = client is None
         # `follow_redirects=False` 是**刻意**的：让 httpx 在传输层静默跟随重定向会
         # 绕过 robots 与限速 —— 它们此前都只按**原始** URL 做一次，跨主机重定向的
@@ -241,6 +322,10 @@ class HttpFetcher:
             transport=transport,
             follow_redirects=False,
         )
+        if self.block_private_hosts:
+            # 固定发生在传输层，Client 看到的始终是原始域名。这样 Cookie、日志与
+            # 重定向语义都不会被“连接 IP”污染。
+            _install_pinned_transport(self._client)
         self._robots = RobotsCache(self._fetch_robots_text) if respect_robots else None
         # 每个主机固定一个 UA（见 `_user_agent_for`）：UA 决定 robots 的组选择，
         # 同主机翻页/多跳时若 UA 漂移，同一份 robots.txt 会被选出不同的规则组。
@@ -268,8 +353,15 @@ class HttpFetcher:
         也会重试三次 —— 而「站点没写 robots.txt」是完全正常的情况。
         """
         try:
-            with self._client.stream("GET", url) as stream:
+            headers = {"User-Agent": self._user_agent_for(url)}
+            addresses = self._public_ips_for_url(url)
+            extensions = self._pin_extension(addresses)
+            with (
+                self.limiter.acquire(url, timeout=self.timeout),
+                self._client.stream("GET", url, headers=headers, extensions=extensions) as stream,
+            ):
                 if stream.status_code >= 400:
+                    self.limiter.record(url, status=stream.status_code)
                     return None
                 try:
                     # 与正常抓取走同一条**流式**读取。原先这里用 `self._client.get(url)`，
@@ -282,7 +374,13 @@ class HttpFetcher:
                     # 宁可退回「没有 robots 约束」，也不要为一份异常大的文件炸内存。
                     return None
                 declared = stream.charset_encoding
-        except httpx.HTTPError:
+                self.limiter.record(
+                    url,
+                    status=stream.status_code,
+                    retry_after=stream.headers.get("Retry-After"),
+                )
+        except (FetchError, ResourceLimitTimeoutError, httpx.HTTPError):
+            self.limiter.record(url, failed=True)
             return None
         return _decode_bytes(body, declared=declared)
 
@@ -329,6 +427,62 @@ class HttpFetcher:
 
         raise FetchError("too_many_redirects", url)
 
+    def _public_ips_for_url(self, url: str) -> tuple[str, ...] | None:
+        """校验 URL 并返回全部可连接的公开 IP；防护关闭时返回 None。"""
+        if not self.block_private_hosts:
+            return None
+        parts = urlsplit(url)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            raise FetchError("invalid_url", url)
+        if parts.username or parts.password:
+            raise FetchError("invalid_url", url)
+        try:
+            _ = parts.port
+        except ValueError as exc:
+            raise FetchError("invalid_url", url) from exc
+        host = parts.hostname.rstrip(".").lower()
+        if host == "localhost" or host.endswith(".localhost"):
+            raise FetchError("private_address_blocked", url)
+
+        try:
+            literal = ipaddress.ip_address(host)
+        except ValueError:
+            try:
+                addresses = self._resolver(host)
+            except OSError as exc:
+                raise FetchError("host_unresolved", url) from exc
+        else:
+            addresses = [
+                (socket.AF_INET6 if literal.version == 6 else socket.AF_INET, "", "", "", (host, 0))
+            ]
+
+        resolved: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for entry in addresses:
+            sockaddr = entry[4] if len(entry) >= 5 else None
+            if not isinstance(sockaddr, tuple) or not sockaddr:
+                continue
+            try:
+                resolved.append(ipaddress.ip_address(str(sockaddr[0])))
+            except ValueError:
+                continue
+        if not resolved or any(not address.is_global for address in resolved):
+            raise FetchError("private_address_blocked", url)
+        # 去重但保持解析器顺序。重试会轮换这些已校验地址，避免首个 A 记录故障时
+        # 在同一个坏 IP 上耗尽全部重试。
+        return tuple(dict.fromkeys(str(address) for address in resolved))
+
+    @staticmethod
+    def _pin_extension(
+        addresses: tuple[str, ...] | None, *, attempt: int = 1
+    ) -> dict[str, str] | None:
+        if not addresses:
+            return None
+        return {_PINNED_IP_EXTENSION: addresses[(attempt - 1) % len(addresses)]}
+
+    @staticmethod
+    def _resolve_host(host: str) -> list[tuple[object, ...]]:
+        return list(socket.getaddrinfo(host, None, type=socket.SOCK_STREAM))
+
     def _fetch_once(self, url: str, request_headers: dict[str, str]) -> httpx.Response:
         """对**单个** URL 发一次请求（含限速与重试），返回响应 —— 不跟随重定向。
 
@@ -336,11 +490,18 @@ class HttpFetcher:
         于是每一跳都复用同一套重试与限速语义，不必在跳与重试之间写两遍。
         """
         last_code = "transport_failed"
+        addresses = self._public_ips_for_url(url)
         for attempt in range(1, self.retries + 1):
+            extensions = self._pin_extension(addresses, attempt=attempt)
             try:
                 with (
                     self.limiter.acquire(url, timeout=self.timeout),
-                    self._client.stream("GET", url, headers=request_headers) as stream,
+                    self._client.stream(
+                        "GET",
+                        url,
+                        headers=request_headers,
+                        extensions=extensions,
+                    ) as stream,
                 ):
                     status = stream.status_code
                     # 只有**确实会被跟随**的重定向才丢弃正文（判据与 `get` 的
