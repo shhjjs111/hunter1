@@ -480,27 +480,30 @@ def smoke_default_args(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECOND
     只测「你会怎么调用它」，不测「用户会怎么打开它」。
 
     端口用默认 8000：无参数路径没法传 `--port`（那正是「双击」的含义）。
-    若 8000 已被占用，产物会给出可读的端口冲突提示而不是启动成功 ——
-    那时我们把这一层**明确记为跳过**（返回说明文字），不误判成产物缺陷。
+    若 8000 已被占用，就无法验证无参数启动这条路径。此时必须明确失败而不是
+    返回 None：`smoke_run` 把 None 当通过，会制造「关键路径没查却全绿」。
     判断「起没起来」用同一个 `wait_for_http`：拿到任何 HTTP 响应即为起来了，
     **进程提前退出**则立即返回（旧行为就是立刻退，这条能稳定抓住它）。
     """
     port = 8000
     base_url = f"http://127.0.0.1:{port}"
 
-    # 端口被别的程序占着时，「起不来」与产物无关 —— 跳过而不是误报。
+    # 端口被别的程序占着时，「起不来」与产物无关，但这条冒烟也确实没执行。
+    # 返回可行动的问题而不是 None，避免把「没查」冒充成「通过」。
     with socket.socket() as probe:
         probe.settimeout(0.5)
         if probe.connect_ex(("127.0.0.1", port)) == 0:
-            return None  # 视为跳过（不作为失败）：这一层无法在占用状态下判定
-        # 注：这里刻意返回 None 而不是报错 —— 冒烟不该因为「开发机上恰好有别的
-        # 服务占着 8000」而把好产物判成坏的。CI 的 windows runner 上 8000 是空的。
+            return "无参数启动冒烟未验证：127.0.0.1:8000 已被占用。请释放该端口后重新运行打包门禁。"
 
     with tempfile.TemporaryDirectory(prefix="hunter1-smoke-default-") as workspace:
         log_path = Path(workspace) / "default.log"
+        runtime_data = Path(workspace) / "runtime-data"
         # 只给 exe 本体，**不加任何参数** —— 与双击完全一致。
-        # `cwd=workspace`：数据目录按 `paths.py` 的规则落在临时目录旁，
-        # 不碰开发机的真实用户数据。
+        # 数据目录用环境变量显式指向临时区：打包态默认会落到 exe 旁边的
+        # `dist/hunter1/data/`，而后续 zip 以 `dist/hunter1` 为源目录；若把默认库
+        # 留在那里，真实配置和 API Key 就可能被一起发布。临时覆盖既模拟双击，
+        # 又让冒烟不产生任何可入包的数据。
+        child_env = {**os.environ, "HUNTER1_DATA_DIR": str(runtime_data)}
         with log_path.open("wb") as log:
             process = subprocess.Popen(
                 [str(exe)],
@@ -508,6 +511,7 @@ def smoke_default_args(exe: Path, *, timeout: float = SMOKE_SERVE_TIMEOUT_SECOND
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 cwd=workspace,
+                env=child_env,
             )
             try:
                 if not wait_for_http(base_url, process, timeout=timeout):
@@ -566,9 +570,18 @@ def _make_zip(dist_dir: Path) -> Path:
     print(f"== 打包 {archive.name} ==")
     with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as bundle:
         for item in sorted(dist_dir.rglob("*")):
-            if item.is_file():
+            if item.is_file() and not _is_runtime_data(item, dist_dir):
                 bundle.write(item, item.relative_to(dist_dir.parent))
     return staging
+
+
+def _is_runtime_data(path: Path, dist_dir: Path) -> bool:
+    """产物目录里的运行数据永远不进入发布包。"""
+    try:
+        relative = path.relative_to(dist_dir)
+    except ValueError:
+        return True
+    return bool(relative.parts) and relative.parts[0] == "data"
 
 
 def produce_zip(dist_dir: Path) -> tuple[Path | None, list[str]]:
@@ -699,7 +712,7 @@ def zip_problems(archive: Path, dist_dir: Path) -> list[str]:
         expected = {
             str(item.relative_to(dist_dir.parent)).replace("\\", "/")
             for item in dist_dir.rglob("*")
-            if item.is_file()
+            if item.is_file() and not _is_runtime_data(item, dist_dir)
         }
         missing = sorted(expected - inside)
         extra = sorted(inside - expected)

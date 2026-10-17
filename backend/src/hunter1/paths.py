@@ -31,6 +31,7 @@ from pathlib import Path
 
 DB_FILENAME = "hunter1.db"
 APP_DIR_NAME = "hunter1"
+DATA_DIR_ENV = "HUNTER1_DATA_DIR"
 _ROOT_MARKER = "pyproject.toml"
 #: 虚拟环境边界：见到它们就不再上溯（上面是宿主项目，不是我们的仓库）
 _ENV_DIR_NAMES = frozenset({"site-packages", "dist-packages"})
@@ -105,6 +106,9 @@ def app_dir() -> Path:
 
 def data_dir() -> Path:
     """用户数据的默认存放处（不自动创建，由调用方决定时机）。"""
+    override = os.environ.get(DATA_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
     if is_frozen():
         return app_dir() / "data"
     root = _repo_root()
@@ -119,6 +123,7 @@ def default_db_path() -> Path:
 
 
 __all__ = [
+    "DATA_DIR_ENV",
     "DB_FILENAME",
     "app_dir",
     "data_dir",

@@ -482,6 +482,34 @@ class TestFindFrontendDist:
         assert build.find_frontend_dist(_make_dist(tmp_path, frontend="none")) is None
 
 
+class TestDefaultArgsSmoke:
+    def test_occupied_default_port_is_a_failure_not_a_pass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """8000 被占用时没测到双击路径，不能返回 None 冒充通过。"""
+
+        class Occupied:
+            def __enter__(self) -> Occupied:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def settimeout(self, _timeout: float) -> None:
+                return None
+
+            def connect_ex(self, _address: tuple[str, int]) -> int:
+                return 0
+
+        monkeypatch.setattr(build.socket, "socket", lambda *_a, **_k: Occupied())
+
+        problem = build.smoke_default_args(Path("definitely-not-an-exe"))
+
+        assert problem is not None
+        assert "8000" in problem
+        assert "未验证" in problem
+
+
 class TestLocalProbesIgnoreProxy:
     """本地冒烟请求不能被代理劫持。
 
@@ -776,6 +804,22 @@ class TestProduceZipKeepsBadArchivesOut:
 
         assert archive is None
         assert not stale.exists(), "构建失败后旧包不该继续留在官方路径"
+
+    def test_runtime_data_is_never_packaged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dist = self._prep(tmp_path, monkeypatch)
+        runtime = dist / "data"
+        runtime.mkdir()
+        (runtime / "hunter1.db").write_text("API-KEY-MUST-NOT-SHIP", encoding="utf-8")
+
+        archive, problems = build.produce_zip(dist)
+
+        assert problems == []
+        assert archive is not None
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+        assert not any("/data/" in name for name in names)
 
 
 class TestPreferRealNodeDir:

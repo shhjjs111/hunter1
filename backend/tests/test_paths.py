@@ -63,6 +63,14 @@ class TestDefaultDbPath:
     def test_is_a_path_object(self) -> None:
         assert isinstance(paths.default_db_path(), Path)
 
+    def test_explicit_data_dir_override_is_honored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """打包冒烟用显式临时数据目录，避免运行数据库落进待发布的 dist。"""
+        monkeypatch.setenv(paths.DATA_DIR_ENV, str(tmp_path / "runtime"))
+        assert paths.data_dir() == tmp_path / "runtime"
+        assert paths.default_db_path() == tmp_path / "runtime" / paths.DB_FILENAME
+
 
 class TestInstalledLayout:
     """`pip install .`（非 editable，src 布局被展平到 site-packages）这一态。
