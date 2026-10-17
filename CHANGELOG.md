@@ -13,6 +13,8 @@
   合并、要求 `quality (3.12)`、线性历史；CodeQL、Dependency Review、Dependabot
   与私有漏洞报告；全部第三方 action 固定到完整 commit SHA。发布说明已按
   CHANGELOG 重写，并启用 immutable releases。
+- **安全门禁全部阻断合并**：`quality (3.12)`、Python/JavaScript TypeScript
+  CodeQL 分析与 Dependency Review 都是 `main` 的必需状态检查。
 - **社区健康文件补齐**：新增 Contributor Covenant 2.1 行为准则、CODEOWNERS，
   并补充仓库治理说明。
 

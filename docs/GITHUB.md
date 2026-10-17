@@ -8,7 +8,8 @@ Hunter1 的远端仓库按以下标准维护。目标不是增加流程装饰，
 `main` 使用 active branch ruleset：
 
 - 只接受 Pull Request，禁止直接 push。
-- 必需状态检查：`quality (3.12)`。
+- 必需状态检查：`quality (3.12)`、`Analyze (python)`、
+  `Analyze (javascript-typescript)`、`Review dependency changes`。
 - 要求分支在合并前与 `main` 同步。
 - 要求线性历史，禁止 force-push 与删除分支。
 - 合并方式只开放 squash merge；合并后自动删除远端分支。
