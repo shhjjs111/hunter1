@@ -94,7 +94,14 @@ class TestListEndpoint:
     def test_empty(self, client: TestClient) -> None:
         response = client.get("/api/applications")
         assert response.status_code == 200
-        assert response.json() == {"items": [], "total": 0, "has_more": False}
+        assert response.json() == {
+            "items": [],
+            "total": 0,
+            "page": 1,
+            "page_size": 50,
+            "has_next": False,
+            "has_more": False,
+        }
 
     def test_lists_recent_first_with_shape(
         self,
@@ -116,6 +123,7 @@ class TestListEndpoint:
         payload = client.get("/api/applications").json()
         assert [item["id"] for item in payload["items"]] == ["new", "old"]
         assert payload["total"] == 2
+        assert payload["has_next"] is False
         assert payload["has_more"] is False
         first = payload["items"][0]
         # 契约字段齐备，且 stage 是字面值、公司是**人读的名字**
@@ -124,17 +132,13 @@ class TestListEndpoint:
         assert first["stage"] == "interview"
         assert first["job_id"] == "j-new"
 
-    def test_truncation_is_reported_not_silent(
+    def test_pagination_reaches_records_beyond_the_first_page(
         self,
         client: TestClient,
         store: ApplicationStore,
-        monkeypatch: pytest.MonkeyPatch,
         seed: SqliteApplicationRepository,
     ) -> None:
-        """超过上限时必须说「还有更多」——否则第 N+1 条起永久不可见且看不出来。"""
-        import hunter1.slices.applications.router as router_module
-
-        monkeypatch.setattr(router_module, "LIST_LIMIT", 2)
+        """旧记录超过一页后仍可翻到，不再是固定 200 条截断。"""
         for index in range(3):
             seed.upsert(
                 _application(
@@ -143,10 +147,14 @@ class TestListEndpoint:
                     updated_at=datetime(2026, 9, 1 + index, tzinfo=UTC),
                 )
             )
-        payload = client.get("/api/applications").json()
-        assert len(payload["items"]) == 2
-        assert payload["total"] == 3
-        assert payload["has_more"] is True
+        first = client.get("/api/applications", params={"page": 1, "page_size": 2}).json()
+        second = client.get("/api/applications", params={"page": 2, "page_size": 2}).json()
+        assert len(first["items"]) == 2
+        assert first["total"] == 3
+        assert first["has_next"] is True
+        assert first["has_more"] is True
+        assert [item["id"] for item in second["items"]] == ["a0"]
+        assert second["has_next"] is False
 
 
 class TestStageEndpoint:

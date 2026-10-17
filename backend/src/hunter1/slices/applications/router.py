@@ -13,14 +13,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from hunter1.slices.applications import schemas, service
 from hunter1.slices.applications.store import ApplicationStore
 from hunter1.slices.jobs import JobStore, find_job
 
-# 列表固定上限：投递是「我做过的事」，量级有限；无分页参数，取最近 200 条。
-LIST_LIMIT = 200
+# 分页与 jobs / assistant 使用同一套边界，避免旧记录超过一页后永久不可达。
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 100
+MAX_PAGE = 10_000
 
 
 def _now() -> datetime:
@@ -42,14 +44,20 @@ def build_router(
         response_model=schemas.ApplicationListResponse,
         summary="投递列表",
     )
-    def list_applications() -> schemas.ApplicationListResponse:
-        items = store.list(limit=LIST_LIMIT)
-        # `total` 让「被上限截断」不再静默：界面据此提示「只显示最近 N 条」。
+    def list_applications(
+        page: int = Query(1, ge=1, le=MAX_PAGE, description="页码（1 起）"),
+        page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    ) -> schemas.ApplicationListResponse:
+        offset = (page - 1) * page_size
+        items = store.list(limit=page_size, offset=offset)
         total = store.count()
         return schemas.ApplicationListResponse(
             items=[schemas.ApplicationSummary.from_application(item) for item in items],
             total=total,
-            has_more=total > len(items),
+            page=page,
+            page_size=page_size,
+            has_next=offset + len(items) < total,
+            has_more=offset + len(items) < total,
         )
 
     @router.post(
@@ -123,4 +131,9 @@ def build_router(
     return router
 
 
-__all__ = ["LIST_LIMIT", "build_router"]
+__all__ = [
+    "DEFAULT_PAGE_SIZE",
+    "MAX_PAGE",
+    "MAX_PAGE_SIZE",
+    "build_router",
+]

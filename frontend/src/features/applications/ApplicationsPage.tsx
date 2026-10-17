@@ -5,6 +5,7 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
+  Pager,
   PageHeader,
   Tag,
   fieldClass,
@@ -36,21 +37,17 @@ function formatDate(iso: string): string {
 }
 
 export function ApplicationsPage() {
-  const applications = useApplications();
+  const [page, setPage] = useState(1);
+  const applications = useApplications(page);
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
   const saveNote = useSaveNote();
 
-  // 列表有固定上限（后端 `LIST_LIMIT`）。用响应里的 `total` / `has_more` 显示真实
-  // 条数并提示截断 —— 拿 `items.length` 冒充「共 N 条」会让用户以为投递只有 200 条。
+  // 真分页：总数来自后端，旧记录不会再被固定上限永久截掉。
   const items = applications.data?.items ?? [];
   const total = applications.data?.total ?? 0;
-  const shown = items.length;
-  const truncated = applications.data?.has_more ?? false;
   const subtitle = applications.data
-    ? truncated
-      ? `共 ${total} 条，只显示最近 ${shown} 条`
-      : `共 ${total} 条`
+    ? `共 ${total} 条`
     : applications.isError
       ? // 读取失败时不能说「加载中…」：那句会与下面的 ErrorNotice 矛盾，
         // 而且它会永久停在那里（失败后 isLoading 转 false，不会再变）。
@@ -108,7 +105,11 @@ export function ApplicationsPage() {
     saveNote.mutate(
       // 带上**最新**阶段草稿：用户可能刚在下拉里改了阶段（请求还在飞），此时
       // `item.stage` 仍是查询缓存里的旧值 —— 拿它提交会把刚选的阶段打回旧值。
-      { applicationId: item.id, stage: stageDraft[item.id] ?? item.stage, note },
+      {
+        applicationId: item.id,
+        stage: stageDraft[item.id] ?? item.stage,
+        note,
+      },
       {
         onSuccess: () => {
           if (latestNote.current[item.id] === note) {
@@ -137,7 +138,11 @@ export function ApplicationsPage() {
           <p className="px-4 py-6 text-sm text-muted">加载中…</p>
         </Card>
       ) : items.length === 0 ? (
-        <EmptyState>还没有投递记录。去「岗位库」找岗位，点「记录投递」。</EmptyState>
+        <EmptyState>
+          {page > 1
+            ? "这一页没有记录。请返回上一页查看更早的投递。"
+            : "还没有投递记录。去「岗位库」找岗位，点「记录投递」。"}
+        </EmptyState>
       ) : (
         <Card>
           {/* 窄屏可横向滚动：与岗位表同理 —— 宁可横滑，也不把「2026-10-06」
@@ -156,7 +161,10 @@ export function ApplicationsPage() {
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.id} className="border-b border-line-soft last:border-0">
+                  <tr
+                    key={item.id}
+                    className="border-b border-line-soft last:border-0"
+                  >
                     <td className="px-4 py-2">{item.company}</td>
                     <td className="px-4 py-2">{item.title}</td>
                     <td className="px-4 py-2">
@@ -167,7 +175,10 @@ export function ApplicationsPage() {
                         onChange={(event) => {
                           const stage = event.target.value;
                           latestRequest.current[item.id] = stage;
-                          setStageDraft((prev) => ({ ...prev, [item.id]: stage }));
+                          setStageDraft((prev) => ({
+                            ...prev,
+                            [item.id]: stage,
+                          }));
                           changeStage.mutate(
                             {
                               applicationId: item.id,
@@ -209,7 +220,9 @@ export function ApplicationsPage() {
                         ))}
                       </select>
                     </td>
-                    <td className="px-4 py-2 text-muted">{formatDate(item.updated_at)}</td>
+                    <td className="px-4 py-2 text-muted">
+                      {formatDate(item.updated_at)}
+                    </td>
                     <td className="px-4 py-2">
                       <input
                         className={`w-full min-w-40 ${fieldClass}`}
@@ -218,7 +231,10 @@ export function ApplicationsPage() {
                         placeholder="加一条备注…"
                         value={noteDraft[item.id] ?? item.note ?? ""}
                         onChange={(event) =>
-                          setNoteDraft((prev) => ({ ...prev, [item.id]: event.target.value }))
+                          setNoteDraft((prev) => ({
+                            ...prev,
+                            [item.id]: event.target.value,
+                          }))
                         }
                         // 失焦即保存（回车也走这里：blur 只有一个提交入口，避免两处各写一遍）
                         onBlur={() => commitNote(item)}
@@ -239,7 +255,15 @@ export function ApplicationsPage() {
                               `删除「${item.company}」的投递记录？此操作不可撤销。`,
                             )
                           ) {
-                            remove.mutate(item.id);
+                            remove.mutate(item.id, {
+                              onSuccess: () => {
+                                // 删掉当前页唯一一条后回退一页，避免把“空页”显示成
+                                // “一条投递都没有”。
+                                if (items.length === 1 && page > 1) {
+                                  setPage(page - 1);
+                                }
+                              },
+                            });
                           }
                         }}
                       >
@@ -254,17 +278,33 @@ export function ApplicationsPage() {
         </Card>
       )}
 
+      <Pager
+        ariaLabel="投递记录分页"
+        page={page}
+        hasNext={applications.data?.has_next ?? false}
+        busy={applications.isPlaceholderData}
+        onPageChange={setPage}
+      />
+
       {/* 阶段变更 / 删除 / 备注保存的失败是**另一次操作**的错误，与列表状态无关，单独列在这里。
           三者的提示分开渲染：合成一条会让「改备注失败」看起来像「改阶段失败」。 */}
-      {changeStage.isError && <ErrorNotice message={(changeStage.error as Error).message} />}
-      {saveNote.isError && <ErrorNotice message={(saveNote.error as Error).message} />}
-      {remove.isError && <ErrorNotice message={(remove.error as Error).message} />}
+      {changeStage.isError && (
+        <ErrorNotice message={(changeStage.error as Error).message} />
+      )}
+      {saveNote.isError && (
+        <ErrorNotice message={(saveNote.error as Error).message} />
+      )}
+      {remove.isError && (
+        <ErrorNotice message={(remove.error as Error).message} />
+      )}
 
       <p className="mt-4 text-xs text-muted">
-        投递记录里的公司名与岗位名是<b>下单时刻的快照</b> —— 岗位被重抓或改名时，
-        这里仍保留当时的说法。
+        投递记录里的公司名与岗位名是<b>下单时刻的快照</b> ——
+        岗位被重抓或改名时， 这里仍保留当时的说法。
       </p>
-      <Tag>只读提示：阶段可直接在下拉框里改；备注敲完回车（或点到别处）即保存；删除不可撤销。</Tag>
+      <Tag>
+        只读提示：阶段可直接在下拉框里改；备注敲完回车（或点到别处）即保存；删除不可撤销。
+      </Tag>
     </>
   );
 }

@@ -34,7 +34,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/applications` | 投递列表（按 `updated_at` 倒序，取最近 200 条；`{items, total, has_more}`） |
+| GET | `/api/applications` | 投递列表（按 `updated_at` 倒序；`page` / `page_size` 分页，返回 `{items, total, page, page_size, has_next, has_more}`；`has_more` 是兼容别名） |
 | POST | `/api/applications` | 记录投递（201；body `{job_id}`，支持唯一前缀；歧义 → 409、不存在 → 404；**幂等**） |
 | POST | `/api/applications/{application_id}/stage` | 推进阶段（200；不存在 → 404；非法 stage → 422；**读之后被别处改过 → 409** —— 乐观锁，刷新后重试） |
 | DELETE | `/api/applications/{application_id}` | 删除投递（204；不存在为 no-op） |

@@ -294,16 +294,19 @@ export interface components {
     schemas: {
         /**
          * ApplicationListResponse
-         * @description 投递列表页。
-         *
-         *     `total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），
-         *     没有它们时第 201 条起永久不可见、且界面看起来「这就是全部」。
+         * @description 投递列表页（真分页，所有历史记录都可达）。
          */
         ApplicationListResponse: {
             /** Has More */
             has_more: boolean;
+            /** Has Next */
+            has_next: boolean;
             /** Items */
             items: components["schemas"]["ApplicationSummary"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
             /** Total */
             total: number;
         };
@@ -743,7 +746,11 @@ export type $defs = Record<string, never>;
 export interface operations {
     list_applications_api_applications_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 页码（1 起） */
+                page?: number;
+                page_size?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -757,6 +764,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApplicationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

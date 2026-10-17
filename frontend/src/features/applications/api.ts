@@ -5,7 +5,7 @@ import { apiErrorMessage } from "../../shared/api/errors";
 import type { components } from "../../shared/api/schema";
 
 export type ApplicationSummary = components["schemas"]["ApplicationSummary"];
-/** 列表响应整体 —— `total` / `has_more` 是**截断信号**（见后端 router 的 `LIST_LIMIT`）。 */
+/** 列表响应整体 —— `total` 与 `has_next` 支撑真分页。 */
 export type ApplicationList = components["schemas"]["ApplicationListResponse"];
 /** 契约里的阶段枚举（后端 `ApplicationStage`）—— 现已进契约，不再是魔法字符串。 */
 export type ApplicationStage = components["schemas"]["ApplicationStage"];
@@ -37,35 +37,46 @@ export const STAGE_ORDER: ApplicationStage[] = [
  */
 export const MAX_NOTE_CHARS = 2000;
 
-async function fetchApplications(): Promise<ApplicationList> {
-  const { data, error, response } = await api.GET("/api/applications");
+export const APPLICATIONS_PAGE_SIZE = 50;
+
+async function fetchApplications(page: number): Promise<ApplicationList> {
+  const { data, error, response } = await api.GET("/api/applications", {
+    params: { query: { page, page_size: APPLICATIONS_PAGE_SIZE } },
+  });
   if (error || !data) {
     throw new Error(apiErrorMessage(error, "加载投递记录失败", response));
   }
-  // 整份响应（含 `total` / `has_more`）交出去 —— 只留 `items` 会让后端特意算的
-  // 截断信号在全链路丢失，页面只能拿 `items.length` 冒充「共 N 条」。
+  // 整份响应（含 `total` / `page` / `has_next`）交出去 —— 只留 `items` 会让分页
+  // 元信息在全链路丢失，页面只能拿 `items.length` 冒充「共 N 条」。
   return data;
 }
 
-export function useApplications() {
-  return useQuery({ queryKey: ["applications"], queryFn: fetchApplications });
+export function useApplications(page = 1) {
+  return useQuery({
+    queryKey: ["applications", { page }],
+    queryFn: () => fetchApplications(page),
+    placeholderData: (previous) => previous,
+  });
 }
 
 export function useChangeStage() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: { applicationId: string; stage: string }) => {
-      const { data, error, response } = await api.POST("/api/applications/{application_id}/stage", {
-        params: { path: { application_id: input.applicationId } },
-        // 只提交 `stage`，**刻意不带 `note`**：这个端点是整份状态的写面，带上 note
-        // 就会拿查询缓存里的旧值覆盖用户在备注框里刚写的内容（同一行「先填备注、
-        // 再改阶段」时必现 —— blur 先发一条备注请求，紧接着这里又把陈旧 note 发一遍）。
-        // 省略 note 字段＝后端保留原备注（见 `service.change_stage` 的三种取值语义）。
-        //
-        // `<select>` 的值天生是 string，在**这里**收窄为契约枚举即可 ——
-        // 调用方的类型不必被 DOM 的宽 string 污染。
-        body: { stage: input.stage as ApplicationStage },
-      });
+      const { data, error, response } = await api.POST(
+        "/api/applications/{application_id}/stage",
+        {
+          params: { path: { application_id: input.applicationId } },
+          // 只提交 `stage`，**刻意不带 `note`**：这个端点是整份状态的写面，带上 note
+          // 就会拿查询缓存里的旧值覆盖用户在备注框里刚写的内容（同一行「先填备注、
+          // 再改阶段」时必现 —— blur 先发一条备注请求，紧接着这里又把陈旧 note 发一遍）。
+          // 省略 note 字段＝后端保留原备注（见 `service.change_stage` 的三种取值语义）。
+          //
+          // `<select>` 的值天生是 string，在**这里**收窄为契约枚举即可 ——
+          // 调用方的类型不必被 DOM 的宽 string 污染。
+          body: { stage: input.stage as ApplicationStage },
+        },
+      );
       if (error || !data) {
         throw new Error(apiErrorMessage(error, "改阶段失败", response));
       }
@@ -80,12 +91,14 @@ export function useChangeStage() {
       // 查询数据里**旧**的 `stage`（invalidate 触发的 refetch 还是异步的）——
       // 下拉框先跳回旧值、再跳到新值，看起来像「系统把选择吞了又吐出来」。
       // 把权威值写进缓存后再撤草稿，两者落在同一批更新里，中间帧不存在。
-      queryClient.setQueryData<ApplicationList>(["applications"], (prev) =>
+      queryClient.setQueriesData<ApplicationList>({ queryKey: ["applications"] }, (prev) =>
         prev
           ? {
               ...prev,
               items: prev.items.map((row) =>
-                row.id === input.applicationId ? { ...row, stage: data.stage } : row,
+                row.id === input.applicationId
+                  ? { ...row, stage: data.stage }
+                  : row,
               ),
             }
           : prev,
@@ -111,13 +124,16 @@ export function useSaveNote() {
       stage: string;
       note: string;
     }) => {
-      const { data, error, response } = await api.POST("/api/applications/{application_id}/stage", {
-        params: { path: { application_id: input.applicationId } },
-        // 备注**原样**提交：空串＝清掉（后端把它规范化为 NULL，界面回到空框）。
-        // 这里**不能**把空串转成 `null` —— `null` 在后端是「保留原备注」的意思，
-        // 那样「清空备注」会变成一次静默的空操作（框清空了、提交后旧备注又回来）。
-        body: { stage: input.stage as ApplicationStage, note: input.note },
-      });
+      const { data, error, response } = await api.POST(
+        "/api/applications/{application_id}/stage",
+        {
+          params: { path: { application_id: input.applicationId } },
+          // 备注**原样**提交：空串＝清掉（后端把它规范化为 NULL，界面回到空框）。
+          // 这里**不能**把空串转成 `null` —— `null` 在后端是「保留原备注」的意思，
+          // 那样「清空备注」会变成一次静默的空操作（框清空了、提交后旧备注又回来）。
+          body: { stage: input.stage as ApplicationStage, note: input.note },
+        },
+      );
       if (error || !data) {
         throw new Error(apiErrorMessage(error, "保存备注失败", response));
       }
@@ -133,12 +149,14 @@ export function useSaveNote() {
       // `StageUpdateResponse` 只有 id + stage（后端不回 note），所以这是基于**提交值**
       // 的乐观写入。它与后端语义一致：空白备注被 `service.change_stage` 规范化为 NULL，
       // 因此空串在这里也写 null（否则「清空备注」会先把框显示成空、再被 refetch 拉回旧值）。
-      queryClient.setQueryData<ApplicationList>(["applications"], (prev) =>
+      queryClient.setQueriesData<ApplicationList>({ queryKey: ["applications"] }, (prev) =>
         prev
           ? {
               ...prev,
               items: prev.items.map((row) =>
-                row.id === input.applicationId ? { ...row, note: input.note || null } : row,
+                row.id === input.applicationId
+                  ? { ...row, note: input.note || null }
+                  : row,
               ),
             }
           : prev,
@@ -152,9 +170,12 @@ export function useDeleteApplication() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (applicationId: string) => {
-      const { error, response } = await api.DELETE("/api/applications/{application_id}", {
-        params: { path: { application_id: applicationId } },
-      });
+      const { error, response } = await api.DELETE(
+        "/api/applications/{application_id}",
+        {
+          params: { path: { application_id: applicationId } },
+        },
+      );
       if (error) {
         throw new Error(apiErrorMessage(error, "删除失败", response));
       }

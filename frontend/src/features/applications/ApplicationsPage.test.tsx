@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import contract from "../../../../contracts/openapi.json";
@@ -27,6 +33,9 @@ const LIST = {
     },
   ],
   total: 1,
+  page: 1,
+  page_size: 50,
+  has_next: false,
   has_more: false,
 };
 
@@ -39,7 +48,9 @@ function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
 }
 
 function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={client}>
       <ApplicationsPage />
@@ -48,18 +59,22 @@ function renderPage() {
 }
 
 function stubFetch() {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (methodOf(input, init) === "DELETE") {
-      return new Response(null, { status: 204 });
-    }
-    return jsonResponse(LIST);
-  });
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (methodOf(input, init) === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      return jsonResponse(LIST);
+    },
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
 function deleteCalls(fetchMock: ReturnType<typeof stubFetch>) {
-  return fetchMock.mock.calls.filter(([input, init]) => methodOf(input, init) === "DELETE");
+  return fetchMock.mock.calls.filter(
+    ([input, init]) => methodOf(input, init) === "DELETE",
+  );
 }
 
 afterEach(() => {
@@ -111,17 +126,24 @@ describe("ApplicationsPage 阶段乐观值", () => {
           serverStage = "interview";
           return jsonResponse({ application_id: "app1", stage: serverStage });
         }
-        return jsonResponse({ ...LIST, items: [{ ...LIST.items[0], stage: serverStage }] });
+        return jsonResponse({
+          ...LIST,
+          items: [{ ...LIST.items[0], stage: serverStage }],
+        });
       }),
     );
 
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     render(
       <QueryClientProvider client={client}>
         <ApplicationsPage />
       </QueryClientProvider>,
     );
-    const select = (await screen.findByLabelText(/投递阶段/)) as HTMLSelectElement;
+    const select = (await screen.findByLabelText(
+      /投递阶段/,
+    )) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "interview" } });
     await waitFor(() => expect(select.value).toBe("interview"));
 
@@ -129,7 +151,7 @@ describe("ApplicationsPage 阶段乐观值", () => {
     // 残留的草稿会让这里永远显示「面试」。
     serverStage = "rejected";
     await act(async () => {
-      await client.refetchQueries({ queryKey: ["applications"] });
+      await client.refetchQueries({ queryKey: ["applications", { page: 1 }] });
     });
     expect(select.value).toBe("rejected");
   });
@@ -158,13 +180,17 @@ describe("ApplicationsPage 阶段乐观值", () => {
       }),
     );
 
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     render(
       <QueryClientProvider client={client}>
         <ApplicationsPage />
       </QueryClientProvider>,
     );
-    const select = (await screen.findByLabelText(/投递阶段/)) as HTMLSelectElement;
+    const select = (await screen.findByLabelText(
+      /投递阶段/,
+    )) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "interview" } });
 
     // 等 refetch 真的发起（说明成功链已跑过），再冲干净撤草稿那一步
@@ -174,33 +200,105 @@ describe("ApplicationsPage 阶段乐观值", () => {
     // 修复前：查询缓存仍是 applied，撤草稿后 select 回落到 applied（先跳回旧值）
     expect(select.value).toBe("interview");
     expect(
-      client.getQueryData<ApplicationList>(["applications"])?.items[0].stage,
+      client.getQueryData<ApplicationList>(["applications", { page: 1 }])
+        ?.items[0].stage,
     ).toBe("interview");
 
     releaseRefetch();
   });
 });
 
-describe("ApplicationsPage 截断信号", () => {
-  // 列表有固定上限（后端 LIST_LIMIT=200）。响应里的 total/has_more 后端特意算了
-  // 「让截断不再静默」—— 页面必须用它，而不是拿 items.length 冒充「共 N 条」。
-  it("列表被截断时显示真实总数与「只显示最近 N 条」", async () => {
+describe("ApplicationsPage 分页", () => {
+  it("显示真实总数", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => jsonResponse({ ...LIST, total: 350, has_more: true })),
+      vi.fn(async () => jsonResponse(LIST)),
+    );
+    renderPage();
+    expect(await screen.findByText("共 1 条")).toBeTruthy();
+  });
+
+  it("有下一页时可翻页，第二页记录仍可达", async () => {
+    const pages: number[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const url = new URL(raw, "http://testserver");
+        const page = Number(url.searchParams.get("page") ?? "1");
+        pages.push(page);
+        return jsonResponse({
+          ...LIST,
+          total: 2,
+          page,
+          has_next: page === 1,
+          items:
+            page === 1
+              ? LIST.items
+              : [{ ...LIST.items[0], id: "app2", title: "旧记录仍然可达" }],
+        });
+      }),
     );
 
     renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /下一页/ }));
 
-    expect(await screen.findByText("共 350 条，只显示最近 1 条")).toBeTruthy();
+    expect(await screen.findByText("旧记录仍然可达")).toBeTruthy();
+    expect(pages).toContain(2);
   });
 
-  it("未截断时只显示总数", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(LIST)));
+  it("删除第二页唯一记录后自动回到第一页，不显示全空态", async () => {
+    let deleted = false;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (methodOf(input, init) === "DELETE") {
+          deleted = true;
+          return new Response(null, { status: 204 });
+        }
+        const raw =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        const page = Number(
+          new URL(raw, "http://testserver").searchParams.get("page") ?? "1",
+        );
+        if (page === 2) {
+          return jsonResponse({
+            ...LIST,
+            total: deleted ? 1 : 2,
+            page: 2,
+            has_next: false,
+            has_more: false,
+            items: deleted
+              ? []
+              : [
+                  {
+                    ...LIST.items[0],
+                    id: "app2",
+                    title: "第二页唯一记录",
+                  },
+                ],
+          });
+        }
+        return jsonResponse({
+          ...LIST,
+          total: deleted ? 1 : 2,
+          has_next: !deleted,
+        });
+      }),
+    );
 
     renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /下一页/ }));
+    await screen.findByText("第二页唯一记录");
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
-    expect(await screen.findByText("共 1 条")).toBeTruthy();
+    expect(await screen.findByText("AI产品经理")).toBeTruthy();
+    expect(screen.queryByText(/还没有投递记录/)).toBeNull();
   });
 });
 
@@ -242,7 +340,10 @@ describe("ApplicationsPage 备注", () => {
 
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0].url).toContain("/stage");
-    expect(posts[0].body).toMatchObject({ stage: "applied", note: "约了下周三面试" });
+    expect(posts[0].body).toMatchObject({
+      stage: "applied",
+      note: "约了下周三面试",
+    });
   });
 
   it("没改过就不发请求（点一下不该产生一次写入）", async () => {
@@ -283,7 +384,9 @@ describe("ApplicationsPage 备注", () => {
       }
     ).components.schemas.StageUpdateRequest.properties.note;
     // 契约里 `note` 是 anyOf（string | null），上限在 string 那一支上
-    const limit = noteSchema.anyOf?.find((branch) => branch.maxLength != null)?.maxLength;
+    const limit = noteSchema.anyOf?.find(
+      (branch) => branch.maxLength != null,
+    )?.maxLength;
     expect(limit).toBe(MAX_NOTE_CHARS);
   });
 });
@@ -352,7 +455,10 @@ describe("ApplicationsPage 备注 / 阶段的写入互不踩踏", () => {
           return jsonResponse({ application_id: "app1", stage: "interview" });
         }
         // 列表里这一行已有备注 —— 才能看出「改阶段是否把它抹掉」
-        return jsonResponse({ ...LIST, items: [{ ...LIST.items[0], note: "旧备注" }] });
+        return jsonResponse({
+          ...LIST,
+          items: [{ ...LIST.items[0], note: "旧备注" }],
+        });
       }),
     );
     return posts;
@@ -362,7 +468,9 @@ describe("ApplicationsPage 备注 / 阶段的写入互不踩踏", () => {
     const posts = stubPostCapture();
     renderPage();
 
-    const select = (await screen.findByLabelText(/投递阶段/)) as HTMLSelectElement;
+    const select = (await screen.findByLabelText(
+      /投递阶段/,
+    )) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "interview" } });
 
     await waitFor(() => expect(posts).toHaveLength(1));
@@ -410,7 +518,9 @@ describe("ApplicationsPage 备注保存后不回弹（M2 回归）", () => {
       }),
     );
 
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     render(
       <QueryClientProvider client={client}>
         <ApplicationsPage />
@@ -426,9 +536,10 @@ describe("ApplicationsPage 备注保存后不回弹（M2 回归）", () => {
 
     // 修复前：缓存里 note 仍是 null，撤草稿后 input.value 回落到 ""（弹回旧值）
     expect(input.value).toBe("约了下周三面试");
-    expect(client.getQueryData<ApplicationList>(["applications"])?.items[0].note).toBe(
-      "约了下周三面试",
-    );
+    expect(
+      client.getQueryData<ApplicationList>(["applications", { page: 1 }])
+        ?.items[0].note,
+    ).toBe("约了下周三面试");
 
     releaseRefetch();
     await act(async () => {});

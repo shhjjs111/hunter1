@@ -72,14 +72,14 @@ class StageUpdateResponse(BaseModel):
 
 
 class ApplicationListResponse(BaseModel):
-    """投递列表页。
-
-    `total` / `has_more` 是**截断信号**：列表有固定上限（见 router 的 `LIST_LIMIT`），
-    没有它们时第 201 条起永久不可见、且界面看起来「这就是全部」。
-    """
+    """投递列表页（真分页，所有历史记录都可达）。"""
 
     items: list[ApplicationSummary]
     total: int
+    page: int
+    page_size: int
+    has_next: bool
+    #: 兼容旧调用方：等价于 `has_next`。新代码应使用 `has_next`。
     has_more: bool
 
 
