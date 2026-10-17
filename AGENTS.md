@@ -81,6 +81,15 @@ hunter1/
 - 提交前 `bash scripts/check.sh` 全绿。
 - 报告里的每个数字必须来自本轮工具输出 —— 「改完了所以应该过」不是证据。
 
+## GitHub 仓库纪律
+
+- `main` 是受保护分支：**所有变更经 Pull Request**，必须通过 `quality (3.12)`，
+  保持线性历史，禁止 force-push 与删除。
+- 合并策略只保留 squash merge；合并后自动删除远端分支。
+- GitHub Actions 的第三方 action 必须固定到 **40 位 commit SHA**；禁止浮动 tag/branch。
+- `v*` release tag 受规则集保护；发布内容以 `CHANGELOG.md` 为准并附带校验清单。
+- 仓库治理标准与当前远端设置见 `docs/GITHUB.md`。
+
 ## 上传卫生（「不要什么都传」）
 
 公开仓库的每一样东西都是**对外声明**。跟踪清单受

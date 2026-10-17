@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub 仓库治理达到可审计的团队标准**：受保护主分支与 release tag、PR-only
+  合并、要求 `quality (3.12)`、线性历史；CodeQL、Dependency Review、Dependabot
+  与私有漏洞报告；全部第三方 action 固定到完整 commit SHA。
+- **社区健康文件补齐**：新增 Contributor Covenant 2.1 行为准则、CODEOWNERS，
+  并补充仓库治理说明。
+
 ### Fixed
 
 - **安全边界加固**：SSE 错误帧在所有解析分支统一脱敏；写入端点增加跨站来源校验；

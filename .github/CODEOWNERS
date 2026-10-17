@@ -1,0 +1,3 @@
+# Default owner for every path. CODEOWNERS requests review automatically;
+# branch protection still allows the maintainer to merge without self-approval.
+* @shhjjs111

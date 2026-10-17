@@ -1,7 +1,9 @@
 # Hunter1
 
 [![CI](https://github.com/shhjjs111/hunter1/actions/workflows/ci.yml/badge.svg)](https://github.com/shhjjs111/hunter1/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/shhjjs111/hunter1/actions/workflows/codeql.yml/badge.svg)](https://github.com/shhjjs111/hunter1/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![Release](https://img.shields.io/github/v/release/shhjjs111/hunter1)](https://github.com/shhjjs111/hunter1/releases/latest)
 
@@ -155,5 +157,7 @@ Hunter1 是对旧项目 `RecruitOps` 的重做：**迁移抓取资产与数据�
 
 - 📋 **[变更日志](CHANGELOG.md)** ← 各版本改了什么
 - 🤝 **[贡献指南](CONTRIBUTING.md)** ← 提 PR / 报 Issue 的流程与硬性约束
+- 🧭 **[GitHub 仓库治理](docs/GITHUB.md)** ← 分支保护、检查、安全与发布规则
+- 🕊️ **[行为准则](CODE_OF_CONDUCT.md)** ← 社区参与与处理标准
 - 🔒 **[安全策略](SECURITY.md)** ← 漏洞报告通道与威胁模型边界
 - ⚖️ **[MIT License](LICENSE)**
