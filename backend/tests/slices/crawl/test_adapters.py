@@ -557,7 +557,7 @@ class TestEnsureNotBlocked:
     def test_raises_with_url_and_signal(self) -> None:
         with pytest.raises(CrawlBlockedError) as excinfo:
             ensure_not_blocked(BOSS_CHALLENGE, url="https://www.zhipin.com/")
-        assert "https://www.zhipin.com/" in str(excinfo.value)
+        assert str(excinfo.value).split(": ", 1)[1] == "https://www.zhipin.com/"
         assert excinfo.value.url == "https://www.zhipin.com/"
 
     def test_passes_through_normal_page(self) -> None:
