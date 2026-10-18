@@ -57,7 +57,8 @@ SKIPPED=0
 
 #: 是否跑「打包 + 冒烟」（`build.py`）。默认**不跑**：PyInstaller 一次数分钟，
 #: 日常开发循环不该付这个钱（与下面 pytest 的 `--cov` 同一取舍）。CI 与发布前用
-#: `--with-pack` 打开 —— 判据是「真打出一个能启动的包」，而不是「spec 能编译」。
+#: `--with-pack` 打开 —— 判据是「真打出一个能启动、且 ZIP 形态可交付的包」，
+#: 而不是「spec 能编译」。
 #: 这条之所以必须存在：门禁此前只做 `vite build` + 编译 spec，**从不真打包**，
 #: 于是 `build.py` 的前端烘焙一节整段在门禁之外（实测它在本机因 node 包装器而
 #: 必挂，门禁却一直绿）——「不覆盖的路径最先烂掉」，与示例离线冒烟是同一条教训。
@@ -302,10 +303,10 @@ fi
 # 「查过且通过」。
 if [[ "$WITH_PACK" -eq 1 ]]; then
   if "$PY" -c "import PyInstaller" > /dev/null 2>&1; then
-    echo "== 打包 + 冒烟 (build.py) =="
+    echo "== 打包 + 冒烟 + ZIP 校验 (build.py --zip) =="
     # 产物落在 gitignore 的 dist/ 与 build/（见 .gitignore）；这里不清理，留给
     # 发布流程复用（每次门禁重打一遍纯属浪费）。
-    (cd "$ROOT" && "$PY" scripts/build.py)
+    (cd "$ROOT" && "$PY" scripts/build.py --zip)
   else
     echo "  ⚠ 未安装 PyInstaller，打包一节**未执行**（不是通过 —— 是没查）。"
     echo "    安装：$PY -m pip install -e \"backend[build]\"（或 --index-url https://pypi.org/simple pyinstaller）"

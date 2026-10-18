@@ -17,6 +17,10 @@ Hunter1 的远端仓库按以下标准维护。目标不是增加流程装饰，
 PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，验证证据使用真实
 命令输出，不写推测性结论。
 
+当前仓库只有一个维护者，因此暂未强制独立审批和 CODEOWNERS 审批；CODEOWNERS
+只负责自动请求 review。这是明确的单人维护例外，不是团队级审批。增加第二名
+维护者后必须启用至少 1 个 approval、CODEOWNERS review 与 last-push approval。
+
 ## 发布与 Tag
 
 - 版本号遵循 SemVer，并先更新 `backend/src/hunter1/__init__.py` 与
@@ -24,18 +28,28 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
 - Release tag 使用 annotated tag `vX.Y.Z`，指向待发布的 `main` 提交。
 - `v*` tag 受 active tag ruleset 保护，禁止删除和移动。
 - 已启用 immutable releases；正式发布后不得替换资产或改写说明。
-- Release 必须包含平台产物与 `manifest.json`，说明与 `CHANGELOG.md` 对应。
+- 推送 `v*` tag 会触发 `Release` workflow，在 GitHub Windows runner 上重新执行
+  全量门禁和打包，禁止复用本机旧产物。
+- Release 必须包含平台产物、`manifest.json`、`sbom.spdx.json` 与
+  `SHA256SUMS.txt`，说明从 `CHANGELOG.md` 的对应版本小节提取。
+- 发布前先在 draft release 上传并核对资产，再转正式发布；资产同时生成 GitHub
+  build provenance 与 SBOM attestation。
+- Windows Authenticode 证书尚未配置，因此 exe 目前不是受操作系统信任的签名
+  二进制。证书接入前不得把“已签名”作为对外声明。
 - 已发布版本不移动 tag；修复通过新版本发布。
 
 ## CI 与供应链
 
 - `quality (3.12)` 在 Windows runner 上执行完整门禁，包括打包与冒烟。
+- Python 依赖由提交进仓库的 `backend/uv.lock` 锁定；CI 使用固定 uv 版本和
+  `uv sync --frozen`，不会在门禁中隐式升级依赖。
 - CodeQL 对 Python 与 JavaScript/TypeScript 做安全扫描。
 - Dependency graph 为 Dependency Review 提供依赖差异；Dependency Review 拦截
   高风险依赖变更。
 - Dependabot 每周更新 Python、npm 与 GitHub Actions 依赖。
 - 第三方 action 必须固定到完整 40 位 commit SHA，由测试门禁检查。
 - Actions 只允许 GitHub 官方 action，并强制 SHA 固定；默认 token 仅有只读权限。
+- Release workflow 使用 OIDC 生成 build provenance 与 SBOM attestation。
 
 ## 安全
 

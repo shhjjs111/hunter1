@@ -3,48 +3,38 @@
 ## 环境要求
 
 - **Python 3.12+**
-- 依赖管理：`pip`（标准）或 `uv`（推荐，更快）
+- **Node.js 24**
+- **uv 0.12.23**（锁文件是唯一依赖事实源）
 
 ## 搭建开发环境
 
 ```bash
-# 1. 建虚拟环境
-python -m venv .venv
-source .venv/Scripts/activate      # Windows (Git Bash)
-# source .venv/bin/activate        # macOS / Linux
+# 1. 安装锁定工具
+python -m pip install uv==0.12.23
 
-# 2. 装依赖（含开发工具）
-#    `[dev]` 只有测试框架；router 测试 import fastapi、仓储测试 import sqlalchemy、
-#    抓取适配器 import bs4 —— 少了 extras，pytest 会在**收集阶段**就 ImportError。
-#    所以这里与 CI（.github/workflows/ci.yml）用同一集合：
-pip install -e ".[dev,web,db,crawler]"
+# 2. 按 uv.lock 创建 backend/.venv
+uv sync --project backend --frozen \
+  --extra dev --extra web --extra db --extra crawler --extra build
 
-# 3. 验证
-python -m pytest
+# 3. 前端锁文件安装
+cd frontend && npm ci && cd ..
+
+# 4. 验证（与 CI 同一条命令）
+PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/check.sh --with-pack
 ```
 
-> 本机（Windows）说明：若系统无 Python，项目内自带工具链在 `.tools/python`
-> （该目录已 gitignore，不随仓库分发）。**检查统一走 `check.sh`**（自动探测解释器）：
+> `.tools/python` 是本机遗留的 embeddable 工具链，可继续用于临时脚本；CI、发布
+> 和可复现验证必须使用 `backend/.venv`。依赖变化后执行
+> `uv lock --project backend --python 3.12` 并提交 `backend/uv.lock`。
 >
-> ```bash
-> bash scripts/check.sh
-> ```
->
-> 要单跑某一环，**必须先 `cd backend`**（Python 工程根不在仓库根），且 pyright
-> 必须显式 `--pythonpath` 指向项目自带解释器 —— 否则它探测不到这个 embeddable
-> 环境，会把已装好的 pydantic / fastapi 全报成 `Import ... could not be resolved`
-> （**假错**，不是依赖缺失）：
+> 要单跑某一环，**必须先 `cd backend`**（Python 工程根不在仓库根）：
 >
 > ```bash
 > cd backend
-> ../.tools/python/python.exe -m pytest
-> ../.tools/python/python.exe -m ruff check .
-> ../.tools/python/python.exe -m pyright --pythonpath ../.tools/python/python.exe
+> .venv/Scripts/python.exe -m pytest
+> .venv/Scripts/python.exe -m ruff check .
+> .venv/Scripts/python.exe -m pyright --pythonpath .venv/Scripts/python.exe
 > ```
->
-> ⚠️ 该项目内解释器是 **Python embeddable 版**，`pip install -e .`（editable 安装）
-> 在它上面会因构建后端隔离失败。不影响开发——`pyproject.toml` 已配
-> `pythonpath = ["src", "."]`，pytest 能直接找到包。
 
 ## 质量门禁
 
@@ -208,9 +198,9 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 | `scripts/serve.py` | 开发期启动 Web UI（不装包也能用） |
 | `scripts/make_manifest.py` | 生成自更新清单（版本取包本身；拒绝平台错词；对占位符 URL 告警） |
 | `scripts/gh_setup.sh` | 安全交接 GitHub 令牌：只经 stdin（不回显），写入 Git 凭据管理器，当场校验 |
-| `scripts/gh_publish.py` | 推送 + 建 Release + 上传产物；`--reupload` 刷新已有 Release 的地址 |
-| `scripts/release.sh` | 发布收尾（校验产物 → 生成真清单 → 打印待执行的命令） |
-| `release.cmd` | **双击即发布**：从剪贴板读令牌 → 复用 → 推代码建 Release |
+| `scripts/gh_publish.py` | 遗留应急发布工具；标准发布由 tag 触发的 Release workflow 完成 |
+| `scripts/release.sh` | 遗留本地发布校验/清单工具；不是 immutable release 的标准入口 |
+| `release.cmd` | 遗留双击入口；只在 workflow 不可用时应急使用，并需人工补齐 SBOM/attestation |
 
 ## 打包
 
@@ -307,29 +297,34 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 
 ### 发布前检查单
 
+正式发布由 `v*` tag 触发 `.github/workflows/release.yml`。本机只负责版本、锁文件、
+变更说明和发布前验证；不要再用旧的本机上传脚本作为标准发布路径。
+
 按序执行，逐项确认：
 
-1. **版本号**：只改 `src/hunter1/__init__.py` 的 `__version__`（单一来源，有测试锁定）。
-2. **全量门禁**：`bash scripts/check.sh` 全绿。
-3. **打包 + 冒烟**：`./.tools/python/python.exe scripts/build.py --zip`。
-4. **生成清单**：
+1. **版本号与说明**：改 `backend/src/hunter1/__init__.py` 的 `__version__`，并在
+   `CHANGELOG.md` 建同名版本小节。
+2. **锁文件**：`uv lock --project backend --python 3.12`，确认 `backend/uv.lock`
+   随代码一起提交。
+3. **全量门禁**：`PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/check.sh`
+   全绿；CI 使用 `--with-pack`。
+4. **本地打包 + 冒烟**：
+   `backend/.venv/Scripts/python.exe scripts/build.py --zip`，确认 zip 不含 `data/`。
+5. **本地清单检查**（仅用于更新链离线演练，不是发布资产来源）：
    ```bash
-   ./.tools/python/python.exe scripts/make_manifest.py \
+   backend/.venv/Scripts/python.exe scripts/make_manifest.py \
        --asset win32=dist/hunter1-win32.zip \
-       --url-base <上传后的下载地址前缀> \
+       --url-base http://127.0.0.1:<PORT> \
        --out dist/manifest.json
    ```
-   清单里 `assets[].platform` 必须用 `sys.platform` 词汇（见上文对照表）；
-   脚本会对已知错词（`windows`/`macos`…）直接报错、对占位符 URL 告警。
-   `version` 取自包本身，与 `--version` 不一致时拒绝生成。
-5. **升级演练（真旧库）**：拿一份**上个版本**的用户库副本，用新版本启动一次，
+6. **升级演练（真旧库）**：拿一份**上个版本**的用户库副本，用新版本启动一次，
    确认三条路径 —— 这是自动化门禁覆盖不到的（测试与冒烟都用全新临时库）：
    | 场景 | 观察点 |
    |---|---|
    | 干净旧库 | 正常启动；新增的唯一索引出现；**行数不变**；无告警 |
    | 撞过号的旧库 | stderr 打出「检测到 N 个会话…已重排」；序号重排为 1..N；消息不丢 |
    | 带已移除字段的旧配置 | `GET /api/settings` 的 `broken` 为 `false`（不被判损坏） |
-6. **更新链路演练**（起本地 HTTP 服务当"发布源"，无需真的上传）：
+7. **更新链路演练**（起本地 HTTP 服务当"发布源"，无需真的上传）：
    ```bash
    # 就在产物目录里起服务（清单与 zip 都在 dist/ 下）——**这一步的清单要按这个地址
    # 重新生成一份**：`--url-base http://127.0.0.1:<PORT>`，否则清单里的下载地址指向线上。
@@ -345,7 +340,7 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    - 校验失败时 exe 退出码为 **1**（成功为 0）。用 `cmd | head` 取 `$?` 拿到的是
      `head` 的码，别据此判断 —— 要读真实码就 `> file 2>&1; echo $?`。
    - 解压结果是**单目录**结构（`<dest>/<version>/hunter1/`），不是平铺的。
-7. **多分辨率视觉验收**（必做，别省）：布局问题**单元测试抓不到** —— jsdom 没有布局
+8. **多分辨率视觉验收**（必做，别省）：布局问题**单元测试抓不到** —— jsdom 没有布局
    引擎，组件测试全绿也不代表窄屏不塌。用 Edge/Chrome 无头截图逐个分辨率看：
    ```bash
    EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
@@ -367,36 +362,23 @@ CI 用 `contracts.sh --check` 拦截漏导出。
    按钮不折行、关键列不被裁掉、可横向滚动的内容能滑到。
    > 加 `--virtual-time-budget=4000` 等页面加载完再截，否则会截到「加载中」。
 
-8. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
-9. **上传 + 打 tag**：优先用脚本（**别手打 `git remote add` / `git push`** —— 见下方
-   镜像警告）：
+9. **产物外置验收**：把 `dist/hunter1/` 复制到项目外目录启动，确认页面能开、能配置、能抓取。
+10. **合并并推 tag**：PR squash 合并后，在确切的 `main` 提交上创建 annotated tag：
    ```bash
-   bash scripts/gh_setup.sh                                   # 首次：写入 Git 凭据管理器
-   ./.tools/python/python.exe scripts/gh_publish.py <owner>/hunter1
-   # 或直接双击 release.cmd（从剪贴板读令牌，不必往控制台粘贴）
+   git switch main
+   git pull --ff-only
+   git tag -a v0.2.1 -m "hunter1 0.2.1"
+   git push origin v0.2.1
    ```
-   `gh_publish.py` 会做四件事：推送分支与 tag → 建 Release → **用真实地址重新生成
-   清单**（`url` 是绝对地址，上传前无从得知）→ 上传 zip + manifest.json。
-   tag 取 `v` + `__version__`（`rules.py` 容忍 `v` 前缀）。它的前置校验是
-   「工作区干净 + tag 指向 HEAD」，不满足就拒绝。
+   Release workflow 会重新构建、跑全量门禁、生成 manifest/SBOM/checksums、
+   attest，随后以 draft 上传并核对 4 个资产，最后发布 immutable release。
 
-### 账号/仓库改名后：`--reupload`
+### 账号/仓库改名
 
-**已发布的 `manifest.json` 里那个绝对地址不会随改名更新** —— 改名后旧版 exe
-只能靠 301 重定向撑着，而旧用户名一旦被别人注册，重定向就断。
-
-```bash
-./.tools/python/python.exe scripts/gh_publish.py <新owner>/hunter1 --reupload
-```
-
-它跳过 git push 与「tag 指向 HEAD」校验（产物没重新构建，那条校验说明不了什么），
-代价由一道更贴切的阀门顶上：**比对本地产物与线上清单里的 sha256**，不一致就拒绝。
-拿不到线上清单时也拒绝（fail-closed）—— 否则这个开关就等于「关掉安全检查」。
-
-> ⚠️ **重传后立刻验证会看到旧内容，那是 CDN 缓存，不是失败。** 实测：刚传完从
-> `releases/download/...` 取回的仍是上一版（331 字节），而走
-> `api.github.com/repos/.../releases/assets/<id>` 取回的是新内容（327 字节）。
-> 两条通道内容不一致 = 缓存；等一会儿自己过期。别据此判定上传失败。
+已发布 release 是 immutable，旧 `manifest.json` 中的绝对地址不能通过“重传资产”
+修复。`gh_publish.py --reupload` 只保留为 immutable 启用前的历史应急代码，不得
+用于当前仓库。仓库改名后应发布新的 patch 版本；旧下载地址只能寄希望于 GitHub
+301 重定向，不能作为长期兼容承诺。
 
 > ⚠️ **镜像会改写命令行文本里的 GitHub 地址**。开了 `/mirror china` 时，
 > `--url-base https://github.com/...` 会被改写成 `https://gitcode.com/gh_mirror/...`

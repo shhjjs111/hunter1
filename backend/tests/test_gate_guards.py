@@ -151,7 +151,9 @@ class TestPackGateIsWired:
     def test_check_sh_supports_with_pack_switch(self) -> None:
         source = CHECK_SH.read_text(encoding="utf-8")
         assert "--with-pack" in source, "check.sh 不认识 --with-pack"
-        assert "scripts/build.py" in source, "check.sh 的打包一节没调 build.py"
+        assert "scripts/build.py --zip" in source, (
+            "check.sh 的打包一节必须构建并校验 ZIP；只构建目录会漏掉发布物形态"
+        )
 
     def test_ci_enables_the_pack_gate(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
@@ -163,6 +165,6 @@ class TestPackGateIsWired:
         """CI 真打包就必须装 PyInstaller，否则那一节会以「未执行」记一笔、门禁转红；
         更糟的是若有人把它当噪声去掉开关，覆盖就静默没了。"""
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-        assert "build" in workflow.split("pip install")[1].split("\n")[0], (
-            "CI 的 pip install 没带 build extra（PyInstaller）"
-        )
+        assert "uv sync" in workflow, "CI 没有从锁文件安装后端依赖"
+        assert "--frozen" in workflow, "CI 没有锁定 uv.lock"
+        assert "--extra build" in workflow, "CI 的 uv sync 没带 build extra（PyInstaller）"

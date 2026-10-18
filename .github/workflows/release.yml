@@ -1,0 +1,130 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  UV_VERSION: "0.12.23"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 检出完整标签历史
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.10"
+
+      - name: 安装 Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.21.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 校验 tag、版本与 main 祖先关系
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check "uv==$UV_VERSION"
+          uv sync --project backend --frozen --python 3.12.10 --extra dev --extra web --extra db --extra crawler --extra build
+          PY="$(pwd)/backend/.venv/Scripts/python.exe"
+          TAG="$GITHUB_REF_NAME"
+          VERSION="$("$PY" -c "import sys; sys.path.insert(0, 'backend/src'); from hunter1 import __version__; print(__version__)")"
+          test "$TAG" = "v$VERSION"
+          test "$(git cat-file -t "refs/tags/$TAG")" = "tag"
+          test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor HEAD origin/main
+          uv pip install --python "$PY" --index-url https://pypi.org/simple shellcheck-py==0.11.0.1
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 重建并执行完整门禁
+        run: PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/check.sh --with-pack
+
+      - name: 生成清单、SBOM、发布说明和校验和
+        run: |
+          set -euo pipefail
+          PY="$(pwd)/backend/.venv/Scripts/python.exe"
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          PLATFORM="$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import platform_key; print(platform_key())")"
+          ZIP="dist/$("$PY" -c "import sys; sys.path.insert(0, 'scripts'); from artifact import artifact_name; print(artifact_name())")"
+          test -f "$ZIP"
+          "$PY" scripts/make_manifest.py \
+            --asset "$PLATFORM=$ZIP" \
+            --url-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
+            --version "$VERSION" \
+            --out dist/manifest.json
+          "$PY" scripts/make_sbom.py --output dist/sbom.spdx.json
+          "$PY" scripts/release_notes.py --version "$VERSION" --out dist/release-notes.md
+          (
+            cd dist
+            sha256sum "$(basename "$ZIP")" manifest.json sbom.spdx.json > SHA256SUMS.txt
+            sha256sum -c SHA256SUMS.txt
+          )
+
+      - name: 生成构建来源证明
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/hunter1-win32.zip
+            dist/manifest.json
+            dist/sbom.spdx.json
+            dist/SHA256SUMS.txt
+
+      - name: 生成 SBOM 证明
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/hunter1-win32.zip
+          sbom-path: dist/sbom.spdx.json
+
+      - name: 创建草稿、上传资产、核对后发布
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
+            if [ "$IS_DRAFT" = "true" ]; then
+              gh release delete "$TAG" --yes --cleanup-tag=false
+            else
+              echo "::error::$TAG 已发布；不可变 release 不允许覆盖"
+              exit 1
+            fi
+          fi
+          gh release create "$TAG" \
+            --draft \
+            --verify-tag \
+            --title "Hunter1 $TAG" \
+            --notes-file dist/release-notes.md
+          gh release upload "$TAG" \
+            dist/hunter1-win32.zip \
+            dist/manifest.json \
+            dist/sbom.spdx.json \
+            dist/SHA256SUMS.txt
+          COUNT="$(gh release view "$TAG" --json assets --jq '.assets | length')"
+          test "$COUNT" = "4"
+          gh release edit "$TAG" --draft=false

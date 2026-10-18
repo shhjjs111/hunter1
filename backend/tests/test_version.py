@@ -38,7 +38,7 @@ class TestSingleSourceOfTruth:
 
     def test_hatch_reads_version_from_the_package(self) -> None:
         configured = _pyproject()["tool"]["hatch"]["version"]["path"]
-        assert Path(configured).resolve() == VERSION_FILE.resolve()
+        assert (PYPROJECT.parent / configured).resolve() == VERSION_FILE.resolve()
 
     def test_declared_file_actually_defines_the_version(self) -> None:
         assert "__version__" in VERSION_FILE.read_text(encoding="utf-8")

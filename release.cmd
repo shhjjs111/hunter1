@@ -21,6 +21,15 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title hunter1 release
 
+if /I not "%HUNTER1_ALLOW_LEGACY_RELEASE%"=="1" (
+  echo [BLOCKED] Standard releases are created by pushing a v* tag.
+  echo           GitHub Actions rebuilds, attests, and publishes the assets.
+  echo           Legacy manual release: set HUNTER1_ALLOW_LEGACY_RELEASE=1
+  echo.
+  pause
+  exit /b 2
+)
+
 set "PY=%~dp0.tools\python\python.exe"
 if exist "%PY%" goto :run
 
