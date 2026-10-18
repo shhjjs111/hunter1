@@ -78,6 +78,13 @@ def test_release_workflow_is_tag_driven_and_attested() -> None:
     assert 'gh release edit "$TAG" --draft=false' in text
 
 
+def test_required_quality_status_context_stays_stable() -> None:
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert 'python-version: ["3.12"]' in text, (
+        "quality job 的 matrix 必须保持 3.12，否则必需状态检查名称会漂移"
+    )
+
+
 def test_python_dependencies_are_locked_and_ci_is_frozen() -> None:
     assert (ROOT / "backend" / "uv.lock").is_file()
     text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")

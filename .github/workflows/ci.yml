@@ -25,7 +25,6 @@ concurrency:
 
 jobs:
   quality:
-    name: quality (3.12)
     # 硬超时。**默认值（360 分钟 = 6 小时）太长了**，实测吃过一次：
     # 一个卡住的 job 静默烧满 6 小时才被 GitHub 取消，期间只看到 Actions 一直
     # 转圈，且日志里没有失败信息（pytest 的进度点停在原地）。
@@ -54,7 +53,7 @@ jobs:
         shell: bash
     strategy:
       matrix:
-        python-version: ["3.12.10"]
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
