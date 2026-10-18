@@ -68,6 +68,9 @@ SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 # 工具结果可能很长（搜出几十条岗位），但前端只需要一个摘要。
 TOOL_PREVIEW_LIMIT = 1000
 
+_STREAM_FAILURE_MESSAGE = "生成回复时出错（本轮内容未保存），请重试。"
+_STREAM_LLM_FAILURE_MESSAGE = "模型调用失败（本轮内容未保存）：请检查模型配置、网络与额度后重试。"
+
 # 历史上下文的默认截断条数（对话越长越该保留近期）。
 DEFAULT_HISTORY_LIMIT = 20
 
@@ -357,9 +360,6 @@ def build_router(
         # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
         # 会 close 这个 generator，finally 同样会跑到。
         return StreamingResponse(
-            # CodeQL 误报：generator 对所有异常都只产出固定用户文案，异常类名与实现
-            # 细节不会进入 SSE；test_non_contract_failure_does_not_leak_internals 固化该边界。
-            # codeql[py/stack-trace-exposure]
             _stream_turn(
                 store=store,
                 llm=llm,
@@ -430,6 +430,12 @@ def _stream_turn(
                 "degraded": bool(final and final.degraded),
             }
         )
+    except LLMError as exc:
+        # 异常只进服务端日志。SSE 文案必须是常量，不能让异常对象或其属性参与
+        # 数据流 —— 上游错误原文可能携带内部状态，CodeQL 的 stack-trace-exposure
+        # 也会沿这条路径告警。
+        _log_stream_failure(exc)
+        yield _sse({"type": "error", "message": _STREAM_LLM_FAILURE_MESSAGE})
     except KeyError:
         # 会话在流期间被删（`_persist` 对未知会话抛 KeyError）。一次性端点在同场景给
         # 404，流式这边响应已开始、只能作为事件交出去 —— 但要说**可读的原因**，
@@ -438,29 +444,19 @@ def _stream_turn(
     except Exception as exc:
         # 响应已经开始，没法再重定向 —— 失败必须作为事件交出去。
         #
-        # 但**不把实现细节原样甩给 UI**（报告次要项）：`{type}：{exc}` 会把内部异常
-        # 类名与实现相关的消息（库内部状态、参数）泄露到界面。LLMError 走可读中文
-        # （`describe_llm_error`），其余记 stderr + 给通用文案 —— 与 settings 切片的
-        # `_failure_text` 同一考量（那里也保留原文，但那是**只读探测**的场景、且过了
-        # `_redact`；对话流不该把 traceback 细节交给用户）。
-        yield _sse({"type": "error", "message": _stream_error_message(exc)})
+        # 但**不把实现细节原样甩给 UI**：异常只记 stderr，响应侧给固定文案。
+        # 这样异常类名、库内部状态和参数不会进入 SSE，也不会把 traceback 交给用户。
+        _log_stream_failure(exc)
+        yield _sse({"type": "error", "message": _STREAM_FAILURE_MESSAGE})
     finally:
         # 本 generator 拥有这个客户端（见 `stream` 端点的注释）：正常结束、出错、
         # 或客户端断开（GeneratorExit）—— 三条路径都要把连接池释放掉。
         llm.close()
 
 
-def _stream_error_message(exc: Exception) -> str:
-    """流式失败对外的 `error` 事件文案 —— 可读原因交用户，实现细节进 stderr。
-
-    与 settings 切片的 `_failure_text` 同一取舍：`LLMError` 走人工维护的可行动中文
-    （`describe_llm_error`），其它异常只给一句通用文案、原文写 stderr 供排障。
-    区别在于对话流是**用户界面**，把 traceback 细节印上去既没用也不安全。
-    """
-    if isinstance(exc, LLMError):
-        return describe_llm_error(exc)
+def _log_stream_failure(exc: Exception) -> None:
+    """把流式失败原文留在服务端日志，供排障但不进入响应。"""
     print(f"[assistant] 流式对话失败：{type(exc).__name__}: {exc}", file=sys.stderr)
-    return "生成回复时出错（本轮内容未保存），请重试。"
 
 
 __all__ = [
