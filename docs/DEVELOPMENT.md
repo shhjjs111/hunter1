@@ -207,7 +207,7 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 | `scripts/refresh_fixtures.py` | 站点改版后重抓并刷新离线快照（裁剪 + 回读校验后才落盘） |
 | `scripts/serve.py` | 开发期启动 Web UI（不装包也能用） |
 | `scripts/make_manifest.py` | 生成自更新清单（版本取包本身；拒绝平台错词；对占位符 URL 告警） |
-| `scripts/gh_setup.sh` | 安全交接 GitHub 令牌：只经 stdin（不回显），存到**仓库外**，当场校验 |
+| `scripts/gh_setup.sh` | 安全交接 GitHub 令牌：只经 stdin（不回显），写入 Git 凭据管理器，当场校验 |
 | `scripts/gh_publish.py` | 推送 + 建 Release + 上传产物；`--reupload` 刷新已有 Release 的地址 |
 | `scripts/release.sh` | 发布收尾（校验产物 → 生成真清单 → 打印待执行的命令） |
 | `release.cmd` | **双击即发布**：从剪贴板读令牌 → 复用 → 推代码建 Release |
@@ -371,7 +371,7 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 9. **上传 + 打 tag**：优先用脚本（**别手打 `git remote add` / `git push`** —— 见下方
    镜像警告）：
    ```bash
-   bash scripts/gh_setup.sh                                   # 首次：安全喂入令牌
+   bash scripts/gh_setup.sh                                   # 首次：写入 Git 凭据管理器
    ./.tools/python/python.exe scripts/gh_publish.py <owner>/hunter1
    # 或直接双击 release.cmd（从剪贴板读令牌，不必往控制台粘贴）
    ```
