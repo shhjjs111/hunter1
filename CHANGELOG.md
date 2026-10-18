@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-18
+
+### Fixed
+
+- **Release workflow 在 Windows cp1252 控制台崩溃**：SBOM 脚本输出全角冒号时触发
+  `UnicodeEncodeError`。发布脚本现在显式切换 UTF-8，workflow 同时设置
+  `PYTHONUTF8=1`。
+- `v0.2.1` tag 已创建，但 workflow 在发布前失败，因此没有对应 GitHub Release；
+  `v0.2.2` 是首个包含完整发布硬化产物的版本。
+
 ## [0.2.1] - 2026-10-18
 
 ### Added
@@ -116,7 +126,8 @@ AI 求职助手 → 投递管理」全流程。
 - **打包分发**：PyInstaller 单目录产物，前端产物嵌入；`check.sh --with-pack`
   真打包 + 冒烟纳入 CI 门禁。
 
-[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/shhjjs111/hunter1/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/shhjjs111/hunter1/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shhjjs111/hunter1/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/shhjjs111/hunter1/compare/v0.1.0...v0.1.1

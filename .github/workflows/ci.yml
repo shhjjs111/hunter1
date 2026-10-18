@@ -9,6 +9,7 @@ permissions:
   contents: read
 
 env:
+  PYTHONUTF8: "1"
   UV_VERSION: "0.12.23"
 
 # 同一分支连推多次时，取消**仍在排队/运行**的旧 run，只保留最新的。

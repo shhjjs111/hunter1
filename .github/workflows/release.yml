@@ -11,6 +11,7 @@ permissions:
 
 env:
   GH_TOKEN: ${{ github.token }}
+  PYTHONUTF8: "1"
   UV_VERSION: "0.12.23"
 
 concurrency:

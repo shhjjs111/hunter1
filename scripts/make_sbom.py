@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import io
 import json
 import re
 import subprocess
@@ -23,6 +24,12 @@ from hunter1 import __version__  # noqa: E402
 REPOSITORY_URL = "https://github.com/shhjjs111/hunter1"
 DEFAULT_NPM_LOCK = ROOT / "frontend" / "package-lock.json"
 DEFAULT_OUTPUT = ROOT / "dist" / "sbom.spdx.json"
+
+
+def _configure_console() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 @dataclass(frozen=True, order=True)
@@ -200,6 +207,7 @@ def _git_commit() -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_console()
     parser = argparse.ArgumentParser(prog="make_sbom.py", description="生成 SPDX 2.3 SBOM")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="SPDX JSON 输出路径")
     parser.add_argument(
