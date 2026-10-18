@@ -418,8 +418,8 @@ def _mount_frontend(app: FastAPI) -> None:
 
     index = dist_root / "index.html"
 
-    @app.get("/", include_in_schema=False)
-    @app.get("/{path:spa_path}", include_in_schema=False)
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/{path:spa_path}", methods=["GET", "HEAD"], include_in_schema=False)
     def spa(path: str = "") -> Response:
         # 真实文件优先（favicon、robots.txt、预渲染页…），其余交给 SPA。
         if path:

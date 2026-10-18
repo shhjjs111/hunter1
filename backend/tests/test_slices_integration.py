@@ -351,6 +351,21 @@ class TestFrontendServing:
         assert response.json()["total"] == 1
         db.dispose()
 
+    def test_head_spa_routes_return_empty_body_with_security_headers(self, tmp_path: Path) -> None:
+        """健康检查 / 链接预览用 HEAD 探测 SPA：不能 405，且安全头仍在。"""
+        dist = tmp_path / "dist_head"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>spa</html>", encoding="utf-8")
+        test_client, db = _make_app(tmp_path, frontend=dist)
+
+        for path in ("/", "/applications"):
+            response = test_client.head(path)
+            assert response.status_code == 200, f"HEAD {path} 实得 {response.status_code}"
+            assert response.content == b""
+            assert "content-security-policy" in response.headers
+            assert "x-content-type-options" in response.headers
+        db.dispose()
+
     def test_unregistered_api_path_is_json_404_not_spa(self, tmp_path: Path) -> None:
         """**未注册**的 `/api/*` 不能回落到 index.html（200 + HTML）。
 
