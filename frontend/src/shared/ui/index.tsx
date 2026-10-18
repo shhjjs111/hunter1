@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-line bg-surface shadow-sm ${className}`}>
+    <div className={`glass-thin rounded-3xl ${className}`}>
       {children}
     </div>
   );
@@ -26,7 +26,8 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
  * `background-color: transparent`，在页面底色的 `canvas`（浅灰）上会露出灰底 ——
  * 抽公共类时漏掉它，搜索框就从白底变成灰底（这次实打实踩到了）。
  */
-export const fieldClass = "rounded border border-field bg-surface px-3 py-2";
+export const fieldClass =
+  "recessed rounded-2xl px-4 py-2.5 text-ink placeholder:text-subtle transition-shadow focus:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.35)] focus:outline-none";
 
 type ButtonProps = {
   children: ReactNode;
@@ -49,11 +50,11 @@ export function Button({
   describedBy,
 }: ButtonProps) {
   const base =
-    "rounded px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+    "lift rounded-full px-4 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40";
   const look =
     variant === "primary"
-      ? "bg-ink text-white hover:bg-ink-soft"
-      : "border border-field bg-surface hover:bg-surface-sunken";
+      ? "bg-accent text-on-accent shadow-[0_6px_20px_-8px_var(--color-accent)] hover:bg-accent-hover"
+      : "bg-fill text-ink shadow-[inset_0_1px_0_var(--glass-spec)] hover:bg-fill-strong";
   return (
     <button
       type={type}
@@ -81,13 +82,15 @@ export function Tag({
     bad: "bg-danger-soft text-danger",
   } as const;
   return (
-    <span className={`inline-block rounded px-2 py-0.5 text-xs ${tones[tone]}`}>{children}</span>
+    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${tones[tone]}`}>
+      {children}
+    </span>
   );
 }
 
 export function EmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-dashed border-field p-8 text-center text-muted">
+    <div className="glass-thin rounded-3xl p-10 text-center text-muted">
       {children}
     </div>
   );
@@ -95,7 +98,9 @@ export function EmptyState({ children }: { children: ReactNode }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <p className="rounded border border-danger-line bg-danger-soft p-3 text-sm text-danger">{message}</p>
+    <p className="rounded-2xl border border-danger-line bg-danger-soft px-4 py-3 text-sm text-danger">
+      {message}
+    </p>
   );
 }
 
@@ -113,10 +118,10 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="mb-6 flex items-baseline justify-between gap-4">
+    <header className="mb-7 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h1 className="text-2xl font-semibold">{title}</h1>
-        {subtitle != null && <div className="text-sm text-muted">{subtitle}</div>}
+        <h1 className="text-[2rem] leading-tight font-semibold">{title}</h1>
+        {subtitle != null && <div className="mt-1 text-sm text-muted">{subtitle}</div>}
       </div>
       {actions}
     </header>

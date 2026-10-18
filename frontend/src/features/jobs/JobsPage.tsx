@@ -19,7 +19,7 @@ export function JobsPage() {
     // 这里是**页面内容**，不是文档主地标：AppLayout 已经渲染了 <main>，
     // 再嵌一层就是两个 main 地标（无效嵌套，屏幕阅读器的跳转菜单里出现两个
     // 「主要内容」）。其余四个页面都是 <div>，只有这里曾写成 <main>。
-    <div className="mx-auto max-w-5xl px-4 py-8">
+    <div>
       {/* 页头与提示都走 `shared/ui` 的原语 —— 原先这里是手写的 h1/span/提示条，
           等于把设计系统的排版与配色又抄了一遍：改一处视觉要记得改两处。 */}
       <PageHeader

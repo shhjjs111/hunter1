@@ -30,7 +30,7 @@ export class ErrorBoundary extends Component<
         <pre className="overflow-auto text-xs text-danger">{this.state.error.message}</pre>
         <button
           type="button"
-          className="mt-4 rounded border border-danger-field bg-surface px-3 py-1.5 text-sm"
+          className="lift mt-4 rounded-full border border-danger-field bg-fill px-4 py-1.5 text-sm"
           onClick={() => this.setState({ error: null })}
         >
           重试

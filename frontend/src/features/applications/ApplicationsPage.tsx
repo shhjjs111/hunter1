@@ -147,7 +147,7 @@ export function ApplicationsPage() {
         <Card>
           {/* 窄屏可横向滚动：与岗位表同理 —— 宁可横滑，也不把「2026-10-06」
               这类内容压成竖排。 */}
-          <div className="overflow-x-auto">
+          <div className="scroll-fade overflow-x-auto">
             <table className="w-full border-collapse text-sm whitespace-nowrap">
               <thead>
                 <tr className="border-b border-line text-left text-muted">
@@ -169,7 +169,7 @@ export function ApplicationsPage() {
                     <td className="px-4 py-2">{item.title}</td>
                     <td className="px-4 py-2">
                       <select
-                        className="rounded border border-field bg-surface px-2 py-1"
+                        className="recessed rounded-full px-3 py-1 text-sm text-ink focus:outline-none"
                         aria-label={`「${item.title}」（${item.company}）的投递阶段`}
                         value={stageDraft[item.id] ?? item.stage}
                         onChange={(event) => {

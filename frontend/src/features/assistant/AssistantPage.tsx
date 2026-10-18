@@ -337,8 +337,8 @@ export function AssistantPage() {
               <button
                 type="button"
                 disabled={streaming}
-                className={`w-full truncate rounded px-2 py-1 text-left text-sm ${
-                  currentId === item.id ? "bg-ink text-white" : "hover:bg-surface-sunken"
+                className={`w-full truncate rounded-full px-3.5 py-2 text-left text-sm transition-colors ${
+                  currentId === item.id ? "bg-fill-active text-ink pill-shadow" : "text-muted-strong hover:bg-fill"
                 } ${streaming ? "cursor-not-allowed opacity-50" : ""}`}
                 onClick={() => {
                   setCurrentId(item.id);

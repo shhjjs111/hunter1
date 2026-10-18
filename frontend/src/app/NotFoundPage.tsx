@@ -12,12 +12,12 @@ import { Link } from "react-router";
  */
 export function NotFoundPage() {
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
+    <div>
       <h1 className="mb-2 text-2xl font-semibold">页面不存在</h1>
       <p className="mb-6 text-muted-strong">
         这个地址没有对应的页面（可能打错了，或者来自旧版本的链接）。
       </p>
-      <Link className="rounded border border-field bg-surface px-3 py-1.5 text-sm" to="/">
+      <Link className="lift inline-block rounded-full bg-fill px-4 py-1.5 text-sm font-medium hover:bg-fill-strong" to="/">
         回到岗位库
       </Link>
     </div>

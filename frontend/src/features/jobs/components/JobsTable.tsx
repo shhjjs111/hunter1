@@ -30,7 +30,7 @@ function JobTitleLink({ title, url }: { title: string; url: string }) {
     return <span>{title}</span>;
   }
   return (
-    <a className="text-blue-700 hover:underline" href={href} target="_blank" rel="noreferrer">
+    <a className="font-medium text-ink decoration-current/40 underline-offset-4 hover:underline" href={href} target="_blank" rel="noreferrer">
       {title}
     </a>
   );
@@ -64,62 +64,62 @@ export function JobsTable({
   return (
     // 窄屏可横向滚动：表格列有最小可读宽度，硬挤会把「北京」拆成「北 京」、
     // 「记录投递」折成两行。宁可横滑，也不压成竖排文字。
-    <div className="mt-6 overflow-x-auto">
-      <table className="w-full border-collapse text-sm whitespace-nowrap">
-        <thead>
-          <tr className="border-b border-line text-left text-muted">
-            <th className="py-2 pr-4 font-medium">岗位</th>
-            <th className="py-2 pr-4 font-medium">公司</th>
-            <th className="py-2 pr-4 font-medium">城市</th>
-            <th className="py-2 pr-4 font-medium">匹配分</th>
-            <th className="py-2 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {jobs.map((job) => (
-            <tr key={job.id} className="border-b border-line-soft">
-              {/* 行内按钮的**可访问名**保持「评分 / 记录投递」（不覆盖可见文案：
-                  WCAG 2.5.3 要求可访问名包含可见标签），岗位信息经
-                  `aria-describedby` 补上 —— 屏幕阅读器会念「评分，AI产品经理 字节跳动」，
-                  视觉用户靠行位置区分，两边都不吃亏。 */}
-              <td className="py-2 pr-4" id={`job-${job.id}-label`}>
-                <JobTitleLink title={job.title} url={job.detail_url} />
-              </td>
-              <td className="py-2 pr-4">{job.company}</td>
-              <td className="py-2 pr-4">{job.city ?? "—"}</td>
-              <td className="py-2 pr-4">
-                {job.match_score != null ? (
-                  <span className="rounded bg-success-soft px-2 py-0.5 text-success">
-                    {job.match_score}
-                  </span>
-                ) : (
-                  <span className="text-subtle">未评分</span>
-                )}
-              </td>
-              <td className="py-2 text-right">
-                <div className="flex justify-end gap-2">
-                  <Button
-                    disabled={scoringId === job.id}
-                    onClick={() => onScore(job.id)}
-                    describedBy={`job-${job.id}-label`}
-                    className="border border-field"
-                  >
-                    {scoringId === job.id ? "评分中…" : "评分"}
-                  </Button>
-                  <Button
-                    disabled={applyingId === job.id}
-                    onClick={() => onApply(job.id)}
-                    describedBy={`job-${job.id}-label`}
-                    className="border border-field"
-                  >
-                    {applyingId === job.id ? "记录中…" : "记录投递"}
-                  </Button>
-                </div>
-              </td>
+    <div className="glass-thin mt-6 rounded-3xl p-2">
+      <div className="scroll-fade overflow-x-auto">
+        <table className="w-full border-separate border-spacing-0 text-sm whitespace-nowrap">
+          <thead>
+            <tr className="text-left text-xs tracking-wide text-muted">
+              <th className="px-4 py-3 font-medium">岗位</th>
+              <th className="px-4 py-3 font-medium">公司</th>
+              <th className="px-4 py-3 font-medium">城市</th>
+              <th className="px-4 py-3 font-medium">匹配分</th>
+              <th className="px-4 py-3 font-medium"></th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {jobs.map((job) => (
+              <tr key={job.id} className="group transition-colors hover:bg-fill-subtle [&>td]:border-t [&>td]:border-line-soft [&>td:first-child]:rounded-l-2xl [&>td:last-child]:rounded-r-2xl hover:[&>td]:border-transparent">
+                {/* 行内按钮的**可访问名**保持「评分 / 记录投递」（不覆盖可见文案：
+                    WCAG 2.5.3 要求可访问名包含可见标签），岗位信息经
+                    `aria-describedby` 补上 —— 屏幕阅读器会念「评分，AI产品经理 字节跳动」，
+                    视觉用户靠行位置区分，两边都不吃亏。 */}
+                <td className="px-4 py-3.5" id={`job-${job.id}-label`}>
+                  <JobTitleLink title={job.title} url={job.detail_url} />
+                </td>
+                <td className="px-4 py-3.5 text-ink-soft">{job.company}</td>
+                <td className="px-4 py-3.5 text-muted-strong">{job.city ?? "—"}</td>
+                <td className="px-4 py-3.5">
+                  {job.match_score != null ? (
+                    <span className="inline-flex min-w-10 justify-center rounded-full bg-success-soft px-2.5 py-0.5 font-semibold text-success tabular-nums">
+                      {job.match_score}
+                    </span>
+                  ) : (
+                    <span className="text-subtle">未评分</span>
+                  )}
+                </td>
+                <td className="px-4 py-3.5 text-right">
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      disabled={scoringId === job.id}
+                      onClick={() => onScore(job.id)}
+                      describedBy={`job-${job.id}-label`}
+                    >
+                      {scoringId === job.id ? "评分中…" : "评分"}
+                    </Button>
+                    <Button
+                      disabled={applyingId === job.id}
+                      onClick={() => onApply(job.id)}
+                      describedBy={`job-${job.id}-label`}
+                    >
+                      {applyingId === job.id ? "记录中…" : "记录投递"}
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

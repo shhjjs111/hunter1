@@ -1,7 +1,12 @@
-import { NavLink, Outlet, useLocation } from "react-router";
+import { useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+
+import envDark from "../assets/env-dark.webp";
+import envLight from "../assets/env-light.webp";
 
 import { useCrawlStatus } from "../features/crawl/api";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { useTheme } from "./theme";
 
 /**
  * 应用外壳 —— 宽屏两栏（左侧导航 + 内容区），窄屏单栏（顶部横条导航）。
@@ -15,12 +20,65 @@ import { ErrorBoundary } from "./ErrorBoundary";
  * 表格被挤到文字竖排。所以 md 以下改为顶部横条。
  */
 const NAV = [
-  { to: "/", label: "岗位库", end: true },
-  { to: "/crawl", label: "抓取" },
-  { to: "/applications", label: "投递记录" },
-  { to: "/assistant", label: "求职助手" },
-  { to: "/settings", label: "配置" },
-];
+  { to: "/", label: "岗位库", end: true, icon: "jobs", hint: "抓回来的岗位与匹配分" },
+  { to: "/crawl", label: "抓取", icon: "crawl", hint: "从公开站点拉取新岗位" },
+  { to: "/applications", label: "投递记录", icon: "applications", hint: "每一次投递的进展" },
+  { to: "/assistant", label: "求职助手", icon: "assistant", hint: "备面试、改简历、比 offer" },
+  { to: "/settings", label: "配置", icon: "settings", hint: "模型与求职画像" },
+] as const;
+
+type IconName = (typeof NAV)[number]["icon"];
+
+/** SF Symbols 风格的线性图标（1.75 描边、圆角端点），纯装饰，读屏忽略。 */
+function NavIcon({ name, className = "size-[22px] shrink-0" }: { name: IconName; className?: string }) {
+  const paths: Record<IconName, ReactNode> = {
+    jobs: (
+      <>
+        <rect x="3.5" y="7" width="17" height="12.5" rx="3" />
+        <path d="M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7" />
+        <path d="M3.5 12.5h17" />
+      </>
+    ),
+    crawl: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5S9.6 5.8 12 3.5Z" />
+      </>
+    ),
+    applications: (
+      <>
+        <path d="M20.5 3.5 10 14" />
+        <path d="M20.5 3.5 14 20.5l-4-6.5-6.5-4 17-6.5Z" />
+      </>
+    ),
+    assistant: (
+      <>
+        <path d="M12 3.5l1.6 4.4 4.4 1.6-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6L12 3.5Z" />
+        <path d="M18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+      </>
+    ),
+    settings: (
+      <>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4 6 18M18 18l-1.6-1.6M7.6 7.6 6 6" />
+      </>
+    ),
+  };
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {paths[name]}
+    </svg>
+  );
+}
 
 /**
  * 常驻订阅抓取状态 —— 只订阅，不渲染。
@@ -39,51 +97,279 @@ function CrawlStatusWatcher() {
   return null;
 }
 
+/** 当前路径对应的导航序号 —— 用来判断转场方向（往后的模块 / 往前的模块）。 */
+function navIndex(pathname: string): number {
+  const index = NAV.findIndex((item) =>
+    item.to === "/" ? pathname === "/" : pathname.startsWith(item.to),
+  );
+  return index === -1 ? 0 : index;
+}
+
+/**
+ * 空间窗口：指针在窗口上移动时，窗口朝指针方向微倾（≤1.6°）并带一块跟随的镜面反光。
+ * 直接写 CSS 变量而不走 React state —— 指针事件每秒几十次，不该触发重渲染。
+ */
+function useSpatialTilt() {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const fine = window.matchMedia("(pointer: fine)").matches;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!fine || reduced) {
+      return;
+    }
+    let frame = 0;
+    const onMove = (event: PointerEvent) => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const rect = el.getBoundingClientRect();
+        const px = (event.clientX - rect.left) / rect.width;
+        const py = (event.clientY - rect.top) / rect.height;
+        el.style.setProperty("--ry", `${((px - 0.5) * 3.2).toFixed(2)}deg`);
+        el.style.setProperty("--rx", `${((0.5 - py) * 2.4).toFixed(2)}deg`);
+        el.style.setProperty("--mx", `${(px * 100).toFixed(1)}%`);
+        el.style.setProperty("--my", `${(py * 100).toFixed(1)}%`);
+        el.style.setProperty("--glare", "1");
+      });
+    };
+    const onLeave = () => {
+      cancelAnimationFrame(frame);
+      el.style.setProperty("--rx", "0deg");
+      el.style.setProperty("--ry", "0deg");
+      el.style.setProperty("--glare", "0");
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", onLeave);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", onLeave);
+    };
+  }, []);
+  return ref;
+}
+
+/** 环境全景每跨一个模块平移的距离（vw）。全景宽 130vw、左侧预留 5vw，5 个模块共移 20vw，两边都不会露底。 */
+const ENV_STEP = 5;
+
+/**
+ * 发起一次模块切换前调用：写下方向，主窗里新旧内容按这个方向交叠滑换。
+ * （环境全景与两侧小窗不用它 —— 它们直接跟着 `current` 用 CSS transition 走。）
+ */
+function prepareTransition(from: number, to: number) {
+  document.documentElement.dataset.navDir = to < from ? "prev" : "next";
+}
+
+/**
+ * 舞台上的小窗：每个模块一扇，沿一条弧线排开（当前模块那扇藏在主窗正后方）。
+ *
+ * 切模块时它们**不**参与 View Transition —— 位置只由 `data-offset` 决定，
+ * 交给普通的 CSS transition 去补间。每个状态的 transform 都是同一串函数
+ * （translate3d → rotateY → scale），浏览器逐项插值，不会像矩阵分解那样在
+ * 透视下「炸开」。离开的模块从主窗后面滑出到弧线上，目标模块沿弧线飞进主窗。
+ */
+function GhostWindows({ current }: { current: number }) {
+  const navigate = useNavigate();
+  return (
+    <div className="stage" aria-hidden="true">
+      {NAV.map((item, index) => {
+        const offset = index - current;
+        return (
+          <div
+            key={item.to}
+            className="ghost flex flex-col p-6"
+            data-offset={Math.max(-3, Math.min(3, offset))}
+            onClick={() => {
+              if (offset === 0) {
+                return;
+              }
+              prepareTransition(current, index);
+              void navigate(item.to, { viewTransition: true });
+            }}
+          >
+            <span className="grid size-12 place-items-center rounded-2xl bg-fill text-ink">
+              <NavIcon name={item.icon} className="size-6" />
+            </span>
+            <span className="mt-5 text-xl font-semibold">{item.label}</span>
+            <span className="mt-1 text-sm text-muted">{item.hint}</span>
+            <span className="mt-8 flex flex-col gap-3">
+              <span className="h-3 w-4/5 rounded-full bg-fill" />
+              <span className="h-3 w-3/5 rounded-full bg-fill" />
+              <span className="h-3 w-2/3 rounded-full bg-fill" />
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * 导航选中胶囊：整条导航只有一颗，用 CSS 变量把它摆到当前项下面，transition 带回弹滑过去。
+ * （不用 View Transition 的 morph：那样胶囊的快照会盖在导航快照上面，转场中把选中项的字挡住。）
+ */
+function useNavPill(current: number) {
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const nav = ref.current;
+    if (!nav) {
+      return;
+    }
+    const place = () => {
+      const link = nav.querySelectorAll<HTMLElement>("a")[current];
+      if (!link) {
+        return;
+      }
+      nav.style.setProperty("--pill-x", `${link.offsetLeft}px`);
+      nav.style.setProperty("--pill-w", `${link.offsetWidth}px`);
+    };
+    place();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(place);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [current]);
+  return ref;
+}
+
+function ThemeToggle({ className = "" }: { className?: string }) {
+  const { theme, toggle } = useTheme();
+  const isDark = theme === "dark";
+  return (
+    <button
+      type="button"
+      aria-label={isDark ? "切换到浅色模式" : "切换到深色模式"}
+      title={isDark ? "浅色模式" : "深色模式"}
+      onClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        toggle({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      }}
+      className={`glass lift grid size-11 shrink-0 place-items-center rounded-full text-ink ${className}`}
+    >
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        className="size-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {isDark ? (
+          <>
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2.5v2M12 19.5v2M21.5 12h-2M4.5 12h-2M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4M18.7 18.7l-1.4-1.4M6.7 6.7 5.3 5.3" />
+          </>
+        ) : (
+          <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+        )}
+      </svg>
+    </button>
+  );
+}
+
 export function AppLayout() {
   // ErrorBoundary 的 key 绑当前路径：路由一变就重建，重置 error 状态。
-  // 否则任一页面抛错后 state.error 永久有效（AppLayout 不随子路由卸载），
-  // 切到别的页面仍显示「这个页面出错了」，唯一复位路径是手点「重试」。
   const location = useLocation();
+  const windowRef = useSpatialTilt();
+  const navRef = useNavPill(navIndex(location.pathname));
+  const current = navIndex(location.pathname);
+  const module = NAV[current].icon;
+  const { theme } = useTheme();
+
+  // 模块色调写在 <html> 上：环境色晕、窗口描边、导航图标都读 --tint。
+  // 用 layout effect：View Transition 截「新状态」快照前就得生效。
+  useLayoutEffect(() => {
+    document.documentElement.dataset.module = module;
+  }, [module]);
+
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
+    <div className="relative min-h-screen">
+      {/* 沉浸环境：全景照片随模块平移，见 styles.css 的 .env */}
+      <div className="env vt-named" aria-hidden="true">
+        <div
+          className="env-photo"
+          style={
+            {
+              "--env-image": `url(${theme === "light" ? envLight : envDark})`,
+              "--env-x": `${-current * ENV_STEP}vw`,
+            } as CSSProperties
+          }
+        />
+      </div>
+      <div className="grain" aria-hidden="true" />
       <CrawlStatusWatcher />
-      <aside className="shrink-0 border-b border-line bg-surface md:w-48 md:border-r md:border-b-0">
-        <div className="px-4 pt-3 pb-1 md:py-5">
-          {/* 品牌名用 `<div>` 而不是 `<h1>`：每个页面自己还有一个 `<h1>`（PageHeader），
-              两处都写 h1 会让同页出现两个一级标题，标题层级失去意义（屏幕阅读器
-              的标题列表里出现两条并列的「一级」）。品牌是**外壳**的文字，不是页面标题。 */}
-          <div className="text-lg font-semibold tracking-tight">Hunter1</div>
-          <p className="text-xs text-muted">求职工作台</p>
+      <GhostWindows current={current} />
+
+      {/* 左上角品牌签 + 主题开关：悬浮在空间里的小饰件 */}
+      <header className="mx-auto flex max-w-[1040px] items-center justify-between px-3 pt-4 md:px-6 md:pt-6">
+        {/* 品牌名用 `<div>` 而不是 `<h1>`：每个页面自己还有一个 `<h1>`（PageHeader）。 */}
+        <div className="glass flex items-center gap-2.5 rounded-full py-1.5 pr-4 pl-1.5">
+          <span className="grid size-8 place-items-center rounded-full bg-accent text-sm font-semibold text-on-accent">
+            H
+          </span>
+          <div className="leading-tight">
+            <div className="text-[14px] font-semibold">Hunter1</div>
+            <p className="text-[11px] text-muted">求职工作台</p>
+          </div>
         </div>
-        {/* 窄屏：横向可滚动的导航条（5 项在 390px 下也放不下，允许横滑）；
-            宽屏：恢复成竖向列表。
-            `aria-label` 必须给：页内还有别的 `<nav>`（如岗位表的分页），没有可访问名
-            时地标列表里会出现两个无法区分的「navigation」。 */}
-        <nav
-          aria-label="主导航"
-          className="flex gap-0.5 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-visible md:pb-4"
+        <ThemeToggle />
+      </header>
+
+      <div className="mx-auto max-w-[1040px] px-3 pt-4 pb-32 md:px-6 md:pt-6">
+        {/* 主窗口：舞台正中的大玻璃窗。切模块时新旧内容在同一扇窗里交叠淡换（见 styles.css 的 win）。 */}
+        <main
+          ref={windowRef}
+          className="vt-window vt-named spatial-window relative z-10 tint-glow glass min-h-[68vh] rounded-[34px] px-5 py-7 md:px-10 md:py-10"
+          style={{ viewTransitionName: "win" } as CSSProperties}
         >
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `shrink-0 rounded px-3 py-2 text-sm whitespace-nowrap transition-colors ${
-                  isActive ? "bg-ink text-white" : "text-ink-soft hover:bg-surface-sunken"
-                }`
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
-      <main className="min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8">
-        <ErrorBoundary key={location.pathname}>
-          <Outlet />
-        </ErrorBoundary>
-      </main>
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
+        </main>
+        <div aria-hidden="true" className="mx-auto mt-3 h-1.5 w-28 rounded-full bg-fill-strong" />
+      </div>
+
+      {/* visionOS 的标签栏饰件：悬浮在窗口下方的横向玻璃胶囊。
+          `aria-label` 必须给：页内还有别的 `<nav>`（如岗位表的分页）。 */}
+      <nav
+        ref={navRef}
+        aria-label="主导航"
+        className="dock vt-named glass fixed inset-x-3 bottom-4 z-30 mx-auto flex max-w-[640px] justify-between gap-1 rounded-full p-1.5 md:bottom-6"
+        style={{ viewTransitionName: "nav" } as CSSProperties}
+      >
+        <span aria-hidden="true" className="nav-pill pill-shadow bg-fill-active" />
+        {NAV.map((item, index) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={"end" in item ? item.end : undefined}
+            // 交给 View Transitions：浏览器支持时，切模块走「空间舞台」转场
+            viewTransition
+            onClick={() => prepareTransition(current, index)}
+            className={({ isActive }) =>
+              `lift relative flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-full px-1 py-1.5 text-[11px] whitespace-nowrap md:flex-row md:justify-center md:gap-2 md:px-3 md:py-2.5 md:text-sm ${
+                isActive ? "font-medium text-ink" : "text-muted-strong hover:bg-fill hover:text-ink"
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <span className={`relative ${isActive ? "text-[var(--tint)]" : ""}`}>
+                  <NavIcon name={item.icon} />
+                </span>
+                <span className="relative">{item.label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
 }
