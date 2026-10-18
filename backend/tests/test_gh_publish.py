@@ -4,7 +4,7 @@
 （校验、创建仓库、上传）不在单测范围内 —— 那需要真令牌，不适合进测试套件。
 
 重点守两条不变量：
-1. 环境变量优先于文件（便于 CI 注入，不必落盘）；
+1. 环境变量优先于 Git 凭据管理器（便于 CI 注入，不必落盘）；
 2. 拿不到令牌时**报错并给出操作方法**，不是静默继续 —— 静默继续会让后续
    请求以匿名身份打出去，得到一堆 404/401，很难倒查到「其实是没配令牌」。
 """
@@ -43,27 +43,24 @@ gh = _load()
 class TestReadToken:
     def test_env_takes_priority(self, monkeypatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "  from_env  ")
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", Path("/nonexistent"))
+        monkeypatch.setattr(gh, "_stored_token", lambda: pytest.fail("不应读取凭据管理器"))
         assert gh.read_token() == "from_env"
 
-    def test_falls_back_to_file(self, monkeypatch, tmp_path: Path) -> None:
-        token_file = tmp_path / ".hunter1_gh_token"
-        token_file.write_text("from_file\n", encoding="utf-8")
+    def test_falls_back_to_git_credential(self, monkeypatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", token_file)
-        assert gh.read_token() == "from_file"
+        monkeypatch.setattr(gh, "_stored_token", lambda: "from_store")
+        assert gh.read_token() == "from_store"
 
-    def test_blank_env_is_ignored_in_favour_of_file(self, monkeypatch, tmp_path: Path) -> None:
+    def test_blank_env_is_ignored_in_favour_of_store(self, monkeypatch) -> None:
         """空的环境变量不该被当成有效令牌（CI 里常见 `GITHUB_TOKEN=` 这种空赋值）。"""
-        token_file = tmp_path / ".hunter1_gh_token"
-        token_file.write_text("from_file", encoding="utf-8")
         monkeypatch.setenv("GITHUB_TOKEN", "   ")
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", token_file)
-        assert gh.read_token() == "from_file"
+        monkeypatch.setattr(gh, "_stored_token", lambda: "from_store")
+        assert gh.read_token() == "from_store"
 
-    def test_missing_everything_raises_with_instructions(self, monkeypatch, tmp_path: Path) -> None:
+    def test_missing_everything_raises_with_instructions(self, monkeypatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / "absent")
+        monkeypatch.setattr(gh, "_stored_token", lambda: None)
+        monkeypatch.setattr(gh.sys.stdin, "isatty", lambda: False)
         with pytest.raises(gh.PublishError) as excinfo:
             gh.read_token()
         message = str(excinfo.value)
@@ -138,11 +135,11 @@ class TestPromptForToken:
     def _no_clipboard(self, monkeypatch) -> None:
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: None)
 
-    def test_sanitises_pasted_input(self, monkeypatch, tmp_path: Path) -> None:
+    def test_sanitises_pasted_input(self, monkeypatch) -> None:
         """用户常把 `GITHUB_TOKEN=…` 整行、连带空格一起粘进来。"""
         seen: list[str] = []
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / ".tok")
         monkeypatch.setattr(gh, "verify_token", lambda token: seen.append(token) or "someone")
+        monkeypatch.setattr(gh, "save_token", lambda token, *, login: None)
         monkeypatch.setattr("getpass.getpass", lambda *a, **k: "  GITHUB_TOKEN= abc 123 \n")
 
         result = gh.prompt_for_token()
@@ -150,29 +147,26 @@ class TestPromptForToken:
         assert seen == ["abc123"]  # 前缀与空白都被剥掉
         assert result == "abc123"
 
-    def test_saves_only_after_verification(self, monkeypatch, tmp_path: Path) -> None:
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+    def test_saves_only_after_verification(self, monkeypatch) -> None:
+        saved: list[tuple[str, str]] = []
+        monkeypatch.setattr(gh, "save_token", lambda token, *, login: saved.append((token, login)))
         monkeypatch.setattr(gh, "verify_token", lambda token: "someone")
         monkeypatch.setattr("getpass.getpass", lambda *a, **k: "good-token")
 
         gh.prompt_for_token()
 
-        assert target.read_text(encoding="utf-8") == "good-token"
+        assert saved == [("good-token", "someone")]
 
-    def test_retries_then_raises_without_leaving_a_file(self, monkeypatch, tmp_path: Path) -> None:
+    def test_retries_then_raises_without_saving(self, monkeypatch) -> None:
         """校验不过就不落盘 —— 否则下次会拿着一个坏令牌去发版。"""
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "save_token", lambda *a, **k: pytest.fail("无效令牌不应保存"))
         monkeypatch.setattr(gh, "verify_token", lambda token: None)
         monkeypatch.setattr("getpass.getpass", lambda *a, **k: "bad-token")
 
         with pytest.raises(gh.PublishError):
             gh.prompt_for_token()
 
-        assert not target.exists()
-
-    def test_blank_input_does_not_consume_a_verification(self, monkeypatch, tmp_path: Path) -> None:
+    def test_blank_input_does_not_consume_a_verification(self, monkeypatch) -> None:
         """空回车不算一次尝试 —— 否则手滑三次就把自己锁在外面。"""
         calls: list[str] = []
 
@@ -180,19 +174,18 @@ class TestPromptForToken:
             calls.append("asked")
             return "" if len(calls) == 1 else "real-token"
 
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / ".tok")
         monkeypatch.setattr(gh, "verify_token", lambda token: "someone")
+        monkeypatch.setattr(gh, "save_token", lambda token, *, login: None)
         monkeypatch.setattr("getpass.getpass", fake_getpass)
 
         assert gh.prompt_for_token() == "real-token"
         assert len(calls) == 2
 
-    def test_eof_raises_cleanly_instead_of_traceback(self, monkeypatch, tmp_path: Path) -> None:
+    def test_eof_raises_cleanly_instead_of_traceback(self, monkeypatch) -> None:
         """stdin 被重定向/关闭时，getpass 抛 EOFError。
 
         不接的话会吐一段 traceback —— 对「双击就能用」的工具是最差的失败姿态。
         """
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / ".tok")
 
         def eof(*args, **kwargs):
             raise EOFError
@@ -486,10 +479,10 @@ class TestEffectiveProxy:
 
 
 class TestReadTokenInteractiveGate:
-    def test_non_tty_raises_instead_of_hanging(self, monkeypatch, tmp_path: Path) -> None:
+    def test_non_tty_raises_instead_of_hanging(self, monkeypatch) -> None:
         """CI 里没有终端：必须报错，不能停在一个永远等不到输入的提示上。"""
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / "absent")
+        monkeypatch.setattr(gh, "_stored_token", lambda: None)
         monkeypatch.setattr(gh.sys.stdin, "isatty", lambda: False)
 
         with pytest.raises(gh.PublishError) as excinfo:
@@ -497,9 +490,9 @@ class TestReadTokenInteractiveGate:
 
         assert "GITHUB_TOKEN" in str(excinfo.value)
 
-    def test_interactive_disabled_skips_the_prompt(self, monkeypatch, tmp_path: Path) -> None:
+    def test_interactive_disabled_skips_the_prompt(self, monkeypatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / "absent")
+        monkeypatch.setattr(gh, "_stored_token", lambda: None)
         monkeypatch.setattr(gh.sys.stdin, "isatty", lambda: True)
         monkeypatch.setattr(
             gh, "prompt_for_token", lambda: pytest.fail("不该在 interactive=False 时发问")
@@ -594,36 +587,32 @@ class TestTokenFromClipboard:
 class TestAcceptClipboardToken:
     """用户报的「粘不进窗口」就靠这条路绕开 —— 必须稳。"""
 
-    def test_enter_accepts_and_saves(self, monkeypatch, tmp_path: Path) -> None:
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+    def test_enter_accepts_and_saves(self, monkeypatch) -> None:
+        saved: list[tuple[str, str]] = []
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: "github_pat_from_clipboard01")
         monkeypatch.setattr(gh, "verify_token", lambda token: "someone")
+        monkeypatch.setattr(gh, "save_token", lambda token, *, login: saved.append((token, login)))
         monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # 直接回车
 
         assert gh._accept_clipboard_token() == "github_pat_from_clipboard01"
-        assert target.read_text(encoding="utf-8") == "github_pat_from_clipboard01"
+        assert saved == [("github_pat_from_clipboard01", "someone")]
 
-    def test_n_declines_without_calling_github(self, monkeypatch, tmp_path: Path) -> None:
+    def test_n_declines_without_calling_github(self, monkeypatch) -> None:
         """选了 n 就不该发出网络请求，也不该落盘。"""
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "save_token", lambda *a, **k: pytest.fail("拒绝时不应保存"))
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: "some-other-copied-text-here")
         monkeypatch.setattr(gh, "verify_token", lambda token: pytest.fail("不该发起校验"))
         monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
 
         assert gh._accept_clipboard_token() is None
-        assert not target.exists()
 
-    def test_rejected_token_falls_back_without_saving(self, monkeypatch, tmp_path: Path) -> None:
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+    def test_rejected_token_falls_back_without_saving(self, monkeypatch) -> None:
+        monkeypatch.setattr(gh, "save_token", lambda *a, **k: pytest.fail("无效令牌不应保存"))
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: "stale-token-not-valid-any")
         monkeypatch.setattr(gh, "verify_token", lambda token: None)
         monkeypatch.setattr("builtins.input", lambda *a, **k: "")
 
         assert gh._accept_clipboard_token() is None
-        assert not target.exists()
 
     def test_empty_clipboard_never_prompts(self, monkeypatch) -> None:
         """剪贴板空着就直接转手动，不该弹一个没有内容的确认。"""
@@ -632,9 +621,9 @@ class TestAcceptClipboardToken:
 
         assert gh._accept_clipboard_token() is None
 
-    def test_prompt_for_token_prefers_clipboard(self, monkeypatch, tmp_path: Path) -> None:
+    def test_prompt_for_token_prefers_clipboard(self, monkeypatch) -> None:
         """剪贴板命中时不该走到 getpass（那正是「粘不进去」的那一步）。"""
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / ".tok")
+        monkeypatch.setattr(gh, "save_token", lambda token, *, login: None)
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: "clip-token-abcdefghijklmn")
         monkeypatch.setattr(gh, "verify_token", lambda token: "someone")
         monkeypatch.setattr("builtins.input", lambda *a, **k: "")
@@ -687,27 +676,23 @@ class TestClipboardDefaultIsSafe:
     想强行用就显式敲 y：默认动作落在安全的那一侧。
     """
 
-    def test_implausible_text_enter_skips_without_calling_github(
-        self, monkeypatch, tmp_path: Path
-    ) -> None:
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+    def test_implausible_text_enter_skips_without_calling_github(self, monkeypatch) -> None:
+        monkeypatch.setattr(gh, "save_token", lambda *a, **k: pytest.fail("跳过时不应保存"))
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: "short")
         monkeypatch.setattr(gh, "verify_token", lambda t: pytest.fail("不该发起校验"))
         monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # 直接回车
 
         assert gh._accept_clipboard_token() is None
-        assert not target.exists()
 
-    def test_implausible_text_can_still_be_forced_with_y(self, monkeypatch, tmp_path: Path) -> None:
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+    def test_implausible_text_can_still_be_forced_with_y(self, monkeypatch) -> None:
+        saved: list[tuple[str, str]] = []
         monkeypatch.setattr(gh, "token_from_clipboard", lambda: "short")
         monkeypatch.setattr(gh, "verify_token", lambda t: "someone")
+        monkeypatch.setattr(gh, "save_token", lambda token, *, login: saved.append((token, login)))
         monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
 
         assert gh._accept_clipboard_token() == "short"
-        assert target.read_text(encoding="utf-8") == "short"
+        assert saved == [("short", "someone")]
 
 
 class TestApiErrorCarriesStatus:
@@ -940,27 +925,29 @@ class TestVerifyTokenStatus:
             assert "不等于令牌无效" in str(excinfo.value)
 
 
-class TestTokenFileEnvOverride:
-    """L13：令牌文件位置必须与 scripts/gh_setup.sh 用**同一个**环境变量。
+class TestCredentialStore:
+    """令牌持久化必须走系统凭据管理器，不能再落明文文件。"""
 
-    原先 gh_publish.py 硬编码 `~/.hunter1_gh_token`，而 gh_setup.sh 认
-    `HUNTER1_GH_TOKEN_FILE` —— 设了该变量的用户会被告知「已保存」，
-    发布脚本却去读另一个文件、读不到。
+    def test_stored_token_reads_only_password_field(self, monkeypatch) -> None:
+        seen: list[str] = []
 
-    行为断言：真设上该变量、重新导入模块，常量必须落在它指的位置。
-    （只 grep 源码文本挡不住「名字在、取值写死」这类改法。）
-    """
+        def fake_run(cmd, **kwargs):
+            seen.extend(str(part) for part in cmd)
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                "protocol=https\nhost=github.com\nusername=octocat\npassword=from_store\n",
+                "",
+            )
 
-    def test_env_var_decides_token_path_at_import(self, monkeypatch, tmp_path: Path) -> None:
-        target = tmp_path / "custom_token"
-        monkeypatch.setenv("HUNTER1_GH_TOKEN_FILE", str(target))
-        module = _load()  # 常量在导入时求值 —— 重新导入才是真实生效路径
-        assert target == module.DEFAULT_TOKEN_FILE
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        assert gh._stored_token() == "from_store"
+        assert seen == ["git", "credential", "fill"]
 
-    def test_setup_script_writes_that_same_variable(self) -> None:
-        """另一半只能在源码里认名字：gh_setup.sh 是 shell，没有可调用的函数面。"""
+    def test_setup_script_uses_credential_manager(self) -> None:
         setup = (ROOT / "scripts" / "gh_setup.sh").read_text(encoding="utf-8")
-        assert "HUNTER1_GH_TOKEN_FILE" in setup
+        assert "git credential approve" in setup
+        assert ".hunter1_gh_token" not in setup
 
 
 class TestReuploadCheckOrdering:
@@ -1177,24 +1164,42 @@ class TestResolveTargetValidation:
             gh.resolve_target("", "acme", "../..")
 
 
-class TestSaveTokenUmask:
-    """audit C16：写令牌临时文件前要先收紧 umask（Linux 上短暂 0644）。"""
+class TestSaveToken:
+    """写入凭据管理器时，令牌只能经 stdin；argv 与环境变量都不带令牌。"""
 
-    def test_sets_restrictive_umask_around_write(self, monkeypatch, tmp_path: Path) -> None:
-        target = tmp_path / ".tok"
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
-        seen: list[int] = []
-        real = os.umask
+    def test_token_goes_to_credential_stdin_not_argv(self, monkeypatch) -> None:
+        @dataclass
+        class Seen:
+            cmd: list[str] = field(default_factory=list)
+            input: str = ""
+            env: dict[str, str] = field(default_factory=dict)
 
-        def spy(mask: int) -> int:
-            seen.append(mask)
-            return real(mask)
+        seen = Seen()
 
-        monkeypatch.setattr(gh.os, "umask", spy)
-        gh.save_token("secret-token-value")
+        def fake_run(cmd, **kwargs):
+            seen.cmd = [str(part) for part in cmd]
+            seen.input = kwargs["input"]
+            seen.env = kwargs["env"]
+            return subprocess.CompletedProcess(cmd, 0, "", "")
 
-        assert seen and seen[0] == 0o077, f"写前未收紧 umask：{seen}"
-        assert target.read_text(encoding="utf-8") == "secret-token-value"
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        gh.save_token("secret-token-value", login="octocat")
+
+        assert seen.cmd == ["git", "credential", "approve"]
+        assert "secret-token-value" not in " ".join(seen.cmd)
+        assert "password=secret-token-value" in seen.input
+        assert "secret-token-value" not in str(seen.env)
+        assert seen.env["GIT_TERMINAL_PROMPT"] == "0"
+        assert seen.env["GCM_INTERACTIVE"] == "Never"
+
+    def test_credential_manager_failure_is_actionable(self, monkeypatch) -> None:
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1, "", "helper unavailable")
+
+        monkeypatch.setattr(gh.subprocess, "run", fake_run)
+        with pytest.raises(gh.PublishError) as excinfo:
+            gh.save_token("secret-token-value", login="octocat")
+        assert "GITHUB_TOKEN" in str(excinfo.value)
 
 
 class TestPushTagWhenRemoteTagExists:
@@ -1423,18 +1428,16 @@ class TestRedactIsTheLastLineOfDefence:
         assert self.TOKEN not in out, "环境变量里的令牌必须被抹掉"
         assert "***" in out
 
-    def test_redact_removes_token_from_file(self, monkeypatch, tmp_path) -> None:
+    def test_redact_removes_token_from_credential_store(self, monkeypatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        target = tmp_path / ".tok"
-        target.write_text(self.TOKEN, encoding="utf-8")
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", target)
+        monkeypatch.setattr(gh, "_stored_token", lambda: self.TOKEN)
         out = gh._redact(f"path={self.TOKEN}")
         assert self.TOKEN not in out
 
-    def test_redact_survives_missing_token_sources(self, monkeypatch, tmp_path) -> None:
+    def test_redact_survives_missing_token_sources(self, monkeypatch) -> None:
         """没有令牌可查时也不能炸 —— 它在报错路径上，炸掉会把真正的错误顶掉。"""
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        monkeypatch.setattr(gh, "DEFAULT_TOKEN_FILE", tmp_path / "不存在")
+        monkeypatch.setattr(gh, "_stored_token", lambda: None)
         assert gh._redact("普通错误消息") == "普通错误消息"
 
     def test_main_redacts_token_in_api_error(self, monkeypatch, capsys, tmp_path: Path) -> None:
