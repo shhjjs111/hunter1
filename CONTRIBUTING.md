@@ -23,6 +23,13 @@ cd frontend && npm ci && cd ..
 Windows / Git Bash 用户可直接用仓库自带的解释器 `./.tools/python/python.exe`，
 `scripts/check.sh` 会自动探测，无需手传。
 
+`uv` 版本是精确锁定的：`[tool.uv] required-version` 会拒绝 `0.13.x` 等非
+`0.12.23` 版本，这是为了确保锁文件解析结果可复现。升级 uv 时需同步修改
+`backend/pyproject.toml`、`backend/uv.lock` 与 CI workflow。
+
+历史卫生测试需要完整 Git 历史。若使用了浅克隆，请先在仓库根执行
+`git fetch --unshallow`；CI 已通过 `fetch-depth: 0` 获取完整历史。
+
 细节（命令矩阵、打包、常见坑）见 docs/DEVELOPMENT.md。
 
 ## 开工前
