@@ -71,8 +71,12 @@ describe("JobsTable", () => {
       const button = screen.getByRole("button", { name });
       const describedBy = button.getAttribute("aria-describedby");
       expect(describedBy, `${name} 缺 aria-describedby`).toBeTruthy();
-      const target = document.getElementById(describedBy!);
-      expect(target?.textContent).toContain("AI产品经理");
+      const description = describedBy!
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+      expect(description).toContain("AI产品经理");
+      expect(description).toContain("字节跳动");
     }
   });
 
