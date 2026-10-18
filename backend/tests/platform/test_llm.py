@@ -24,8 +24,10 @@ from hunter1.platform.llm import (
     PROVIDER_PRESETS,
     LLMError,
     OpenAICompatibleClient,
+    _error_summary,
     _parse_retry_after,
     _shared_rejected_modes,
+    _short,
     clear_rejected_modes,
     rejected_mode_endpoints,
     resolve_preset,
@@ -381,6 +383,53 @@ class TestErrorsAndRetry:
 
         result = _client(handler, max_retries=2).complete(system_prompt="s", user_prompt="u")
         assert result.content == "成功"
+
+
+class TestProviderErrorSummary:
+    """厂商错误体只留一句说明：用户需要下一步，不需要整段 JSON。"""
+
+    def test_nested_error_message_is_unwrapped(self) -> None:
+        body = json.dumps(
+            {"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}}
+        )
+        assert _error_summary(body) == "Incorrect API key provided"
+
+    def test_top_level_detail_is_used(self) -> None:
+        assert _error_summary(json.dumps({"detail": "quota exhausted"})) == "quota exhausted"
+
+    def test_plain_text_is_kept(self) -> None:
+        assert _error_summary("<html>bad gateway</html>") == "<html>bad gateway</html>"
+
+    def test_long_text_breaks_at_the_last_word_boundary(self) -> None:
+        text = "a" * 100 + " " + "b" * 100
+        assert _short(text, 120) == "a" * 100 + "…"
+        assert len(_short(text)) <= 121
+
+    def test_401_json_key_is_summarized_and_redacted(self) -> None:
+        api_key = "demo-not-this-is-a-fake-key"
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": (
+                            f"Incorrect API key provided: {api_key}. "
+                            "You can find your API key at https://example.invalid/keys"
+                        ),
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+
+        with pytest.raises(LLMError) as excinfo:
+            _client(handler, api_key=api_key).complete(system_prompt="s", user_prompt="u")
+
+        message = str(excinfo.value)
+        assert "Incorrect API key provided" in message
+        assert api_key not in message
+        assert "***" in message
+        assert "{" not in message
 
 
 class TestStructuredOutput:

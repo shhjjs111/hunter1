@@ -353,7 +353,8 @@ class OpenAICompatibleClient:
                         )
                         return
                     raise LLMError(
-                        f"http_{response.status_code}", _short(self._redact(response.text))
+                        f"http_{response.status_code}",
+                        _short(_error_summary(self._redact(response.text)), 120),
                     )
 
                 content_type = response.headers.get("content-type", "")
@@ -599,8 +600,14 @@ class OpenAICompatibleClient:
                 ):
                     if _looks_like_format_rejection(response.text):
                         self._rejected_modes.add(reject_mode)
-                    raise LLMError("format_unsupported", _short(self._redact(response.text)))
-                raise LLMError(f"http_{response.status_code}", _short(self._redact(response.text)))
+                    raise LLMError(
+                        "format_unsupported",
+                        _short(_error_summary(self._redact(response.text)), 120),
+                    )
+                raise LLMError(
+                    f"http_{response.status_code}",
+                    _short(_error_summary(self._redact(response.text)), 120),
+                )
 
             try:
                 data = response.json()
@@ -747,8 +754,49 @@ def _finish_reason(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _short(text: str, limit: int = 200) -> str:
-    return (text or "").strip()[:limit]
+def _error_summary(text: str) -> str:
+    """从厂商错误体里取一句可读说明，而不是把整段 JSON 甩给用户。
+
+    OpenAI 兼容端点常见的三种形状：
+    `{"error": {"message": ...}}`、`{"message": ...}`、`{"detail": ...}`。
+    解析不了（HTML 网关页、纯文本）就原样返回，交给 `_short` 控制长度。
+    """
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    if not isinstance(data, dict):
+        return text
+
+    error = data.get("error")
+    if isinstance(error, dict):
+        for key in ("message", "detail"):
+            value = error.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    elif isinstance(error, str) and error.strip():
+        return error.strip()
+
+    for key in ("message", "detail"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return text
+
+
+_BREAK_CHARS = " \t\r\n。！？；，、.!?;,:"
+
+
+def _short(text: str, limit: int = 120) -> str:
+    """把错误说明压到 `limit` 字符内，尽量在词/句边界断开。"""
+    clean = (text or "").strip()
+    if len(clean) <= limit:
+        return clean
+    head = clean[:limit]
+    boundary = max(head.rfind(char) for char in _BREAK_CHARS)
+    if boundary > 0:
+        head = head[:boundary].rstrip()
+    return f"{head}…"
 
 
 __all__ = [
