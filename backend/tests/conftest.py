@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import os
 import shutil
+import warnings
 from pathlib import Path
 
 import pytest
+from starlette.exceptions import StarletteDeprecationWarning
+
+# TestClient 的回退警告发生在测试模块导入阶段，早于 pytest 的
+# filterwarnings 配置生效；在 conftest 加载时注册才能让它真正拦截回退。
+warnings.filterwarnings("error", category=StarletteDeprecationWarning)
 
 
 def git_bash() -> str | None:

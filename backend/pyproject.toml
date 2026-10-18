@@ -36,6 +36,9 @@ dev = [
   "pytest-cov>=5.0",
   "ruff>=0.6",
   "pyright>=1.1",
+  # Starlette 1.x 的 TestClient 优先使用 httpx2；缺失时会回退到已弃用的
+  # httpx。这里只装测试客户端需要的依赖，生产代码仍使用 httpx。
+  "httpx2>=2.13.1,<3",
 ]
 # 打包用。刻意不并进 dev：日常 `check.sh` 不构建产物，只在 `--with-pack` 时用 —— 
 # CI 与发布前必跑（CI 装本 extra 并 `check.sh --with-pack`），本机日常循环不装、
