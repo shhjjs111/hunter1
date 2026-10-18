@@ -54,7 +54,7 @@ export function Button({
   const look =
     variant === "primary"
       ? "bg-accent text-on-accent shadow-[0_6px_20px_-8px_var(--color-accent)] hover:bg-accent-hover"
-      : "bg-fill text-ink shadow-[inset_0_1px_0_var(--glass-spec)] hover:bg-fill-strong";
+      : "bg-fill text-ink shadow-[inset_0_1px_0_var(--glass-spec),inset_0_0_0_1px_var(--btn-edge)] hover:bg-fill-strong";
   return (
     <button
       type={type}
