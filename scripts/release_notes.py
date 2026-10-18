@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import re
 import sys
 from collections.abc import Sequence
@@ -12,6 +13,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHANGELOG = ROOT / "CHANGELOG.md"
 _HEADING = re.compile(r"^## \[([^\]]+)\](?: - .+)?$")
+
+
+def _configure_console() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
 def extract_section(changelog: str, version: str) -> str:
@@ -38,6 +45,7 @@ def extract_section(changelog: str, version: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_console()
     parser = argparse.ArgumentParser(prog="release_notes.py", description="提取版本发布说明")
     parser.add_argument("--version", required=True, help="不带 v 的版本号，例如 0.2.1")
     parser.add_argument("--changelog", default=str(DEFAULT_CHANGELOG))
