@@ -79,6 +79,7 @@ describe("Toast", () => {
   it("固定在 dock 上方，不随页面内容滚走", () => {
     render(<Toast tone="success" message="已记录投递。" />);
     const toast = screen.getByRole("status");
+    expect(toast.parentElement).toBe(document.body);
     expect(toast.className).toContain("fixed");
     expect(toast.className).toContain("bottom-[84px]");
     expect(toast.className).toContain("md:bottom-[104px]");

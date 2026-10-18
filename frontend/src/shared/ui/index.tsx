@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * 设计系统原语 —— 全站视觉词汇的唯一来源。
@@ -144,7 +145,7 @@ export function Toast({
   }, [tone, message, onDismiss]);
 
   const isError = tone === "error";
-  return (
+  return createPortal(
     <div
       role={isError ? "alert" : "status"}
       aria-live={isError ? "assertive" : "polite"}
@@ -164,7 +165,8 @@ export function Toast({
           ×
         </button>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
