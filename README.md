@@ -7,7 +7,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![Release](https://img.shields.io/github/v/release/shhjjs111/hunter1)](https://github.com/shhjjs111/hunter1/releases/latest)
 
-> 求职工作台 · 轻量 · 跨平台 · 零托管 · **前后端完全分离**
+> 求职工作台 · 轻量 · Windows 便携 · 零托管 · **前后端完全分离**
 
 填入**自己的大模型 API Key**（任意 OpenAI 兼容厂商）即可使用：在本地完成
 「岗位抓取 → 匹配评分 → AI 求职助手 → 投递管理」全流程。
@@ -46,9 +46,11 @@ contracts/      OpenAPI 快照（生成物）
 ### 开发（双进程，前后端完全分离）
 
 ```bash
-cd backend && pip install -e ".[dev,web,db,crawler]" && cd ..
-cd frontend && npm install && cd ..
-bash scripts/dev.sh          # 起 API(:8000) + Vite(:5173)
+python -m pip install uv==0.12.23
+uv sync --project backend --frozen \
+  --extra dev --extra web --extra db --extra crawler --extra build
+cd frontend && npm ci && cd ..
+PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/dev.sh
 # 浏览器访问 http://127.0.0.1:5173
 ```
 
@@ -114,6 +116,25 @@ hunter1 update --download
 下载完成后程序**不会自我替换**（Windows 上运行中的 exe 覆盖不了自己）：把
 `updates/<版本>/` 里的内容覆盖过程序目录即可，这也是便携软件的自然更新动作。
 
+## 验证发布
+
+Release 现在由受保护的 `v*` tag 在 GitHub Actions 中重建，并附带：
+
+- `manifest.json`
+- `sbom.spdx.json`
+- `SHA256SUMS.txt`
+- GitHub build provenance 与 SBOM attestation
+
+高级用户可验证：
+
+```bash
+sha256sum -c SHA256SUMS.txt
+gh attestation verify hunter1-win32.zip --repo shhjjs111/hunter1
+```
+
+当前 Windows exe **尚未配置 Authenticode 证书**，系统仍可能显示“未知发布者”。
+发布完整性由 GitHub attestation、受保护 tag、manifest SHA-256 和校验和共同保证。
+
 ## 现状
 
 | 维度 | 状态 |
@@ -137,6 +158,8 @@ hunter1 update --download
 - **助手只读**：它查岗位与投递、给建议；写操作由你在界面上确认。
 - **无 no-JS 回退**：SPA 的取舍。旧版本（服务端渲染）有表单回退，v2 放弃了 ——
   换来的是前后端完全分离与更清晰的迭代边界。
+- **当前只发布 Windows 包**：源码尽量保持可移植，但在 Linux/macOS 构建矩阵与
+  安装包建立前，不把“跨平台”当作交付承诺。
 
 ## 与旧系统的关系
 

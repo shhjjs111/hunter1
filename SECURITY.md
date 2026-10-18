@@ -16,8 +16,7 @@ Hunter1 处于早期阶段，只对**最新发布版本**提供安全修复。
 优先使用 GitHub 的私有漏洞报告通道：
 [Security → Advisories → Report a vulnerability](https://github.com/shhjjs111/hunter1/security/advisories/new)
 
-如果无法使用该通道，可以通过 GitHub 账号
-[@shhjjs111](https://github.com/shhjjs111) 私下联系仓库所有者。
+GitHub 私有漏洞报告是唯一支持的安全报告通道。不要在其他公开渠道披露漏洞细节。
 
 报告时请尽量包含：
 
@@ -50,7 +49,10 @@ docs/ARCHITECTURE.md，要点：
   用户显式指定地址才走那条地址。清单被篡改会导致任意代码执行，这是已知边界。
 - **抓取的是公开列表页**：不登录、不绕验证码、不做自动投递。
 - **抓取器拒绝私网目标**：详情链接和重定向都会解析并拒绝回环、内网、链路本地及
-  云元数据地址。发布包显式排除运行时 `data/`，冒烟使用临时数据目录。
+  云元数据地址。发布 workflow 会从干净目录重新构建并验证包内不含 `data/`。
+- **发布完整性**：release 由受保护 tag 触发，带 SHA-256 清单、SPDX SBOM、GitHub
+  build provenance 与 SBOM attestation。Windows exe 尚未配置 Authenticode 证书，
+  SmartScreen 可能显示未知发布者。
 
 ### 尤其欢迎的报告
 

@@ -61,3 +61,41 @@ steps:
   - uses: ./.github/actions/local
 """
     assert judge_unpinned_actions(sample) == []
+
+
+def test_release_workflow_is_tag_driven_and_attested() -> None:
+    text = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+
+    assert 'tags: ["v*"]' in text
+    assert "id-token: write" in text
+    assert "attestations: write" in text
+    assert "actions/attest-build-provenance@" in text
+    assert "actions/attest@" in text
+    assert "sbom-path: dist/sbom.spdx.json" in text
+    assert "make_sbom.py" in text
+    assert "SHA256SUMS.txt" in text
+    assert "--draft" in text
+    assert 'gh release edit "$TAG" --draft=false' in text
+
+
+def test_required_quality_status_context_stays_stable() -> None:
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert 'python-version: ["3.12"]' in text, (
+        "quality job 的 matrix 必须保持 3.12，否则必需状态检查名称会漂移"
+    )
+
+
+def test_python_dependencies_are_locked_and_ci_is_frozen() -> None:
+    assert (ROOT / "backend" / "uv.lock").is_file()
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert "uv lock" not in text, "CI 只消费锁文件；更新 lock 必须显式提交"
+    assert "uv sync" in text
+    assert "--frozen" in text
+
+
+def test_legacy_manual_release_is_blocked_by_default() -> None:
+    for path in (ROOT / "release.cmd", ROOT / "scripts" / "release.sh"):
+        text = path.read_text(encoding="utf-8")
+        assert "HUNTER1_ALLOW_LEGACY_RELEASE" in text, (
+            f"{path.relative_to(ROOT)} 允许无显式确认的手工发布"
+        )

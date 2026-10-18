@@ -155,3 +155,8 @@ typeCheckingMode = "standard"
 # （artifact / build / serve / make_manifest / export_openapi / refresh_fixtures），
 # 不会遮蔽任何第三方包。
 extraPaths = ["src", "../scripts", "../.tools/python/Lib/site-packages"]
+
+[tool.uv]
+# CI 与发布机统一使用这个版本生成/消费 uv.lock；升级时一次改这里、lock 和
+# workflow，避免“同一条锁文件在不同 uv 版本下解析结果不同”。
+required-version = "0.12.23"

@@ -12,6 +12,12 @@
 # push 与上传哪一步都可能需要你的凭据，交回给你执行更稳妥。
 set -euo pipefail
 
+if [[ "${HUNTER1_ALLOW_LEGACY_RELEASE:-0}" != "1" ]]; then
+  echo "标准发布由 v* tag 触发 GitHub Actions 完成；本脚本仅保留为遗留应急工具。" >&2
+  echo "如确需人工发布，先设置 HUNTER1_ALLOW_LEGACY_RELEASE=1。" >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # cd 到仓库根后一律用相对路径：本机解释器是 Windows 版 Python，而 Git Bash 的
 # `/d/...` 路径它不认（实测 `ModuleNotFoundError`）。相对路径两边都认，最省事。
@@ -102,10 +108,8 @@ TAG_COMMIT="$(git rev-parse "$TAG^{commit}")"
 HEAD_COMMIT="$(git rev-parse HEAD)"
 if [[ "$TAG_COMMIT" != "$HEAD_COMMIT" ]]; then
   echo "✗ tag $TAG 指向 ${TAG_COMMIT:0:7}，HEAD 是 ${HEAD_COMMIT:0:7} —— 两者必须一致。" >&2
-  echo "  改 tag 指向：git tag -f -a $TAG -m 'hunter1 $TAG'" >&2
-  echo "  ⚠ 若该 tag 已推到远端，push 时需要 --force（覆盖远端 tag 指针，不可逆）。" >&2
-  echo "    gh_publish.py 会在普通 push 被拒时自动改用 --force 并打印提示 ——" >&2
-  echo "    这仅适用于尚未有真实用户的版本；已被用户安装的版本请改用新版本号发布。" >&2
+  echo "  已发布 tag 受规则集保护且 release 为 immutable，禁止移动。" >&2
+  echo "  请提升版本号并发布新的 patch release。" >&2
   exit 1
 fi
 echo "  ✓ tag 指向 HEAD（${HEAD_COMMIT:0:7}）"

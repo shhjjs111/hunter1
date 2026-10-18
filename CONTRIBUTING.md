@@ -8,14 +8,16 @@
 
 ## 环境准备
 
-需要 **Python ≥ 3.12** 与 **Node.js**（前端工程）。
+需要 **Python ≥ 3.12**、**Node.js 24** 与 **uv 0.12.23**。
 
 ```bash
-# 后端
-cd backend && pip install -e ".[dev,web,db,crawler]" && cd ..
+# 后端（必须消费仓库锁文件）
+python -m pip install uv==0.12.23
+uv sync --project backend --frozen \
+  --extra dev --extra web --extra db --extra crawler --extra build
 
 # 前端
-cd frontend && npm install && cd ..
+cd frontend && npm ci && cd ..
 ```
 
 Windows / Git Bash 用户可直接用仓库自带的解释器 `./.tools/python/python.exe`，
@@ -88,6 +90,14 @@ docs/DEVELOPMENT.md。
    关联相关 Issue。
 5. 等待 `quality (3.12)`、CodeQL 与 Dependency Review 完成。维护者使用 squash
    merge 合并，远端分支自动删除。
+
+修改 Python 依赖时，必须同时提交重新生成的 `backend/uv.lock`：
+
+```bash
+uv lock --project backend --python 3.12
+```
+
+Release 由 `v*` tag 触发 GitHub Actions，不在开发机手工上传发布资产。
 
 直接向 `main` push、force-push、删除受保护 tag 都会被 GitHub 规则集拒绝。
 

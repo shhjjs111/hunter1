@@ -7,8 +7,15 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-18
+
 ### Added
 
+- **发布链迁移到 GitHub Actions**：`v*` tag 在 Windows runner 重新构建并执行完整
+  门禁，生成 manifest、SPDX SBOM、SHA-256 校验和、build provenance 与 SBOM
+  attestation，先上传 draft 核对再发布 immutable release。
+- **可复现 Python 依赖**：提交 `backend/uv.lock`，CI 使用固定 uv 版本和
+  `uv sync --frozen`，不再在门禁中隐式解析最新依赖。
 - **GitHub 仓库治理达到可审计的团队标准**：受保护主分支与 release tag、PR-only
   合并、要求 `quality (3.12)`、线性历史；CodeQL、Dependency Review、Dependabot
   与私有漏洞报告；全部第三方 action 固定到完整 commit SHA。发布说明已按
@@ -25,6 +32,8 @@
   按原始站点隔离；JD 增加 20 万字符存储上限。
 - **发布包不再包含运行数据**：默认启动冒烟使用临时数据目录，正式 zip 显式排除
   `data/`；POSIX 上新库目录/数据库/WAL/SHM 收紧到 `700/600`。
+- **发布说明与文档声明校准**：明确当前只交付 Windows 包、Authenticode 尚未配置，
+  移除不可用的私有联系与 Discussions 指引。
 - **投递记录改为真分页**：超过一页的历史记录不再因固定 200 条上限永久不可达。
 - **分页兼容与末页处理**：保留 `has_more` 兼容字段；删除末页唯一记录后自动回退。
 - **API 文档与安全头兼容**：`/api/docs` 使用专用 CSP，Swagger UI 仍可加载。
@@ -107,7 +116,8 @@ AI 求职助手 → 投递管理」全流程。
 - **打包分发**：PyInstaller 单目录产物，前端产物嵌入；`check.sh --with-pack`
   真打包 + 冒烟纳入 CI 门禁。
 
-[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/shhjjs111/hunter1/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shhjjs111/hunter1/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/shhjjs111/hunter1/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/shhjjs111/hunter1/releases/tag/v0.1.0

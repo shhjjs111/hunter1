@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_VERSION: "0.12.23"
+
 # 同一分支连推多次时，取消**仍在排队/运行**的旧 run，只保留最新的。
 #
 # 为什么必需：本 workflow 一次要真打包（PyInstaller，数分钟），而提交常常连着来。
@@ -32,8 +35,7 @@ jobs:
     # 转圈是**噪音**。真需要更久时调大这个数字，而不是删掉它。
     timeout-minutes: 25
 
-    # 跑在 **windows-latest**，不是 ubuntu —— 本工具的用户只有 Windows
-    # （README 的「跨平台」是历史声明；实际交付目标是 Windows 便携包）。
+    # 跑在 **windows-latest**，不是 ubuntu —— 当前交付目标只有 Windows 便携包。
     #
     # 为什么这不是「退让」而是**更强的**门禁：门禁跑在**用户所在的平台**才拦得住
     # 用户会遇到的缺陷。本项目吃过两次「CI 绿、Windows 红」：GBK 子进程解码（P0）
@@ -67,21 +69,26 @@ jobs:
       - name: 安装 Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.21.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: 安装后端依赖
-        # 测试横跨 db / crawler / 各切片三层，必须把它们都装上：
-        # 只装 .[dev] 的话，test_repository（sqlalchemy）、test_adapters（bs4）
-        # 以及各切片的路由测试都会在收集阶段就 ImportError。
-        #
-        # 额外装 `build`（PyInstaller）：CI 用 `check.sh --with-pack` **真打包**，
-        # 把「打包 + 冒烟」纳入必过门禁（此前只编译 spec、不真打，结果 build.py 的
-        # 前端烘焙一节在里面烂掉而无人知）。Windows runner 装的正是用户拿到的
-        # win32 产物，比在 ubuntu 上打一份 linux 包更贴目标。
-        run: pip install -e ".[dev,web,db,crawler,build]"
-        working-directory: backend
+      - name: 安装 uv
+        run: python -m pip install --disable-pip-version-check "uv==$UV_VERSION"
+
+      - name: 安装锁定的后端依赖
+        # `--frozen` 拒绝任何 lock 漂移；`--extra` 与门禁覆盖范围一一对应。
+        # build extra 让 CI 真正产出并冒烟 Windows 包，而不是只检查 spec。
+        run: >-
+          uv sync
+          --project backend
+          --frozen
+          --python 3.12
+          --extra dev
+          --extra web
+          --extra db
+          --extra crawler
+          --extra build
 
       - name: 安装前端依赖
         run: npm ci
@@ -96,7 +103,11 @@ jobs:
         # 未收录 shellcheck-py（见 docs/DEVELOPMENT.md）。CI 上无该变量，但写明更稳。
         # 装在哪个解释器里无关紧要：check.sh 会按 venv 布局从解释器路径反推
         # `<python>/Scripts/shellcheck.exe`（该目录不一定在 PATH 上）。
-        run: python -m pip install --index-url https://pypi.org/simple shellcheck-py==0.11.0.1
+        run: >-
+          uv pip install
+          --python backend/.venv/Scripts/python.exe
+          --index-url https://pypi.org/simple
+          shellcheck-py==0.11.0.1
 
       - name: 全量门禁（ruff / pyright / pytest / 示例 / shellcheck / 前端 check+build / 契约漂移 / 打包+冒烟）
         # 直接调用本地同款脚本 —— CI 与开发机不可能再漂移（如今还同平台）。
@@ -107,4 +118,4 @@ jobs:
         # `--with-pack`：额外真打包 + 冒烟。这条路径此前完全在门禁之外（只编译
         # spec），实测 `build.py` 的前端烘焙已在其间烂掉（node 包装器导致本机
         # exit 1，门禁却绿）。默认关是为了不拖慢日常本机循环；CI 必开。
-        run: bash scripts/check.sh --with-pack
+        run: PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/check.sh --with-pack
