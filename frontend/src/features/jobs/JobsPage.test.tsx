@@ -130,6 +130,85 @@ describe("JobsPage", () => {
     expect(screen.getByText("缺大规模团队经验")).toBeTruthy();
     expect(screen.getByText("总体匹配")).toBeTruthy();
     expect(screen.getByText("匹配分 88")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("已评分：88 分");
+  });
+
+  it("评分成功后把结果卡滚进当前视口", async () => {
+    const scrollIntoView = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      if (request.method === "POST") {
+        return jsonResponse({
+          job_id: "j1",
+          score: 88,
+          summary: "总体匹配",
+          advantages: null,
+          gaps: null,
+          model: "fake",
+          prompt_version: "v3",
+          scored_at: null,
+        });
+      }
+      return jsonResponse(LIST_PAYLOAD);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "评分" }));
+      await waitFor(() =>
+        expect(scrollIntoView).toHaveBeenCalledWith({
+          behavior: "smooth",
+          block: "nearest",
+        }),
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("prefers-reduced-motion 下改用即时滚动", async () => {
+    const scrollIntoView = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const request = input as Request;
+        if (request.method === "POST") {
+          return jsonResponse({
+            job_id: "j1",
+            score: 88,
+            summary: null,
+            advantages: null,
+            gaps: null,
+            model: "fake",
+            prompt_version: "v3",
+            scored_at: null,
+          });
+        }
+        return jsonResponse(LIST_PAYLOAD);
+      }),
+    );
+
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "评分" }));
+      await waitFor(() =>
+        expect(scrollIntoView).toHaveBeenCalledWith({
+          behavior: "auto",
+          block: "nearest",
+        }),
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
   });
 
   it("换关键词后清掉上一次的评分结果（卡片不与新列表错配）", async () => {

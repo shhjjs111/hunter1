@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ErrorNotice, PageHeader, Pager, SuccessNotice } from "../../shared/ui";
+import { ErrorNotice, PageHeader, Pager, Toast } from "../../shared/ui";
 import { useScoreJob } from "../scoring/api";
 import { ScoreCard } from "../scoring/components/ScoreCard";
 import { useApplyToJob } from "../applications/api";
@@ -11,9 +11,31 @@ import { SearchBar } from "./components/SearchBar";
 export function JobsPage() {
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
+  const [toast, setToast] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+  const scoreCardRef = useRef<HTMLDivElement>(null);
   const jobs = useJobs(keyword, page);
   const apply = useApplyToJob();
   const score = useScoreJob();
+  const dismissToast = useCallback(() => setToast(null), []);
+
+  useEffect(() => {
+    if (!score.isSuccess || score.data == null) {
+      return;
+    }
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const card = scoreCardRef.current;
+    if (card !== null && typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({
+        behavior: reduced ? "auto" : "smooth",
+        block: "nearest",
+      });
+    }
+  }, [score.data, score.isSuccess]);
 
   return (
     // 这里是**页面内容**，不是文档主地标：AppLayout 已经渲染了 <main>，
@@ -47,6 +69,7 @@ export function JobsPage() {
           // 用户无从判断那个分数属于谁。与 SettingsPage 对 probe/save 的处理同一取舍。
           apply.reset();
           score.reset();
+          setToast(null);
         }}
       />
 
@@ -60,8 +83,19 @@ export function JobsPage() {
           loading={jobs.isLoading}
           applyingId={apply.isPending ? apply.variables : undefined}
           scoringId={score.isPending ? score.variables : undefined}
-          onApply={(jobId) => apply.mutate(jobId)}
-          onScore={(jobId) => score.mutate(jobId)}
+          onApply={(jobId) =>
+            apply.mutate(jobId, {
+              onSuccess: () => setToast({ tone: "success", message: "已记录投递。" }),
+              onError: (error) => setToast({ tone: "error", message: error.message }),
+            })
+          }
+          onScore={(jobId) =>
+            score.mutate(jobId, {
+              onSuccess: (data) =>
+                setToast({ tone: "success", message: `已评分：${data.score} 分` }),
+              onError: (error) => setToast({ tone: "error", message: error.message }),
+            })
+          }
         />
       )}
 
@@ -78,32 +112,20 @@ export function JobsPage() {
           setPage(next);
           apply.reset();
           score.reset();
+          setToast(null);
         }}
       />
 
-      {apply.isError && (
-        <div className="mt-2">
-          <ErrorNotice message={(apply.error as Error).message} />
-        </div>
-      )}
-      {apply.isSuccess && (
-        <div className="mt-2">
-          <SuccessNotice message="已记录投递。" />
-        </div>
-      )}
-
-      {/* 评分失败原因原样透出：最常见的是「画像未配置」，后端已给可行动指引 */}
-      {score.isError && (
-        <div className="mt-2">
-          <ErrorNotice message={(score.error as Error).message} />
-        </div>
-      )}
-      {score.isSuccess && (
-        <div className="mt-2">
+      {score.isSuccess && score.data != null && (
+        <div className="mt-2" ref={scoreCardRef}>
           {/* 不再是「已评分并写回。」一句话：后端已经把模型的结论（摘要 / 优势 /
               差距）随响应返回，这里把它摆出来 —— 用户才知道这个分是怎么来的。 */}
           <ScoreCard card={score.data} />
         </div>
+      )}
+
+      {toast !== null && (
+        <Toast tone={toast.tone} message={toast.message} onDismiss={dismissToast} />
       )}
     </div>
   );
