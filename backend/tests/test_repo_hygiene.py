@@ -393,32 +393,53 @@ def _require_full_history() -> None:
     )
 
 
+def _permanent_history_refs() -> list[str]:
+    """返回需要审计的持久 refs，排除 GitHub 的合成 PR merge refs。
+
+    CI 检出的 `HEAD` 本身可能是 test-merge 提交，因此不能使用会自动包含
+    `HEAD` 的 `--all`；必须显式传入分支与 tag。合成 merge 的作者邮箱由 GitHub
+    账号生成，不属于项目历史，排除后真实 PR head 仍由远端分支覆盖。
+    """
+    refs = _git(
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads",
+        "refs/remotes",
+        "refs/tags",
+    ).splitlines()
+    permanent = [
+        ref
+        for ref in refs
+        if ref.strip()
+        and not ref.startswith("refs/pull/")
+        and not ref.startswith("refs/remotes/pull/")
+    ]
+    assert permanent, "历史卫生守卫未找到任何持久 Git ref。"
+    return permanent
+
+
 def _history_diff_text() -> str:
     _require_full_history()
+    refs = _permanent_history_refs()
     return _git(
         "log",
-        # PR test-merge refs are synthetic and use GitHub's account email author.
-        # They never enter permanent history; the real PR head and base still do.
-        "--exclude=refs/pull/*",
-        "--exclude=refs/remotes/pull/*",
-        "--all",
         "--format=commit %H",
         "-p",
         "--unified=0",
         "--no-ext-diff",
         "--no-textconv",
         "--no-renames",
+        *refs,
     )
 
 
 def _commit_author_records() -> list[tuple[str, str]]:
     _require_full_history()
+    refs = _permanent_history_refs()
     fields = _git(
         "log",
-        "--exclude=refs/pull/*",
-        "--exclude=refs/remotes/pull/*",
-        "--all",
         "--format=%H%x00%ae%x00",
+        *refs,
     ).split("\0")
     records = []
     for index in range(0, len(fields) - 1, 2):
