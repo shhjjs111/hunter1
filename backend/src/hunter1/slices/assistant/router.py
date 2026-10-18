@@ -357,6 +357,9 @@ def build_router(
         # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
         # 会 close 这个 generator，finally 同样会跑到。
         return StreamingResponse(
+            # CodeQL 误报：generator 对所有异常都只产出固定用户文案，异常类名与实现
+            # 细节不会进入 SSE；test_non_contract_failure_does_not_leak_internals 固化该边界。
+            # codeql[py/stack-trace-exposure]
             _stream_turn(
                 store=store,
                 llm=llm,
