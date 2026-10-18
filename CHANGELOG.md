@@ -7,6 +7,27 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-19
+
+### Added
+
+- **空间舞台界面**：五个业务模块统一为 visionOS 式玻璃窗口，桌面端提供环境全景、
+  侧边空间小窗和底部 dock，手机端使用底部标签栏与紧凑主窗口。
+- **深色 / 浅色主题**：首次访问跟随系统偏好，手动选择写入 `localStorage`；
+  支持 View Transition 圆形揭幕，并按 `prefers-reduced-motion` 自动降级。
+- **语义设计令牌**：新增玻璃、内凹、悬浮、状态色和模块色令牌，页面不再散落写死颜色。
+- **响应式岗位表**：窄屏保留可比较的表格结构，支持横向滚动和两端渐隐提示；行内操作
+  补齐可访问描述。
+
+### Changed
+
+- 统一岗位库、抓取、投递记录、求职助手和配置页面的字号、间距、按钮与卡片层级。
+- 环境背景按模块色调和导航方向平移，宽屏侧窗按弧线排列，页面切换保持空间连续性。
+
+### Compatibility
+
+- View Transition 与 CSS `linear()` 不支持的浏览器会自动退化为无转场切换，功能不受影响。
+
 ## [0.2.2] - 2026-10-18
 
 ### Fixed
@@ -126,7 +147,8 @@ AI 求职助手 → 投递管理」全流程。
 - **打包分发**：PyInstaller 单目录产物，前端产物嵌入；`check.sh --with-pack`
   真打包 + 冒烟纳入 CI 门禁。
 
-[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shhjjs111/hunter1/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/shhjjs111/hunter1/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/shhjjs111/hunter1/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shhjjs111/hunter1/compare/v0.1.1...v0.2.0
