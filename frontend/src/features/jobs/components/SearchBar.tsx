@@ -28,7 +28,7 @@ export function SearchBar({
       <input
         // 窄屏自适应：固定 w-80（320px）在 390px 宽的窗口里会连同按钮一起溢出。
         // 用 flex-1 + max-w 让它随容器收缩，按钮 shrink-0 保证不被挤没。
-        className={`min-w-0 flex-1 sm:max-w-80 ${fieldClass}`}
+        className={`min-w-0 flex-1 sm:max-w-96 ${fieldClass}`}
         placeholder="按岗位名搜索，如：产品经理"
         aria-label="按岗位名搜索"
         value={value}
@@ -36,7 +36,7 @@ export function SearchBar({
       />
       <button
         type="submit"
-        className="shrink-0 rounded bg-ink px-4 py-2 text-white hover:bg-ink-soft"
+        className="lift shrink-0 rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-hover"
       >
         搜索
       </button>

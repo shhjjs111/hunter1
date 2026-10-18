@@ -22,7 +22,7 @@ export function SiteProgressList({ sites }: { sites: SiteProgress[] }) {
   return (
     // 窄屏横向滚动：与岗位表、投递表同理 —— 375px 下五个数字列放不下，
     // 没有这层兜底就会把表格挤到溢出容器（其余两张表都包了，只有这里漏了）。
-    <div className="overflow-x-auto">
+    <div className="scroll-fade overflow-x-auto">
       <table className="w-full border-collapse text-sm whitespace-nowrap">
         <thead>
           <tr className="border-b border-line text-left text-muted">

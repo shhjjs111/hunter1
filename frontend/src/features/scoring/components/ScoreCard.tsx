@@ -17,7 +17,7 @@ export function ScoreCard({ card }: { card: ScoreView }) {
   if (card.gaps) sections.push({ label: "差距", text: card.gaps });
 
   return (
-    <section className="rounded border border-line bg-surface p-3 text-sm">
+    <section className="glass-thin rounded-3xl p-5 text-sm">
       <header className="flex flex-wrap items-baseline gap-2">
         <span className="font-semibold">匹配分 {card.score}</span>
         {card.model && <span className="text-xs text-muted">模型：{card.model}</span>}
