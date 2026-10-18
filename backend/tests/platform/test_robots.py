@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import pytest
 
 from hunter1.platform.fetch.robots import RobotsCache, parse_robots
@@ -92,7 +94,8 @@ class TestCache:
 
     def test_different_hosts_are_cached_separately(self) -> None:
         def fetch(url: str) -> str | None:
-            return "User-agent: *\nDisallow: /private" if "a.com" in url else None
+            host = urlparse(url).hostname
+            return "User-agent: *\nDisallow: /private" if host == "a.com" else None
 
         cache = RobotsCache(fetch)
         assert cache.allows("https://a.com/private", user_agent="ua") is False
