@@ -6,9 +6,9 @@
 
 设计要点（每条都有来由，别随手改）：
 
-1. **令牌只从文件/环境读，绝不进 argv**。令牌出现在命令行参数里，同机其它进程
-   在进程列表里就能看到（Windows 上尤其容易）。本脚本只从 `GITHUB_TOKEN` 环境
-   变量或 `~/.hunter1_gh_token` 读。
+1. **令牌只从 Git 凭据管理器/环境读，绝不进 argv 或仓库文件**。令牌出现在命令行
+   参数里，同机其它进程在进程列表里就能看到（Windows 上尤其容易）。本脚本只认
+   `GITHUB_TOKEN` 环境变量，或 Git 凭据管理器中 `github.com` 的凭据。
 2. **git 远端地址在脚本文件里构造**。本项目环境开着 `/mirror china` 时，会改写
    「命令文本」里的 github.com —— 实测 `git config --local x "https://github.com/a/b"`
    存进去的是 `gitcode.com/gh_mirror/a/b`（只读镜像，push 必失败）。而**脚本文件
@@ -62,12 +62,7 @@ from hunter1.platform.update.rules import ReleaseManifest  # noqa: E402
 
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
-# 令牌文件位置：可用 HUNTER1_GH_TOKEN_FILE 覆盖。**必须与 scripts/gh_setup.sh
-# 的取值一致** —— 那边认这个变量、这边原先硬编码 ~/.hunter1_gh_token，于是设了
-# 该变量的用户会被 gh_setup 告知「已保存」，而这里却去读另一个文件、读不到。
-DEFAULT_TOKEN_FILE = Path(
-    os.environ.get("HUNTER1_GH_TOKEN_FILE") or Path.home() / ".hunter1_gh_token"
-)
+GITHUB_HOST = "github.com"
 
 
 def _enable_utf8_output() -> None:
@@ -237,8 +232,45 @@ def resolve_target(owner_repo: str, owner: str, repo: str) -> tuple[str, str]:
     return owner_clean, _check_name("repo", repo.strip())
 
 
+def _git_credential_env() -> dict[str, str]:
+    """Git 子进程环境：禁止终端/图形界面提示，凭据只能来自系统存储。"""
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
+    return env
+
+
+def _run_git_credential(action: str, payload: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "credential", action],
+        input=payload,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=_git_credential_env(),
+        timeout=15,
+        check=False,
+    )
+
+
+def _stored_token() -> str | None:
+    """从 Git 凭据管理器读取 `github.com` 的密码字段；没有就返回 None。"""
+    payload = f"protocol=https\nhost={GITHUB_HOST}\n\n"
+    try:
+        result = _run_git_credential("fill", payload)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key == "password" and value.strip():
+            return value.strip()
+    return None
+
+
 def _known_tokens() -> list[str]:
-    """当前可能用到的令牌值（环境变量 + 令牌文件），用于输出脱敏。
+    """当前可能用到的令牌值（环境变量 + 凭据管理器），用于输出脱敏。
 
     不改动任何状态、失败一律忽略 —— 这是**显示层**的兜底，不该因为它自己
     出问题而把要报的那个错顶掉。
@@ -247,13 +279,9 @@ def _known_tokens() -> list[str]:
     env = os.environ.get("GITHUB_TOKEN", "").strip()
     if env:
         values.append(env)
-    try:
-        if DEFAULT_TOKEN_FILE.is_file():
-            stored = DEFAULT_TOKEN_FILE.read_text(encoding="utf-8").strip()
-            if stored:
-                values.append(stored)
-    except OSError:
-        pass
+    stored = _stored_token()
+    if stored:
+        values.append(stored)
     return values
 
 
@@ -270,7 +298,7 @@ def _redact(text: str) -> str:
     统一抹一遍 —— 与后端 `platform.text.redact_secret` 是同一个思路：
     脱敏点越靠近显示端越可靠（那边用在 LLM 错误文案上，见 settings/scoring 切片）。
 
-    刻意不依赖「哪个令牌正在用」这个前提：环境变量与令牌文件都查一遍，
+    刻意不依赖「哪个令牌正在用」这个前提：环境变量与凭据管理器都查一遍，
     这样即便异常发生在 read_token() **之前**（那时还没有 token 变量）也有效。
     """
     for secret in _known_tokens():
@@ -309,28 +337,25 @@ def verify_token(token: str) -> str | None:
         raise
 
 
-def save_token(token: str) -> Path:
-    """存到仓库外的文件。
-
-    Windows 下不靠权限位（`chmod` 在 NTFS 上基本无效），而是靠**用户主目录本身
-    的 ACL** —— 默认只有本账号能读 `C:\\Users\\<你>`。先写临时文件再替换，
-    避免中断留下半截令牌。
-    """
-    path = DEFAULT_TOKEN_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    # 先收紧 umask 再落盘：临时文件在 `chmod` 之前的那一瞬，权限位由 umask 决定 ——
-    # 默认（022）下会短暂是 0644，同机其他用户可读。gh_setup.sh 用 `umask 077` 做了
-    # 同样的事（那边是 shell）；这里对应 os.umask。写完立刻还原，别影响本进程后续落盘。
-    previous_umask = os.umask(0o077)
+def save_token(token: str, *, login: str) -> None:
+    """把令牌交给 Git 凭据管理器，不写入项目文件或用户目录明文文件。"""
+    if not token or not login:
+        raise PublishError("令牌或 GitHub 账号为空，未写入凭据管理器。")
+    if any(character in token + login for character in ("\n", "\r")):
+        raise PublishError("令牌或账号包含换行，拒绝写入凭据管理器。")
+    payload = f"protocol=https\nhost={GITHUB_HOST}\nusername={login}\npassword={token}\n\n"
     try:
-        tmp.write_text(token, encoding="utf-8")
-    finally:
-        os.umask(previous_umask)
-    tmp.replace(path)
-    with contextlib.suppress(OSError):
-        path.chmod(0o600)
-    return path
+        result = _run_git_credential("approve", payload)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PublishError(
+            "无法写入 Git 凭据管理器。请确认已安装可用的 credential helper，"
+            "或改用 GITHUB_TOKEN 环境变量。"
+        ) from exc
+    if result.returncode != 0:
+        raise PublishError(
+            "Git 凭据管理器拒绝了令牌保存。请确认 credential.helper 已配置，"
+            "或改用 GITHUB_TOKEN 环境变量。"
+        )
 
 
 def token_from_clipboard() -> str | None:
@@ -408,9 +433,9 @@ def _accept_clipboard_token() -> str | None:
     if login is None:
         print("  ✗ GitHub 拒绝了剪贴板里的内容，转手动输入。", file=sys.stderr)
         return None
-    path = save_token(candidate)
+    save_token(candidate, login=login)
     print(f"  ✓ 令牌有效，账号：{login}")
-    print(f"  ✓ 已存到 {path}（仓库外，不会被提交）")
+    print("  ✓ 已保存到 Git 凭据管理器")
     return candidate
 
 
@@ -463,15 +488,15 @@ def prompt_for_token() -> str:
             print(f"  ✗ GitHub 拒绝了它（还剩 {3 - attempts} 次）。", file=sys.stderr)
             print("    常见原因：已过期 / 已被撤销 / 复制时漏了字符。", file=sys.stderr)
             continue
-        path = save_token(token)
+        save_token(token, login=login)
         print(f"  ✓ 令牌有效，账号：{login}")
-        print(f"  ✓ 已存到 {path}（仓库外，不会被提交）")
+        print("  ✓ 已保存到 Git 凭据管理器")
         return token
     raise PublishError("连续 3 次都没通过校验 —— 先到 GitHub 确认令牌是否有效。")
 
 
 def read_token(*, interactive: bool = True) -> str:
-    """取令牌：环境变量 → 令牌文件 → （交互式）当场输入。
+    """取令牌：环境变量 → Git 凭据管理器 → （交互式）当场输入。
 
     交互询问只在**真的连着终端**时发生（`isatty`）。CI 里没有终端，所以不会
     卡在一个永远等不到输入的提示上 —— 而是明确报错，让人去配 `GITHUB_TOKEN`。
@@ -479,15 +504,15 @@ def read_token(*, interactive: bool = True) -> str:
     env = os.environ.get("GITHUB_TOKEN", "").strip()
     if env:
         return env
-    if DEFAULT_TOKEN_FILE.is_file():
-        token = DEFAULT_TOKEN_FILE.read_text(encoding="utf-8").strip()
-        if token:
-            return token
+    token = _stored_token()
+    if token:
+        return token
     if interactive and sys.stdin.isatty():
         return prompt_for_token()
     raise PublishError(
         "没有找到令牌，且当前不是交互式终端（无法提示输入）。"
-        "请设 GITHUB_TOKEN 环境变量，或先跑一次 `bash scripts/gh_setup.sh`。"
+        "请设 GITHUB_TOKEN 环境变量，或先跑一次 `bash scripts/gh_setup.sh` "
+        "把令牌写入 Git 凭据管理器。"
     )
 
 
@@ -785,7 +810,10 @@ def find_release(owner: str, repo: str, tag: str, token: str) -> dict | None:
 def set_draft(owner: str, repo: str, token: str, release_id: int, *, draft: bool) -> None:
     """把 Release 置为草稿 / 发布态（还原路径与发布路径共用同一条 PATCH）。"""
     api_request(
-        "PATCH", f"/repos/{owner}/{repo}/releases/{release_id}", token, payload={"draft": draft}
+        "PATCH",
+        f"/repos/{owner}/{repo}/releases/{release_id}",
+        token,
+        payload={"draft": draft},
     )
 
 
@@ -935,7 +963,10 @@ def _restore_if_reopened(
         return
     try:
         set_draft(owner, repo, token, handle.id, draft=False)
-        print(f"  ↩ 已把 {tag} 恢复为已发布（回滚本次的「暂时收回为草稿」）", file=sys.stderr)
+        print(
+            f"  ↩ 已把 {tag} 恢复为已发布（回滚本次的「暂时收回为草稿」）",
+            file=sys.stderr,
+        )
     except PublishError as exc:
         print(
             f"⚠ 还原 Release 状态失败：{_redact(str(exc))}\n"
@@ -1062,7 +1093,10 @@ def main(argv: list[str] | None = None) -> int:
         login = api_request("GET", "/user", token).get("login") or ""
         if not owner:
             if not login:
-                print("无法确定仓库归属，请显式给出 owner/repo 或 --owner", file=sys.stderr)
+                print(
+                    "无法确定仓库归属，请显式给出 owner/repo 或 --owner",
+                    file=sys.stderr,
+                )
                 return 2
             owner = login  # 省略 owner 时用令牌账号 —— 双击场景的默认路径
         print(f"  ✓ 令牌有效，账号：{login}")
@@ -1119,8 +1153,8 @@ def main(argv: list[str] | None = None) -> int:
     print("\n  稳定入口（写进 HUNTER1_UPDATE_SOURCE，一次设好终身有效）：")
     print(f"    https://github.com/{owner}/{repo}/releases/latest/download/manifest.json")
     print(
-        f"\n  令牌已存到 {DEFAULT_TOKEN_FILE}，下次发版自动复用；"
-        "不再发版时再到 GitHub 撤销它并删除该文件。"
+        "\n  令牌由 Git 凭据管理器或 GITHUB_TOKEN 提供，下次发版会自动复用；"
+        "不再发版时到 GitHub 撤销它，并从凭据管理器删除。"
     )
     return 0
 
