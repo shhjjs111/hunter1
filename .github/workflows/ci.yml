@@ -55,6 +55,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # 历史卫生守卫要扫描全部可达提交；默认 depth=1 会让它静默失去覆盖。
+          fetch-depth: 0
           persist-credentials: false
 
       - name: 安装 Python ${{ matrix.python-version }}
