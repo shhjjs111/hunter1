@@ -314,9 +314,8 @@ class TestTurnEndpoint:
         """失败文案必须是**可行动的中文**，不能是裸机器码。
 
         原先 `detail=str(exc)`，用户拿到的是 `"transport_failed"` / 本例的
-        `"upstream_failed: 模型不可用"` —— 读不出「该去检查什么」。同文件的
-        `_stream_error_message` 与 scoring 的 `run_scoring` 都已走
-        `describe_llm_error`，只有这个端点的入口漏了。
+        `"upstream_failed: 模型不可用"` —— 读不出「该去检查什么」。同路径的
+        scoring `run_scoring` 已走 `describe_llm_error`，只有这个端点的入口漏了。
 
         ⚠️ 上面那条用例断言的是 `"upstream_failed" in detail` —— 裸 `str(exc)`
         同样包含该子串，**所以它拦不住这个缺陷**（实测：修复前后它都是绿的）。
@@ -412,11 +411,14 @@ class TestStreamEndpoint:
             assert len(db.conversations().list()) == 1
 
     def test_model_failure_becomes_error_event(self, db: Database) -> None:
-        """响应已经开始 —— 失败只能以 error 事件交出去，不能悄悄断掉。"""
+        """响应已经开始 —— 失败只能以固定文案的 error 事件交出去。"""
         for client in _client(db, ScriptedLLM(boom=True)):
             events = _parse_sse(client.post("/api/assistant/stream", json={"message": "你好"}).text)
             assert [event["type"] for event in events] == ["error"]
-            assert "upstream_failed" in events[0]["message"]
+            message = events[0]["message"]
+            assert "模型调用失败" in message
+            assert "upstream_failed" not in message
+            assert "模型不可用" not in message
             # 失败不落库（否则会留下半截会话）
             assert db.conversations().list() == []
 
@@ -438,7 +440,7 @@ class TestStreamEndpoint:
 
         原先直接把 `{type(exc).__name__}: {exc}` 交给前端 —— 内部异常类名与实现消息
         （库内部状态、参数）都会显示给用户，既无用也泄露实现（报告次要项）。
-        `LLMError` 仍走可读中文（见 `test_model_failure_becomes_error_event`）。
+        异常原文只进服务端日志，SSE 侧无论异常类型都只给固定文案。
         """
         for client in _client(db, _ExplodingLLM()):
             events = _parse_sse(client.post("/api/assistant/stream", json={"message": "在吗"}).text)
@@ -613,8 +615,8 @@ class TestPartialAnswerIsNotPersisted:
 
         assert [event["type"] for event in events] == ["text", "error"]
         assert events[0]["text"] == "半截回答"
-        assert "stream_error" in events[1]["message"]
-        assert "Insufficient Balance" in events[1]["message"]
+        assert "stream_error" not in events[1]["message"]
+        assert "Insufficient Balance" not in events[1]["message"]
         # 半截回答与失败那句都不落库
         assert db.conversations().list() == []
         assert llm.closed is True
