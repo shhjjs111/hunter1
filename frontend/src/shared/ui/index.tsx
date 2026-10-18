@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * 设计系统原语 —— 全站视觉词汇的唯一来源。
@@ -54,7 +55,7 @@ export function Button({
   const look =
     variant === "primary"
       ? "bg-accent text-on-accent shadow-[0_6px_20px_-8px_var(--color-accent)] hover:bg-accent-hover"
-      : "bg-fill text-ink shadow-[inset_0_1px_0_var(--glass-spec)] hover:bg-fill-strong";
+      : "bg-fill text-ink shadow-[inset_0_1px_0_var(--glass-spec),inset_0_0_0_1px_var(--btn-edge)] hover:bg-fill-strong";
   return (
     <button
       type={type}
@@ -98,14 +99,75 @@ export function EmptyState({ children }: { children: ReactNode }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <p className="rounded-2xl border border-danger-line bg-danger-soft px-4 py-3 text-sm text-danger">
+    <p
+      role="alert"
+      aria-live="assertive"
+      className="rounded-2xl border border-danger-line bg-danger-soft px-4 py-3 text-sm text-danger"
+    >
       {message}
     </p>
   );
 }
 
 export function SuccessNotice({ message }: { message: string }) {
-  return <p className="text-sm text-success">{message}</p>;
+  return (
+    <p role="status" aria-live="polite" className="text-sm text-success">
+      {message}
+    </p>
+  );
+}
+
+/**
+ * 页面级操作反馈。
+ *
+ * 行内操作（岗位库的「评分 / 记录投递」）发生在表格里，而结果提示若插在
+ * 表格与分页器之后，桌面首屏和手机视口都可能完全看不到 —— 用户点完按钮会以为
+ * 什么都没发生。这里固定在视口底部、dock 上方，反馈不随内容位置漂走。
+ *
+ * 成功提示 4 秒后自动收起；错误必须由用户确认，否则失败原因会在用户还没读完时
+ * 消失。`onDismiss` 由调用方提供，避免组件自己持有与 mutation 状态脱节的可见性。
+ */
+export function Toast({
+  tone,
+  message,
+  onDismiss,
+}: {
+  tone: "success" | "error";
+  message: string;
+  onDismiss?: () => void;
+}) {
+  useEffect(() => {
+    if (tone !== "success" || onDismiss === undefined) {
+      return;
+    }
+    const timer = window.setTimeout(onDismiss, 4000);
+    return () => window.clearTimeout(timer);
+  }, [tone, message, onDismiss]);
+
+  const isError = tone === "error";
+  return createPortal(
+    <div
+      role={isError ? "alert" : "status"}
+      aria-live={isError ? "assertive" : "polite"}
+      aria-atomic="true"
+      className={`glass fixed bottom-[84px] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-full px-4 py-3 text-sm shadow-[0_18px_50px_-18px_rgb(0_0_0/0.55)] md:bottom-[104px] ${
+        isError ? "text-danger" : "text-success"
+      }`}
+    >
+      <span className="min-w-0 flex-1">{message}</span>
+      {isError && onDismiss !== undefined && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="关闭提示"
+          className="grid size-6 shrink-0 place-items-center rounded-full bg-fill text-ink-soft transition-colors hover:bg-fill-strong hover:text-ink"
+        >
+          ×
+        </button>
+      )}
+    </div>,
+    document.body,
+  );
 }
 
 export function PageHeader({

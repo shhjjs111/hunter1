@@ -81,12 +81,14 @@ export function JobsTable({
               <tr key={job.id} className="group transition-colors hover:bg-fill-subtle [&>td]:border-t [&>td]:border-line-soft [&>td:first-child]:rounded-l-2xl [&>td:last-child]:rounded-r-2xl hover:[&>td]:border-transparent">
                 {/* 行内按钮的**可访问名**保持「评分 / 记录投递」（不覆盖可见文案：
                     WCAG 2.5.3 要求可访问名包含可见标签），岗位信息经
-                    `aria-describedby` 补上 —— 屏幕阅读器会念「评分，AI产品经理 字节跳动」，
-                    视觉用户靠行位置区分，两边都不吃亏。 */}
+                    `aria-describedby` 补上（支持空格分隔多个 id）—— 屏幕阅读器会念
+                    「评分，AI产品经理 字节跳动」，视觉用户靠行位置区分，两边都不吃亏。 */}
                 <td className="px-4 py-3.5" id={`job-${job.id}-label`}>
                   <JobTitleLink title={job.title} url={job.detail_url} />
                 </td>
-                <td className="px-4 py-3.5 text-ink-soft">{job.company}</td>
+                <td className="px-4 py-3.5 text-ink-soft" id={`job-${job.id}-company`}>
+                  {job.company}
+                </td>
                 <td className="px-4 py-3.5 text-muted-strong">{job.city ?? "—"}</td>
                 <td className="px-4 py-3.5">
                   {job.match_score != null ? (
@@ -102,14 +104,14 @@ export function JobsTable({
                     <Button
                       disabled={scoringId === job.id}
                       onClick={() => onScore(job.id)}
-                      describedBy={`job-${job.id}-label`}
+                      describedBy={`job-${job.id}-label job-${job.id}-company`}
                     >
                       {scoringId === job.id ? "评分中…" : "评分"}
                     </Button>
                     <Button
                       disabled={applyingId === job.id}
                       onClick={() => onApply(job.id)}
-                      describedBy={`job-${job.id}-label`}
+                      describedBy={`job-${job.id}-label job-${job.id}-company`}
                     >
                       {applyingId === job.id ? "记录中…" : "记录投递"}
                     </Button>
