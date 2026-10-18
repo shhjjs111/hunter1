@@ -85,6 +85,7 @@ def test_api_docs_get_a_csp_that_allows_swagger_assets() -> None:
     with TestClient(app) as client:
         response = client.get("/api/docs")
     csp = response.headers["content-security-policy"]
-    assert "https://cdn.jsdelivr.net" in csp
-    assert "'unsafe-inline'" in csp
+    csp_tokens = {token.rstrip(";") for token in csp.split()}
+    assert "https://cdn.jsdelivr.net" in csp_tokens
+    assert "'unsafe-inline'" in csp_tokens
     assert "frame-ancestors 'none'" in csp
