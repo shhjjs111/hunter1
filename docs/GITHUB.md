@@ -41,6 +41,15 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
 
 - 启用私有漏洞报告、Dependabot alerts、Dependabot security updates、
   secret scanning 与 push protection。
+- CI 拉取完整 Git 历史；仓库卫生守卫同时扫描全部可达提交的新增内容，
+  防止删除后仍留在历史里的密钥形态或本机路径再次进入公开历史。
+- 历史中只允许一个精确例外：提交
+  `92803a424a195c86f17b034378af7fcc8eec9272` 的
+  `backend/tests/test_repo_hygiene.py` 合成样例。该样例早于不可变 release 与
+  当前保护规则；改写会违反禁止 force-push，并破坏受保护的 `v0.2.0` tag。
+  例外绑定完整提交哈希与路径，任何新命中都必须修掉。
+- 提交作者邮箱使用 GitHub noreply。公开历史中已经存在的真实邮箱提交由
+  仓库卫生测试以完整提交哈希锁定，不再增加。
 - 安全问题走 `SECURITY.md` 的私有通道，不在公开 Issue 中披露细节。
 - 发布物必须经过仓库卫生门禁，运行数据、依赖目录、缓存、密钥形态与本机路径
   不得进入索引。

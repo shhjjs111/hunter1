@@ -146,6 +146,38 @@ PII_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("邮箱", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
 )
 
+#: 历史隐私守卫的精确例外。
+#:
+#: `main` 上唯一已知的旧样例位于该提交的测试文件中。它早于不可变 release
+#: 与当前治理规则；改写它会破坏受保护的线性历史、v0.2.0 不可变 tag/release，
+#: 并与 `AGENTS.md` 禁止 force-push 的约定冲突。例外只认完整提交哈希 + 路径，
+#: 不按文件或规则放行，任何新提交命中都必须修掉。
+HISTORY_SENSITIVE_ALLOWLIST = frozenset(
+    {
+        "92803a424a195c86f17b034378af7fcc8eec9272:backend/tests/test_repo_hygiene.py",
+    }
+)
+
+#: GitHub 机器人提交使用的公开 noreply 地址。
+_GITHUB_NOREPLY_EMAIL = "noreply@" + "github.com"
+
+#: 公开历史中已经存在的真实作者邮箱提交。
+#:
+#: 后续提交必须使用 GitHub noreply（或 `example.com` / `test.com` 等保留域名）。
+#: 这里只锁定提交哈希，不复制邮箱；历史元数据无法在不改写受保护历史的条件下清除。
+PERSONAL_COMMIT_EMAIL_ALLOWLIST = frozenset(
+    {
+        "4875bf7abea5fc21f62a2bdee699dc2205748747",
+        "d5c7601e27e098e02054ebb7ed7461464a1bd5af",
+        "da20ea1c40c12e8cef046593f34e95b2263878be",
+        "dcb7a36b08bf1b77dfa3a3a94700a1278de42845",
+        "fec2b3db546b5beffad775f32620c746e98fce72",
+    }
+)
+
+_COMMIT_HEADER_PATTERN = re.compile(r"^commit ([0-9a-f]{40})$")
+_DIFF_HEADER_PATTERN = re.compile(r"^diff --git a/(.+) b/(.+)$")
+
 #: 内容扫描跳过的目录：目前为空 —— 所有判据对全部跟踪文件生效。
 #: 保留这个常量是为了让「将来某类文件需要豁免」有个**显式**的落点，
 #: 而不是在判据函数里塞 if（那样豁免会变成隐形的）。
@@ -303,6 +335,90 @@ def judge_oversized(files: list[str]) -> list[str]:
     return sorted(bad)
 
 
+def judge_history_sensitive_material(diff_text: str) -> list[str]:
+    """扫描历史 diff 中**新增**的密钥形态与用户家目录路径。
+
+    只看新增行：任何进入过公开历史的文本，至少会在某个提交中作为新增行出现。
+    删除行已包含在它首次新增的提交中；重复扫描删除只会迫使白名单漂移。
+    返回值只有 `commit:path`，不回显命中的内容，避免门禁日志二次扩散。
+    """
+    commit: str | None = None
+    path: str | None = None
+    hits: set[str] = set()
+    for line in diff_text.splitlines():
+        if match := _COMMIT_HEADER_PATTERN.match(line):
+            commit = match.group(1)
+            path = None
+            continue
+        if match := _DIFF_HEADER_PATTERN.match(line):
+            path = match.group(2)
+            continue
+        if not commit or not path or not line.startswith("+") or line.startswith("+++"):
+            continue
+        content = line[1:]
+        if any(pattern.search(content) for _, pattern in SECRET_PATTERNS) or (
+            HOME_DIR_PATTERN.search(content)
+        ):
+            hits.add(f"{commit}:{path}")
+    return sorted(hits)
+
+
+def judge_personal_commit_emails(records: list[tuple[str, str]]) -> list[str]:
+    """拒绝新增使用真实邮箱的作者提交。
+
+    返回值只有提交哈希；错误信息无需再次公开邮箱。GitHub noreply 与 RFC
+    保留域名允许通过，方便机器人、Dependabot 与测试夹具继续工作。
+    """
+    bad = []
+    for commit, email in records:
+        normalized = email.strip().lower()
+        if not normalized:
+            continue
+        domain = normalized.rpartition("@")[2]
+        if (
+            domain == "users.noreply.github.com"
+            or normalized == _GITHUB_NOREPLY_EMAIL
+            or domain in _RESERVED_EMAIL_DOMAINS
+            or commit in PERSONAL_COMMIT_EMAIL_ALLOWLIST
+        ):
+            continue
+        bad.append(commit)
+    return sorted(bad)
+
+
+def _require_full_history() -> None:
+    """历史守卫必须看到完整历史；浅克隆时明确失败，不制造假绿。"""
+    assert _git("rev-parse", "--is-shallow-repository").strip() == "false", (
+        "历史卫生守卫需要完整 Git 历史；请先执行 `git fetch --unshallow`。"
+    )
+
+
+def _history_diff_text() -> str:
+    _require_full_history()
+    return _git(
+        "log",
+        "--all",
+        "--format=commit %H",
+        "-p",
+        "--unified=0",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+    )
+
+
+def _commit_author_records() -> list[tuple[str, str]]:
+    _require_full_history()
+    fields = _git("log", "--all", "--format=%H%x00%ae%x00").split("\0")
+    records = []
+    for index in range(0, len(fields) - 1, 2):
+        commit = fields[index].strip()
+        email = fields[index + 1].strip()
+        if commit and email:
+            records.append((commit, email))
+    return records
+
+
 #: 全部判据（名称 → 函数）。新增判据时**一并**加进这里，否则不会被跑到。
 JUDGES = {
     "被忽略却仍被跟踪": judge_ignored_but_tracked,
@@ -359,6 +475,19 @@ class TestRepositoryIsClean:
             "单文件体积",
         }
         assert expected == covered, f"判据表与用例不同步：{expected ^ covered}"
+
+
+class TestRepositoryHistoryIsClean:
+    """只靠当前 HEAD 的扫描会漏掉已经公开的旧提交，这里守住完整历史。"""
+
+    def test_no_new_sensitive_material_in_history(self) -> None:
+        hits = set(judge_history_sensitive_material(_history_diff_text()))
+        unexpected = sorted(hits - HISTORY_SENSITIVE_ALLOWLIST)
+        assert unexpected == [], f"历史中存在未登记的高置信度敏感形态：{unexpected}"
+
+    def test_no_new_personal_author_email_in_history(self) -> None:
+        unexpected = judge_personal_commit_emails(_commit_author_records())
+        assert unexpected == [], f"历史中存在未登记的真实作者邮箱提交：{unexpected}"
 
 
 def _assembled(*parts: str) -> str:
@@ -459,6 +588,60 @@ class TestJudgesActuallyFire:
         """保留域名是测试夹具的标准示例，不该报。"""
         for text in ("mailto:hr@example.com", "a@example.org", "x@test.com"):
             assert not _judge_pii_text(text), f"保留域名被误报：{text}"
+
+    def test_history_judge_fires_on_added_secret(self) -> None:
+        token = _assembled(
+            "sk-",
+            "proj-",
+            "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH",
+        )
+        diff = (
+            f"commit {'a' * 40}\n"
+            "diff --git a/probe.py b/probe.py\n"
+            "@@ -0,0 +1 @@\n"
+            f'+KEY = "{token}"\n'
+        )
+        assert judge_history_sensitive_material(diff) == [
+            f"{'a' * 40}:probe.py",
+        ]
+
+    def test_history_judge_fires_on_added_home_path(self) -> None:
+        home_path = _assembled("C:", "\\", "Users", "\\", "alice", "\\", "probe.py")
+        diff = (
+            f"commit {'b' * 40}\n"
+            "diff --git a/docs/probe.md b/docs/probe.md\n"
+            "@@ -0,0 +1 @@\n"
+            f"+{home_path}\n"
+        )
+        assert judge_history_sensitive_material(diff) == [
+            f"{'b' * 40}:docs/probe.md",
+        ]
+
+    def test_history_judge_ignores_removed_secret(self) -> None:
+        token = _assembled(
+            "ghp_",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+        )
+        diff = (
+            f"commit {'c' * 40}\n"
+            "diff --git a/probe.py b/probe.py\n"
+            "@@ -1 +0,0 @@\n"
+            f'-KEY = "{token}"\n'
+        )
+        assert judge_history_sensitive_material(diff) == []
+
+    def test_commit_email_judge_fires_on_personal_address(self) -> None:
+        email = _assembled("person@", "somecompany.cn")
+        assert judge_personal_commit_emails([("d" * 40, email)]) == ["d" * 40]
+
+    def test_commit_email_judge_allows_noreply_and_reserved_domains(self) -> None:
+        records = [
+            ("e" * 40, _assembled("123+user@", "users.noreply.github.com")),
+            ("f" * 40, _GITHUB_NOREPLY_EMAIL),
+            ("1" * 40, "person@example.com"),
+            ("2" * 40, "agent@test.com"),
+        ]
+        assert judge_personal_commit_emails(records) == []
 
     def test_oversized_judge_fires_on_big_file(self, tmp_path: Path) -> None:
         """判据对超过上限的文件必须命中。
