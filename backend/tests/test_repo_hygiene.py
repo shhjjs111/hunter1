@@ -161,7 +161,6 @@ HISTORY_SENSITIVE_ALLOWLIST = frozenset(
 
 #: GitHub 机器人提交使用的公开 noreply 地址。
 _GITHUB_NOREPLY_EMAIL = "noreply@" + "github.com"
-_GITHUB_SQUASH_SUBJECT_PATTERN = re.compile(r"\(#\d+\)$")
 
 
 class CommitEmailRecord(NamedTuple):
@@ -170,8 +169,6 @@ class CommitEmailRecord(NamedTuple):
     commit: str
     author_email: str
     committer_email: str
-    parents: tuple[str, ...]
-    subject: str
 
 
 #: 公开历史中已经存在的真实作者邮箱提交。
@@ -180,7 +177,9 @@ class CommitEmailRecord(NamedTuple):
 #: 这里只锁定提交哈希，不复制邮箱；历史元数据无法在不改写受保护历史的条件下清除。
 PERSONAL_COMMIT_EMAIL_ALLOWLIST = frozenset(
     {
+        "28a899dccff60a8eddc6d9e968e2ad7a6b78e603",
         "4875bf7abea5fc21f62a2bdee699dc2205748747",
+        "cc8aa951b5c76aac2822f3b859d16eea98c5732f",
         "d5c7601e27e098e02054ebb7ed7461464a1bd5af",
         "da20ea1c40c12e8cef046593f34e95b2263878be",
         "dcb7a36b08bf1b77dfa3a3a94700a1278de42845",
@@ -384,14 +383,6 @@ def judge_personal_commit_emails(records: list[CommitEmailRecord]) -> list[str]:
     """
     bad = []
     for record in records:
-        if (
-            len(record.parents) == 1
-            and record.committer_email.strip().lower() == _GITHUB_NOREPLY_EMAIL
-            and _GITHUB_SQUASH_SUBJECT_PATTERN.search(record.subject)
-        ):
-            # GitHub squash commits use the account email as author. The real PR
-            # head commits are scanned separately while their refs still exist.
-            continue
         for email in (record.author_email, record.committer_email):
             normalized = email.strip().lower()
             if not normalized:
@@ -461,17 +452,15 @@ def _commit_email_records() -> list[CommitEmailRecord]:
     refs = _permanent_history_refs()
     fields = _git(
         "log",
-        "--format=%H%x00%ae%x00%ce%x00%P%x00%s%x00",
+        "--format=%H%x00%ae%x00%ce%x00",
         *refs,
     ).split("\0")
     records = []
-    for index in range(0, len(fields) - 4, 5):
+    for index in range(0, len(fields) - 2, 3):
         record = CommitEmailRecord(
             commit=fields[index].strip(),
             author_email=fields[index + 1].strip(),
             committer_email=fields[index + 2].strip(),
-            parents=tuple(fields[index + 3].split()),
-            subject=fields[index + 4].strip(),
         )
         if record.commit and record.author_email:
             records.append(record)
@@ -695,8 +684,6 @@ class TestJudgesActuallyFire:
             commit="d" * 40,
             author_email=email,
             committer_email=email,
-            parents=("1" * 40,),
-            subject="feat: local commit",
         )
         assert judge_personal_commit_emails([record]) == ["d" * 40]
 
@@ -706,52 +693,32 @@ class TestJudgesActuallyFire:
                 "e" * 40,
                 _assembled("123+user@", "users.noreply.github.com"),
                 _assembled("123+user@", "users.noreply.github.com"),
-                ("1" * 40,),
-                "feat: bot commit",
             ),
             CommitEmailRecord(
                 "f" * 40,
                 _GITHUB_NOREPLY_EMAIL,
                 _GITHUB_NOREPLY_EMAIL,
-                ("1" * 40,),
-                "chore: github commit",
             ),
             CommitEmailRecord(
                 "1" * 40,
                 "person@example.com",
                 "person@example.com",
-                ("2" * 40,),
-                "test: reserved domain",
             ),
             CommitEmailRecord(
                 "2" * 40,
                 "agent@test.com",
                 "agent@test.com",
-                ("3" * 40,),
-                "test: reserved domain",
             ),
         ]
         assert judge_personal_commit_emails(records) == []
 
-    def test_commit_email_judge_allows_github_squash_commit(self) -> None:
+    def test_commit_email_judge_rejects_github_squash_author_email(self) -> None:
         record = CommitEmailRecord(
             commit="3" * 40,
             author_email=_assembled("person@", "somecompany.cn"),
             committer_email=_GITHUB_NOREPLY_EMAIL,
-            parents=("4" * 40,),
-            subject="feat: reviewed change (#10)",
         )
-        assert judge_personal_commit_emails([record]) == []
-
-    def test_commit_email_judge_rejects_fake_github_squash_shape(self) -> None:
-        record = CommitEmailRecord(
-            commit="4" * 40,
-            author_email=_assembled("person@", "somecompany.cn"),
-            committer_email=_assembled("person@", "somecompany.cn"),
-            parents=("5" * 40,),
-            subject="feat: unreviewed change (#10)",
-        )
-        assert judge_personal_commit_emails([record]) == ["4" * 40]
+        assert judge_personal_commit_emails([record]) == ["3" * 40]
 
     def test_oversized_judge_fires_on_big_file(self, tmp_path: Path) -> None:
         """判据对超过上限的文件必须命中。
