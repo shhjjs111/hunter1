@@ -98,14 +98,22 @@ export function EmptyState({ children }: { children: ReactNode }) {
 
 export function ErrorNotice({ message }: { message: string }) {
   return (
-    <p className="rounded-2xl border border-danger-line bg-danger-soft px-4 py-3 text-sm text-danger">
+    <p
+      role="alert"
+      aria-live="assertive"
+      className="rounded-2xl border border-danger-line bg-danger-soft px-4 py-3 text-sm text-danger"
+    >
       {message}
     </p>
   );
 }
 
 export function SuccessNotice({ message }: { message: string }) {
-  return <p className="text-sm text-success">{message}</p>;
+  return (
+    <p role="status" aria-live="polite" className="text-sm text-success">
+      {message}
+    </p>
+  );
 }
 
 /**

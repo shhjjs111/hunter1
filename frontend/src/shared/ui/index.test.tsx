@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Pager, Toast } from "./index";
+import { ErrorNotice, Pager, SuccessNotice, Toast } from "./index";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -82,5 +82,19 @@ describe("Toast", () => {
     expect(toast.className).toContain("fixed");
     expect(toast.className).toContain("bottom-[84px]");
     expect(toast.className).toContain("md:bottom-[104px]");
+  });
+});
+
+describe("页面内提示的可访问语义", () => {
+  it("错误提示以 alert 暴露给读屏", () => {
+    render(<ErrorNotice message="保存失败。" />);
+    expect(screen.getByRole("alert").textContent).toContain("保存失败。");
+    expect(screen.getByRole("alert").getAttribute("aria-live")).toBe("assertive");
+  });
+
+  it("成功提示以 polite status 暴露给读屏", () => {
+    render(<SuccessNotice message="保存成功。" />);
+    expect(screen.getByRole("status").textContent).toContain("保存成功。");
+    expect(screen.getByRole("status").getAttribute("aria-live")).toBe("polite");
   });
 });
