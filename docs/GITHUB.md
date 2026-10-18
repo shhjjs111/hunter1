@@ -50,9 +50,9 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
   例外绑定完整提交哈希与路径，任何新命中都必须修掉。
 - 提交作者邮箱使用 GitHub noreply。公开历史中已经存在的真实邮箱提交由
   仓库卫生测试以完整提交哈希锁定，不再增加。
-- GitHub 自动生成的 squash commit 会把账号邮箱写进作者字段；守卫只对
-  “单父提交 + GitHub noreply committer + `(#PR)` 标题”识别为合成提交。
-  真实 PR head 在 ref 仍存在时必须单独通过邮箱检查。
+- GitHub 账号已开启 email privacy，网页编辑与 squash merge 使用 noreply。
+  历史上由 GitHub 自动生成的两个 Gmail squash commit 以完整哈希精确豁免；
+  后续任何真实作者邮箱提交都必须失败。
 - 安全问题走 `SECURITY.md` 的私有通道，不在公开 Issue 中披露细节。
 - 发布物必须经过仓库卫生门禁，运行数据、依赖目录、缓存、密钥形态与本机路径
   不得进入索引。
