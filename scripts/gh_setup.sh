@@ -4,8 +4,7 @@
 #   bash scripts/gh_setup.sh
 #
 # 令牌**只**经过 stdin（`read -s`，不回显、不进 shell 历史、不写进本脚本），
-# 存到仓库**外**的用户主目录（默认 `~/.hunter1_gh_token`，权限 600）。
-# 本脚本与仓库里任何文件都不含令牌明文。
+# 最后交给 Git 凭据管理器保存。仓库与用户目录都不会留下明文令牌文件。
 #
 # 为什么不用「把令牌贴进对话」：那是一份会留在聊天记录里的拷贝，而 GitHub 会
 # 自动吊销出现在公开内容中的令牌 —— 既泄漏又必然失效。
@@ -25,10 +24,15 @@ if [[ -z "${PY:-}" ]]; then
   fi
 fi
 
-TOKEN_FILE="${HUNTER1_GH_TOKEN_FILE:-$HOME/.hunter1_gh_token}"
+if [[ -z "$(git config --get-all credential.helper 2>/dev/null)" ]]; then
+  echo "✗ 没有配置 Git credential helper，无法安全保存令牌。" >&2
+  echo "  Windows 请确认 Git Credential Manager 可用；其他平台请配置 credential.helper。" >&2
+  echo "  也可以不使用持久保存，直接设置 GITHUB_TOKEN 环境变量。" >&2
+  exit 2
+fi
 
-echo "令牌将存到：$TOKEN_FILE"
-echo "（这个位置在仓库之外，不会被 git 提交）"
+HELPER="$(git config --get-all credential.helper | tail -n 1)"
+echo "令牌将保存到 Git 凭据管理器：$HELPER"
 echo ""
 printf '请粘贴 GitHub 令牌后回车（输入不回显）：'
 IFS= read -rs TOKEN
@@ -62,9 +66,7 @@ echo "读到 ${#TOKEN} 个字符，正在向 GitHub 校验…"
 # 同因问题见 check.sh:50-58。有 cygpath 才转（Linux/CI 本就是宿主形式）。
 TMP_DIR="$(mktemp -d)"
 # `|| true`：EXIT trap 的最后一条命令失败会覆盖脚本退出码 —— 清理失败不该改变结论。
-# 也清 `$TOKEN_FILE.tmp`：落盘走「先写 .tmp 再 mv」，若在两步之间中断（Ctrl-C /
-# 崩溃），它会留在仓库外、含令牌明文 —— 只清 TMP_DIR 覆盖不到这个写在 $HOME 的半成品。
-trap 'command rm -rf "$TMP_DIR" 2>/dev/null || true; command rm -f "$TOKEN_FILE.tmp" 2>/dev/null || true' EXIT
+trap 'command rm -rf "$TMP_DIR" 2>/dev/null || true' EXIT
 TMP_AUTH="$TMP_DIR/auth"
 TMP_WHO="$TMP_DIR/who.json"
 
@@ -100,16 +102,17 @@ d=json.load(open(sys.argv[1],encoding='utf-8'))
 print(d.get('login') or '(未知)')
 " "$(native_path "$TMP_WHO")" 2>/dev/null || echo '(解析失败)')"
 
-# 落盘（600 权限）。先写临时文件再 mv，避免留下半截内容。
-umask 077
-printf '%s' "$TOKEN" > "$TOKEN_FILE.tmp"
-mv "$TOKEN_FILE.tmp" "$TOKEN_FILE"
+if ! printf 'protocol=https\nhost=github.com\nusername=%s\npassword=%s\n\n' \
+  "$LOGIN" "$TOKEN" | git credential approve; then
+  echo "✗ 写入 Git 凭据管理器失败。" >&2
+  exit 1
+fi
 
 echo "✓ 令牌有效，账号：$LOGIN"
-echo "✓ 已保存到 $TOKEN_FILE（权限 $(stat -c '%a' "$TOKEN_FILE" 2>/dev/null || echo '600')）"
+echo "✓ 已保存到 Git 凭据管理器"
 echo ""
 echo "接着可以跑："
 echo "  bash scripts/release.sh <owner/repo>"
 echo ""
-echo "令牌留着给后续发版复用；不再发版时再撤销它并删除："
-echo "  rm -f \"$TOKEN_FILE\""
+echo "令牌留着给后续发版复用；不再发版时先到 GitHub 撤销，再删除凭据："
+printf '%s\n' "  printf 'protocol=https\\nhost=github.com\\n\\n' | git credential reject"
