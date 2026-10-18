@@ -397,6 +397,10 @@ def _history_diff_text() -> str:
     _require_full_history()
     return _git(
         "log",
+        # PR test-merge refs are synthetic and use GitHub's account email author.
+        # They never enter permanent history; the real PR head and base still do.
+        "--exclude=refs/pull/*",
+        "--exclude=refs/remotes/pull/*",
         "--all",
         "--format=commit %H",
         "-p",
@@ -409,7 +413,13 @@ def _history_diff_text() -> str:
 
 def _commit_author_records() -> list[tuple[str, str]]:
     _require_full_history()
-    fields = _git("log", "--all", "--format=%H%x00%ae%x00").split("\0")
+    fields = _git(
+        "log",
+        "--exclude=refs/pull/*",
+        "--exclude=refs/remotes/pull/*",
+        "--all",
+        "--format=%H%x00%ae%x00",
+    ).split("\0")
     records = []
     for index in range(0, len(fields) - 1, 2):
         commit = fields[index].strip()
