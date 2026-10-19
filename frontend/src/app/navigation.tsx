@@ -11,6 +11,15 @@ export const NAV = [
 
 export type NavIconName = (typeof NAV)[number]["icon"];
 
+/** 模块色（RGB 分量）—— 手机端按滑动进度线性插值。 */
+export const MODULE_TINTS = [
+  [10, 132, 255],
+  [50, 214, 160],
+  [255, 159, 10],
+  [191, 90, 242],
+  [94, 156, 255],
+] as const;
+
 /** SF Symbols 风格的线性图标（1.75 描边、圆角端点），纯装饰，读屏忽略。 */
 export function NavIcon({
   name,

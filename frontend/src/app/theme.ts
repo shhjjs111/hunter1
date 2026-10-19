@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
 /**
@@ -12,6 +12,7 @@ import { flushSync } from "react-dom";
  * 脚本会被拦。改在 main.tsx 挂载前同步调用 `applyInitialTheme()`。
  */
 export type Theme = "dark" | "light";
+export type ThemePreference = Theme | "system";
 
 const STORAGE_KEY = "hunter1-theme";
 const listeners = new Set<() => void>();
@@ -23,31 +24,43 @@ function systemTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
-function storedTheme(): Theme | null {
+function storedPreference(): ThemePreference | null {
   try {
     const value = window.localStorage.getItem(STORAGE_KEY);
-    return value === "light" || value === "dark" ? value : null;
+    return value === "light" || value === "dark" || value === "system" ? value : null;
   } catch {
     return null;
   }
+}
+
+function resolvedTheme(preference: ThemePreference): Theme {
+  return preference === "system" ? systemTheme() : preference;
+}
+
+export function currentPreference(): ThemePreference {
+  return storedPreference() ?? "system";
 }
 
 export function currentTheme(): Theme {
   return document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
 
-function setTheme(theme: Theme) {
+function paint(theme: Theme) {
   document.documentElement.dataset.theme = theme;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, theme);
-  } catch {
-    // 隐私模式下 localStorage 可能不可写：本次会话内照样生效，只是不记住
-  }
   listeners.forEach((notify) => notify());
 }
 
+function persist(preference: ThemePreference) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, preference);
+  } catch {
+    // 隐私模式下 localStorage 可能不可写：本次会话内照样生效，只是不记住
+  }
+}
+
 export function applyInitialTheme() {
-  document.documentElement.dataset.theme = storedTheme() ?? systemTheme();
+  const preference = storedPreference() ?? "system";
+  document.documentElement.dataset.theme = resolvedTheme(preference);
 }
 
 function subscribe(notify: () => void) {
@@ -65,15 +78,35 @@ type ViewTransitionDocument = Document & {
  */
 export function useTheme() {
   const theme = useSyncExternalStore(subscribe, currentTheme, () => "dark" as Theme);
+  const preference = storedPreference() ?? "system";
 
-  const toggle = useCallback((origin?: { x: number; y: number }) => {
-    const next: Theme = currentTheme() === "dark" ? "light" : "dark";
+  useEffect(() => {
+    if (preference !== "system" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => paint(systemTheme());
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    }
+    media.addListener?.(onChange);
+    return () => media.removeListener?.(onChange);
+  }, [preference]);
+
+  const setPreference = useCallback((preference: ThemePreference, origin?: { x: number; y: number }) => {
+    const next = resolvedTheme(preference);
+    persist(preference);
     const doc = document as ViewTransitionDocument;
     const reduced =
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (currentTheme() === next) {
+      listeners.forEach((notify) => notify());
+      return;
+    }
     if (!doc.startViewTransition || reduced) {
-      setTheme(next);
+      paint(next);
       return;
     }
     const root = document.documentElement;
@@ -83,12 +116,17 @@ export function useTheme() {
     }
     root.dataset.vt = "theme";
     const transition = doc.startViewTransition(() => {
-      flushSync(() => setTheme(next));
+      flushSync(() => paint(next));
     });
     void transition.finished.finally(() => {
       delete root.dataset.vt;
     });
   }, []);
 
-  return { theme, toggle };
+  const toggle = useCallback((origin?: { x: number; y: number }) => {
+    const next: Theme = currentTheme() === "dark" ? "light" : "dark";
+    setPreference(next, origin);
+  }, [setPreference]);
+
+  return { theme, preference, toggle, setPreference };
 }

@@ -6,8 +6,10 @@ import envLight from "../assets/env-light.webp";
 
 import { useCrawlStatus } from "../features/crawl/api";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { MobileShell } from "./MobileShell";
 import { NAV, NavIcon, navIndex } from "./navigation";
 import { useTheme } from "./theme";
+import { useIsMobile } from "./useMediaQuery";
 
 /**
  * 应用外壳 —— 宽屏两栏（左侧导航 + 内容区），窄屏单栏（顶部横条导航）。
@@ -206,7 +208,7 @@ function ThemeToggle({ className = "" }: { className?: string }) {
   );
 }
 
-export function AppLayout() {
+function DesktopLayout() {
   // ErrorBoundary 的 key 绑当前路径：路由一变就重建，重置 error 状态。
   const location = useLocation();
   const windowRef = useSpatialTilt();
@@ -304,4 +306,10 @@ export function AppLayout() {
       </nav>
     </div>
   );
+}
+
+/** 断点切换只发生在装配层：手机外壳与桌面外壳各自是一棵独立的树。 */
+export function AppLayout() {
+  const mobile = useIsMobile();
+  return mobile ? <MobileShell /> : <DesktopLayout />;
 }

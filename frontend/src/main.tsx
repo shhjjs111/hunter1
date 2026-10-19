@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./app/App";
 import "./app/styles.css";
+import "./app/mobile.css";
 import { applyInitialTheme } from "./app/theme";
 
 // 挂载前同步设好主题，避免首帧先闪一下错误的配色
