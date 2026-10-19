@@ -76,6 +76,16 @@ describe("Toast", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
+  it("多行提示用圆角矩形而不是胶囊，文字不会贴到圆弧上", () => {
+    render(<Toast tone="error" message="请求失败：服务返回 401，请检查模型配置。" />);
+    const toast = screen.getByRole("alert");
+    expect(toast.className).toContain("rounded-3xl");
+    expect(toast.className).not.toContain("rounded-full");
+    expect(toast.className).toContain("px-5");
+    expect(toast.className).toContain("py-3");
+    expect(toast.querySelector("span")?.className).toContain("break-words");
+  });
+
   it("固定在 dock 上方，不随页面内容滚走", () => {
     render(<Toast tone="success" message="已记录投递。" />);
     const toast = screen.getByRole("status");

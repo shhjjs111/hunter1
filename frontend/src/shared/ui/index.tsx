@@ -150,11 +150,11 @@ export function Toast({
       role={isError ? "alert" : "status"}
       aria-live={isError ? "assertive" : "polite"}
       aria-atomic="true"
-      className={`glass fixed bottom-[84px] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-full px-4 py-3 text-sm shadow-[0_18px_50px_-18px_rgb(0_0_0/0.55)] md:bottom-[104px] ${
+      className={`glass fixed bottom-[84px] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-3xl px-5 py-3 text-sm shadow-[0_18px_50px_-18px_rgb(0_0_0/0.55)] md:bottom-[104px] ${
         isError ? "text-danger" : "text-success"
       }`}
     >
-      <span className="min-w-0 flex-1">{message}</span>
+      <span className="min-w-0 flex-1 break-words">{message}</span>
       {isError && onDismiss !== undefined && (
         <button
           type="button"
