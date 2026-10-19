@@ -72,6 +72,10 @@ enable_utf8_console()
 #: 构建的」—— 没有它，用一份旧 `dist/` 配当前源码生成清单不会报任何错，而用户的
 #: 更新判断会长期失准（看起来有新版，实际装回旧版）。
 VERSION_FILE_NAME = "VERSION"
+#: 分发时随包附带的使用说明与「手机访问」启动器。
+GUIDE_SOURCE = ROOT / "docs" / "使用说明.md"
+GUIDE_NAME = "使用说明.md"
+LAN_LAUNCHER_NAME = "hunter1-lan.cmd"
 # 前端产物打进去的目标目录随 PyInstaller 大版本变过：6.x 放进 `_internal/`，
 # 5.x 及更早是平铺。两种都认，免得在 5.x 上把「产物在」误报成「不在」。
 # （Wave 6 之前这里找的是 web/templates；SSR 层删除后换成前端构建产物。）
@@ -216,6 +220,33 @@ def _run_pyinstaller() -> None:
 
 def _dir_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def write_dist_extras(dist_dir: Path) -> None:
+    """把给最终用户看的东西放进产物目录（于是也会进 zip）。
+
+    非技术用户不会去 GitHub 读 README；解压后第一眼看到的就是这些文件。
+    启动器必须用 CRLF —— Windows 的 cmd.exe 对纯 LF 的批处理容错很差。
+    """
+    if not GUIDE_SOURCE.is_file():
+        raise SystemExit(f"缺少使用说明：{GUIDE_SOURCE}")
+    (dist_dir / GUIDE_NAME).write_text(
+        GUIDE_SOURCE.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+    )
+    (dist_dir / LAN_LAUNCHER_NAME).write_text(
+        "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        'cd /d "%~dp0"\r\n'
+        "echo Starting Hunter1 for phone access...\r\n"
+        "echo Keep this window open while using your phone.\r\n"
+        "echo.\r\n"
+        "hunter1.exe serve --lan\r\n"
+        "echo.\r\n"
+        "echo Hunter1 has stopped. Press any key to close.\r\n"
+        "pause >nul\r\n",
+        encoding="utf-8",
+        newline="\r\n",
+    )
 
 
 def find_frontend_dist(dist_dir: Path) -> Path | None:
@@ -753,6 +784,7 @@ def main(argv: list[str] | None = None) -> int:
     # 先落版本文件再校验：布局检查里的 version_problems 与冒烟里的 `--version`
     # 都要看它，而它是「产物↔源码版本」这条承诺的载体。
     write_version_file(dist_dir)
+    write_dist_extras(dist_dir)
 
     print("\n== 校验 ==")
     problems = verify(dist_dir)
