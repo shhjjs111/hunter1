@@ -64,3 +64,21 @@ export function useScoreJob() {
     },
   });
 }
+
+/** 读已存下的评分；未评过时后端 404 —— 调用方按「还没有结论」处理即可。 */
+export function useJobScore(jobId: string | null) {
+  return useQuery({
+    queryKey: ["scoring", "score", jobId],
+    queryFn: async () => {
+      const { data, error, response } = await api.GET("/api/scoring/{job_id}", {
+        params: { path: { job_id: jobId as string } },
+      });
+      if (error || !data) {
+        throw new Error(apiErrorMessage(error, "加载评分失败", response));
+      }
+      return data;
+    },
+    enabled: jobId !== null,
+    retry: false,
+  });
+}

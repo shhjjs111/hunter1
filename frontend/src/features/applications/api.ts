@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 
 import { api } from "../../shared/api/client";
 import { apiErrorMessage } from "../../shared/api/errors";
@@ -39,7 +45,35 @@ export const MAX_NOTE_CHARS = 2000;
 
 export const APPLICATIONS_PAGE_SIZE = 50;
 
-async function fetchApplications(page: number): Promise<ApplicationList> {
+type ApplicationCache = ApplicationList | InfiniteData<ApplicationList>;
+
+/** 同一个列表既可能被桌面端按页缓存，也可能被手机端按无限页缓存 —— 两处都要收敛。 */
+function updateApplicationCaches(
+  queryClient: ReturnType<typeof useQueryClient>,
+  applicationId: string,
+  update: (row: ApplicationSummary) => ApplicationSummary,
+) {
+  queryClient.setQueriesData<ApplicationCache>({ queryKey: ["applications"] }, (previous) => {
+    if (!previous) {
+      return previous;
+    }
+    if ("pages" in previous) {
+      return {
+        ...previous,
+        pages: previous.pages.map((page) => ({
+          ...page,
+          items: page.items.map((row) => (row.id === applicationId ? update(row) : row)),
+        })),
+      };
+    }
+    return {
+      ...previous,
+      items: previous.items.map((row) => (row.id === applicationId ? update(row) : row)),
+    };
+  });
+}
+
+export async function fetchApplications(page: number): Promise<ApplicationList> {
   const { data, error, response } = await api.GET("/api/applications", {
     params: { query: { page, page_size: APPLICATIONS_PAGE_SIZE } },
   });
@@ -49,6 +83,16 @@ async function fetchApplications(page: number): Promise<ApplicationList> {
   // 整份响应（含 `total` / `page` / `has_next`）交出去 —— 只留 `items` 会让分页
   // 元信息在全链路丢失，页面只能拿 `items.length` 冒充「共 N 条」。
   return data;
+}
+
+/** 手机端滚动加载：投递记录通常不多，但分页边界不能靠「第一页恰好够用」。 */
+export function useInfiniteApplications() {
+  return useInfiniteQuery({
+    queryKey: ["applications", "infinite"],
+    queryFn: ({ pageParam }) => fetchApplications(pageParam),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.has_next ? last.page + 1 : undefined),
+  });
 }
 
 export function useApplications(page = 1) {
@@ -91,18 +135,10 @@ export function useChangeStage() {
       // 查询数据里**旧**的 `stage`（invalidate 触发的 refetch 还是异步的）——
       // 下拉框先跳回旧值、再跳到新值，看起来像「系统把选择吞了又吐出来」。
       // 把权威值写进缓存后再撤草稿，两者落在同一批更新里，中间帧不存在。
-      queryClient.setQueriesData<ApplicationList>({ queryKey: ["applications"] }, (prev) =>
-        prev
-          ? {
-              ...prev,
-              items: prev.items.map((row) =>
-                row.id === input.applicationId
-                  ? { ...row, stage: data.stage }
-                  : row,
-              ),
-            }
-          : prev,
-      );
+      updateApplicationCaches(queryClient, input.applicationId, (row) => ({
+        ...row,
+        stage: data.stage,
+      }));
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
     },
   });
@@ -149,18 +185,10 @@ export function useSaveNote() {
       // `StageUpdateResponse` 只有 id + stage（后端不回 note），所以这是基于**提交值**
       // 的乐观写入。它与后端语义一致：空白备注被 `service.change_stage` 规范化为 NULL，
       // 因此空串在这里也写 null（否则「清空备注」会先把框显示成空、再被 refetch 拉回旧值）。
-      queryClient.setQueriesData<ApplicationList>({ queryKey: ["applications"] }, (prev) =>
-        prev
-          ? {
-              ...prev,
-              items: prev.items.map((row) =>
-                row.id === input.applicationId
-                  ? { ...row, note: input.note || null }
-                  : row,
-              ),
-            }
-          : prev,
-      );
+      updateApplicationCaches(queryClient, input.applicationId, (row) => ({
+        ...row,
+        note: input.note || null,
+      }));
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
     },
   });
