@@ -17,6 +17,15 @@
   -webkit-touch-callout: none;
 }
 
+/* 浅色主题下，直接压在照片或玻璃上的小字需要更高的对比度。
+   Sheet / Action Sheet / 抽屉走 portal，变量必须同时挂在 overlay 上。 */
+:root[data-theme="light"] .mobile-app,
+:root[data-theme="light"] .mobile-overlay {
+  --color-muted: rgb(60 60 67 / 0.78);
+  --color-muted-strong: rgb(40 40 48 / 0.9);
+  --color-subtle: rgb(60 60 67 / 0.62);
+}
+
 .mobile-env,
 .mobile-grain {
   position: absolute;
@@ -491,7 +500,7 @@
   box-shadow: 0 8px 22px -10px var(--color-accent);
 }
 .mobile-button:disabled {
-  opacity: 0.45;
+  opacity: 0.6;
   cursor: default;
 }
 .mobile-button.block {
@@ -722,7 +731,7 @@
 }
 .mobile-score.none {
   background: var(--color-fill);
-  color: var(--color-subtle);
+  color: var(--color-muted-strong);
   font-size: 11px;
   font-weight: 500;
 }
@@ -1140,7 +1149,9 @@
 }
 .mobile-settings-actions {
   position: sticky;
-  bottom: 0;
+  /* 页面底部有 112px 的 Dock 让位内边距；sticky 以内容盒为基准，
+     所以这里减去 32px，让操作栏实际停在 Dock 上方约 80px 处。 */
+  bottom: calc(env(safe-area-inset-bottom, 0px) - 32px);
   z-index: 3;
   display: flex;
   gap: 8px;
@@ -1351,6 +1362,7 @@
   color: var(--color-muted);
   font-size: 13px;
   line-height: 1.45;
+  white-space: pre-line;
   text-align: center;
 }
 .mobile-action-option {

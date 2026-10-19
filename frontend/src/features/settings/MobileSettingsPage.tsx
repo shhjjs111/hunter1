@@ -114,28 +114,6 @@ export function MobileSettingsPage() {
         </div>
       </div>
 
-      <div className="mobile-settings-actions">
-        <button
-          type="button"
-          className="mobile-button"
-          disabled={probe.isPending}
-          onClick={() => {
-            save.reset();
-            probe.mutate({ base_url: baseUrl, model, api_key: apiKey });
-          }}
-        >
-          {probe.isPending ? "测试中…" : "测试连接"}
-        </button>
-        <button type="button" className="mobile-button primary" disabled={save.isPending} onClick={submitSettings}>
-          {save.isPending ? "保存中…" : "保存"}
-        </button>
-      </div>
-      <div className="mt-2 min-h-[18px] px-1.5 text-[13px]">
-        {probe.data?.ok && <span className="mobile-success">● {probe.data.message}</span>}
-        {probe.data && !probe.data.ok && <span className="text-danger">{probe.data.message || "连接失败"}</span>}
-        {probe.isError && <span className="text-danger">{(probe.error as Error).message}</span>}
-      </div>
-
       <h2 className="mobile-group-title">候选人画像</h2>
       <div className="mobile-card mobile-settings-group mobile-no-swipe">
         {profile.isError && (
@@ -205,6 +183,28 @@ export function MobileSettingsPage() {
         <div className="mobile-setting-field">
           <ThemeSegmented value={preference} onChange={setPreference} />
         </div>
+      </div>
+
+      <div className="mobile-settings-actions">
+        <button
+          type="button"
+          className="mobile-button"
+          disabled={probe.isPending}
+          onClick={() => {
+            save.reset();
+            probe.mutate({ base_url: baseUrl, model, api_key: apiKey });
+          }}
+        >
+          {probe.isPending ? "测试中…" : "测试连接"}
+        </button>
+        <button type="button" className="mobile-button primary" disabled={save.isPending} onClick={submitSettings}>
+          {save.isPending ? "保存中…" : "保存"}
+        </button>
+      </div>
+      <div className="mt-2 min-h-[18px] px-1.5 text-[13px]">
+        {probe.data?.ok && <span className="mobile-success">● {probe.data.message}</span>}
+        {probe.data && !probe.data.ok && <span className="text-danger">{probe.data.message || "连接失败"}</span>}
+        {probe.isError && <span className="text-danger">{(probe.error as Error).message}</span>}
       </div>
 
       <p className="mobile-foot">

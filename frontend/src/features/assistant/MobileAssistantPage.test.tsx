@@ -160,4 +160,18 @@ describe("MobileAssistantPage", () => {
     fireEvent.focus(input);
     expect(chrome.setKeyboardOpen).toHaveBeenCalledWith(true);
   });
+
+  it("会话列表为空时给出开始新对话的提示", async () => {
+    state.chat = makeChat({
+      conversations: {
+        isLoading: false,
+        isError: false,
+        error: null,
+        data: { items: [], total: 0, page: 1, page_size: 50, has_next: false },
+      },
+    });
+    const chrome = makeChrome({ drawerOpen: true });
+    renderWithChrome(<MobileAssistantPage />, chrome);
+    expect(await screen.findByText(/还没有会话/)).toBeTruthy();
+  });
 });
