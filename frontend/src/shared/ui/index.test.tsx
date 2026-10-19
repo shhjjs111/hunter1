@@ -76,6 +76,18 @@ describe("Toast", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
+  it("live region 先空挂载，下一帧才填入文字", () => {
+    // 读屏器对「节点插入时已经带文字」的 live region 不保证播报；
+    // 空容器先挂进 DOM，下一帧再写入，播报才稳定。
+    vi.useFakeTimers();
+    render(<Toast tone="success" message="已记录投递。" />);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("");
+
+    act(() => vi.advanceTimersByTime(16));
+    expect(status.textContent).toBe("已记录投递。");
+  });
+
   it("多行提示用圆角矩形而不是胶囊，文字不会贴到圆弧上", () => {
     render(<Toast tone="error" message="请求失败：服务返回 401，请检查模型配置。" />);
     const toast = screen.getByRole("alert");

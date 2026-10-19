@@ -125,7 +125,8 @@ describe("JobsPage", () => {
 
       fireEvent.click(applyButton);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
+        // Toast 先挂空的 live region，下一帧才填文字（见 shared/ui 的 Toast）。
+        await vi.advanceTimersByTimeAsync(16);
       });
       expect(screen.getByRole("status").textContent).toContain("已记录投递。");
 
@@ -133,7 +134,7 @@ describe("JobsPage", () => {
 
       fireEvent.click(applyButton);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(16);
       });
 
       // 第一条的截止点已过 1.5 秒；第二条必须仍在。
@@ -176,6 +177,7 @@ describe("JobsPage", () => {
     expect(screen.getByText("缺大规模团队经验")).toBeTruthy();
     expect(screen.getByText("总体匹配")).toBeTruthy();
     expect(screen.getByText("匹配分 88")).toBeTruthy();
+    expect(await screen.findByText("已评分：88 分")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("已评分：88 分");
   });
 
