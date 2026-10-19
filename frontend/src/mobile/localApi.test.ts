@@ -24,6 +24,7 @@ import {
   installLocalApi,
   maybeAutoCrawl,
   resetLocalApiForTests,
+  safeErrorMessage,
   shouldAutoCrawl,
 } from "./localApi";
 
@@ -440,7 +441,19 @@ describe("抓取解析与本地抓取", () => {
     expect(httpFailureSummary(500, "<html><body>boom &nbsp; now</body></html>")).toBe(
       "HTTP 500：boom now",
     );
+    expect(
+      httpFailureSummary(
+        500,
+        '<script>alert(1)</script ><style>.x{}</style ><div>boom &nbsp; now</div>',
+      ),
+    ).toBe("HTTP 500：boom now");
     expect(httpFailureSummary(502, "")).toBe("HTTP 502：站点返回空响应");
+  });
+
+  it("回显错误只保留第一行并截断堆栈", () => {
+    expect(safeErrorMessage(new Error("第一行\n    at file.ts:1:2"))).toBe("第一行");
+    expect(safeErrorMessage("纯文本")).toBe("纯文本");
+    expect(safeErrorMessage(new Error(""))).toBe("操作失败，请重试");
   });
 
   it("已有 JD 的岗位不再重复抓详情", async () => {

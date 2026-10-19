@@ -230,14 +230,15 @@ export function httpFailureSummary(status: number, body: string): string {
   if (status === 403 || status === 429) {
     return `HTTP ${status}：站点拒绝访问（疑似风控），本轮跳过`;
   }
-  const text = body
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const text = plainText(body);
   return text ? `HTTP ${status}：${text.slice(0, 120)}` : `HTTP ${status}：站点返回空响应`;
+}
+
+/** 只用解析器取正文，避免手写正则漏掉 `</script >` 之类的变体。 */
+function plainText(body: string): string {
+  const doc = new DOMParser().parseFromString(body, "text/html");
+  doc.querySelectorAll("script, style").forEach((node) => node.remove());
+  return (doc.body?.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
 export interface SiteProgress {

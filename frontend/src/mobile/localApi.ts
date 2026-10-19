@@ -26,6 +26,9 @@ const CONVERSATIONS_PAGE_SIZE = 50;
 const JOBS_PAGE_SIZE = 20;
 
 function json(data: unknown, status = 200): Response {
+  // 本地 App 的用户就是数据所有者：错误详情只回显给本人。
+  // `safeErrorMessage` 已去掉堆栈与换行，这里显式抑制栈信息外泄的通用告警。
+  // lgtm[js/stack-trace-exposure]
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -34,6 +37,15 @@ function json(data: unknown, status = 200): Response {
 
 function failure(status: number, detail: string): Response {
   return json({ detail }, status);
+}
+
+/**
+ * 只把错误的第一行回显给界面：用户可以据此修正配置，但看不到堆栈与文件路径。
+ */
+export function safeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const firstLine = message.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return firstLine.slice(0, 300) || "操作失败，请重试";
 }
 
 function now(): string {
@@ -255,7 +267,7 @@ async function runCrawl(): Promise<void> {
       }
     }
   } catch (error) {
-    crawlState.error = error instanceof Error ? error.message : String(error);
+    crawlState.error = safeErrorMessage(error);
   } finally {
     crawlState.totalFetched = crawlState.sites.reduce((sum, item) => sum + item.fetched, 0);
     crawlState.totalCreated = crawlState.sites.reduce((sum, item) => sum + item.created, 0);
@@ -444,7 +456,7 @@ async function handleAssistantStream(request: Request): Promise<Response> {
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" },
     });
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = safeErrorMessage(error);
     return new Response(sse({ type: "error", message: detail }), {
       status: 200,
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" },
@@ -467,7 +479,7 @@ async function route(request: Request, url: URL): Promise<Response | null> {
         api_key: string;
       }));
     } catch (error) {
-      return failure(422, error instanceof Error ? error.message : String(error));
+      return failure(422, safeErrorMessage(error));
     }
   }
   if (path === "/api/settings/test" && method === "POST") {
@@ -600,7 +612,7 @@ async function route(request: Request, url: URL): Promise<Response | null> {
         summary?: string;
       }));
     } catch (error) {
-      return failure(422, error instanceof Error ? error.message : String(error));
+      return failure(422, safeErrorMessage(error));
     }
   }
   const scoreMatch = /^\/api\/scoring\/([^/]+)$/.exec(path);
@@ -639,7 +651,7 @@ async function route(request: Request, url: URL): Promise<Response | null> {
       await db.put("jobs", updated);
       return json(scoreView(updated));
     } catch (error) {
-      return failure(422, error instanceof Error ? error.message : String(error));
+      return failure(422, safeErrorMessage(error));
     }
   }
 

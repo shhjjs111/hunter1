@@ -210,6 +210,8 @@ def _serve(args: argparse.Namespace) -> int:
     # `--lan` 只是「绑 0.0.0.0」的糖：真正决定要不要访问码的是绑定地址。
     # 只要不是回环，就必须有访问码 —— 否则同一 Wi-Fi 下任何人都能读到这台电脑
     # 上的岗位、投递记录，甚至借已保存的 Key 发请求。
+    # 绑定所有网卡是 --lan 的明确语义；局域网门禁由访问码 + Host 白名单负责。
+    # lgtm[py/bind-socket-all-network-interfaces]
     host = "0.0.0.0" if args.lan and args.host == "127.0.0.1" else args.host
     exposed = host not in {"127.0.0.1", "localhost", "::1"}
     lan_ip = detect_lan_ip() if exposed else None
