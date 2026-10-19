@@ -203,6 +203,9 @@ export function MobileAssistantPage() {
                   <small>{formatDay(conversation.updated_at)}</small>
                 </button>
               ))}
+              {conversations.data && conversations.data.items.length === 0 && (
+                <p className="px-2 text-sm text-muted">还没有会话。点右上角 + 开始新的对话。</p>
+              )}
               {conversations.data && (conversations.data.has_next || chat.page > 1) && (
                 <div className="mt-3 flex items-center justify-between gap-2 px-2">
                   <button
