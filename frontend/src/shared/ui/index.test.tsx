@@ -76,12 +76,36 @@ describe("Toast", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
+  it("live region 先空挂载，下一帧才填入文字", () => {
+    // 读屏器对「节点插入时已经带文字」的 live region 不保证播报；
+    // 空容器先挂进 DOM，下一帧再写入，播报才稳定。
+    vi.useFakeTimers();
+    render(<Toast tone="success" message="已记录投递。" />);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("");
+
+    act(() => vi.advanceTimersByTime(16));
+    expect(status.textContent).toBe("已记录投递。");
+  });
+
+  it("多行提示用圆角矩形而不是胶囊，文字不会贴到圆弧上", () => {
+    render(<Toast tone="error" message="请求失败：服务返回 401，请检查模型配置。" />);
+    const toast = screen.getByRole("alert");
+    expect(toast.className).toContain("rounded-3xl");
+    expect(toast.className).not.toContain("rounded-full");
+    expect(toast.className).toContain("px-5");
+    expect(toast.className).toContain("py-3");
+    expect(toast.querySelector("span")?.className).toContain("break-words");
+  });
+
   it("固定在 dock 上方，不随页面内容滚走", () => {
     render(<Toast tone="success" message="已记录投递。" />);
     const toast = screen.getByRole("status");
     expect(toast.parentElement).toBe(document.body);
     expect(toast.className).toContain("fixed");
-    expect(toast.className).toContain("bottom-[84px]");
+    // 手机端 dock 顶边在 844px 视口的 764px 附近；Toast 底边再留 16px，
+    // 100px 的偏移让两者之间保持约 20px，而不是原来的 4px。
+    expect(toast.className).toContain("bottom-[100px]");
     expect(toast.className).toContain("md:bottom-[104px]");
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -127,6 +127,20 @@ export function SuccessNotice({ message }: { message: string }) {
  * 成功提示 4 秒后自动收起；错误必须由用户确认，否则失败原因会在用户还没读完时
  * 消失。`onDismiss` 由调用方提供，避免组件自己持有与 mutation 状态脱节的可见性。
  */
+function ToastMessage({ message }: { message: string }) {
+  const [text, setText] = useState("");
+
+  useEffect(() => {
+    // 读屏器对「刚插进 DOM 就带内容」的 live region 不保证播报（Safari +
+    // VoiceOver 尤其如此）。空节点先完成挂载，下一帧再填文字。
+    // `key={message}` 让文案变化时重新挂载，重新走一次空 → 有内容的播报。
+    const frame = window.requestAnimationFrame(() => setText(message));
+    return () => window.cancelAnimationFrame(frame);
+  }, [message]);
+
+  return <span className="min-w-0 flex-1 break-words">{text}</span>;
+}
+
 export function Toast({
   tone,
   message,
@@ -150,11 +164,11 @@ export function Toast({
       role={isError ? "alert" : "status"}
       aria-live={isError ? "assertive" : "polite"}
       aria-atomic="true"
-      className={`glass fixed bottom-[84px] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-full px-4 py-3 text-sm shadow-[0_18px_50px_-18px_rgb(0_0_0/0.55)] md:bottom-[104px] ${
+      className={`glass fixed bottom-[100px] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-start gap-3 rounded-3xl px-5 py-3 text-sm shadow-[0_18px_50px_-18px_rgb(0_0_0/0.55)] md:bottom-[104px] ${
         isError ? "text-danger" : "text-success"
       }`}
     >
-      <span className="min-w-0 flex-1">{message}</span>
+      <ToastMessage key={message} message={message} />
       {isError && onDismiss !== undefined && (
         <button
           type="button"

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { JobsPage } from "./JobsPage";
@@ -102,6 +102,53 @@ describe("JobsPage", () => {
     expect((postCalls[0][0] as Request).url).toContain("/api/applications");
   });
 
+  it("连续两次相同提示：第二条重新计时，不会沿用第一条的截止时间", async () => {
+    // 第一条在 t=0 出现、4 秒后收起；第二条在 t=2.5s 出现。没有 per-toast key 时
+    // Toast 的 effect 依赖里文案没变，第二条既不会重新计时也不会重新播报 ——
+    // 它会在第一条的 4 秒截止点（t=4s）跟着消失。
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const request = input as Request;
+        if (request.method === "POST") {
+          return jsonResponse({ application_id: "a1" }, 201);
+        }
+        return jsonResponse(LIST_PAYLOAD);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      renderPage();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const applyButton = screen.getByRole("button", { name: "记录投递" });
+
+      fireEvent.click(applyButton);
+      await act(async () => {
+        // Toast 先挂空的 live region，下一帧才填文字（见 shared/ui 的 Toast）。
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(screen.getByRole("status").textContent).toContain("已记录投递。");
+
+      act(() => vi.advanceTimersByTime(2500));
+
+      fireEvent.click(applyButton);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+
+      // 第一条的截止点已过 1.5 秒；第二条必须仍在。
+      act(() => vi.advanceTimersByTime(3000));
+      expect(screen.getByRole("status").textContent).toContain("已记录投递。");
+
+      // 第二条自己的 4 秒到了，才允许消失。
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("评分成功后把模型的结论摆出来，而不是只说一句「已评分」", async () => {
     // 模型算出来的三段文字（摘要 / 优势 / 差距）必须真的出现在界面上 ——
     // 否则后端落库了、界面却不读，等于「换个地方躺着」，用户仍看不到为什么是这个分。
@@ -130,6 +177,7 @@ describe("JobsPage", () => {
     expect(screen.getByText("缺大规模团队经验")).toBeTruthy();
     expect(screen.getByText("总体匹配")).toBeTruthy();
     expect(screen.getByText("匹配分 88")).toBeTruthy();
+    expect(await screen.findByText("已评分：88 分")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("已评分：88 分");
   });
 

@@ -11,7 +11,9 @@ import { SearchBar } from "./components/SearchBar";
 export function JobsPage() {
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
+  const toastSeq = useRef(0);
   const [toast, setToast] = useState<{
+    id: number;
     tone: "success" | "error";
     message: string;
   } | null>(null);
@@ -19,6 +21,10 @@ export function JobsPage() {
   const jobs = useJobs(keyword, page);
   const apply = useApplyToJob();
   const score = useScoreJob();
+  const showToast = useCallback((tone: "success" | "error", message: string) => {
+    toastSeq.current += 1;
+    setToast({ id: toastSeq.current, tone, message });
+  }, []);
   const dismissToast = useCallback(() => setToast(null), []);
 
   useEffect(() => {
@@ -85,15 +91,14 @@ export function JobsPage() {
           scoringId={score.isPending ? score.variables : undefined}
           onApply={(jobId) =>
             apply.mutate(jobId, {
-              onSuccess: () => setToast({ tone: "success", message: "已记录投递。" }),
-              onError: (error) => setToast({ tone: "error", message: error.message }),
+              onSuccess: () => showToast("success", "已记录投递。"),
+              onError: (error) => showToast("error", error.message),
             })
           }
           onScore={(jobId) =>
             score.mutate(jobId, {
-              onSuccess: (data) =>
-                setToast({ tone: "success", message: `已评分：${data.score} 分` }),
-              onError: (error) => setToast({ tone: "error", message: error.message }),
+              onSuccess: (data) => showToast("success", `已评分：${data.score} 分`),
+              onError: (error) => showToast("error", error.message),
             })
           }
         />
@@ -125,7 +130,12 @@ export function JobsPage() {
       )}
 
       {toast !== null && (
-        <Toast tone={toast.tone} message={toast.message} onDismiss={dismissToast} />
+        <Toast
+          key={toast.id}
+          tone={toast.tone}
+          message={toast.message}
+          onDismiss={dismissToast}
+        />
       )}
     </div>
   );
