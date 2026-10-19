@@ -84,3 +84,34 @@ class TestStaticFileWithin:
     def test_directory_is_not_a_file(self, tmp_path: Path) -> None:
         (tmp_path / "sub").mkdir()
         assert main_module._static_file_within(tmp_path, "sub") is None
+
+
+class TestAccessGateWiring:
+    """访问码必须真的挂在组装根上，而不是只在平台单测里成立。"""
+
+    def test_remote_requests_are_gated_and_login_unlocks(self, tmp_path: Path) -> None:
+        from fastapi.testclient import TestClient
+
+        from hunter1.main import create_app
+
+        class _Fetcher:
+            def get_text(self, *_args: object, **_kwargs: object) -> str:
+                raise AssertionError("测试不应发起抓取")
+
+        context = main_module.AppContext.default(
+            db_path=tmp_path / "h.db",
+            fetcher=_Fetcher(),  # type: ignore[arg-type]
+            access_token="test-code",
+        )
+        app = create_app(context)
+        try:
+            with TestClient(app, client=("192.168.1.20", 5000)) as client:
+                denied = client.get("/api/jobs")
+                assert denied.status_code == 401
+                assert denied.headers["x-frame-options"] == "DENY"
+
+                login = client.post("/__access", data={"code": "test-code"}, follow_redirects=False)
+                assert login.status_code == 303
+                assert client.get("/api/jobs").status_code == 200
+        finally:
+            context.db.dispose()
