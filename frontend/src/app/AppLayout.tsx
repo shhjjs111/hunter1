@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type CSSProperties } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
+import appIcon from "../assets/app-icon.png";
 import envDark from "../assets/env-dark.webp";
 import envLight from "../assets/env-light.webp";
 
@@ -245,9 +246,7 @@ function DesktopLayout() {
       <header className="mx-auto flex max-w-[1040px] items-center justify-between px-3 pt-4 md:px-6 md:pt-6">
         {/* 品牌名用 `<div>` 而不是 `<h1>`：每个页面自己还有一个 `<h1>`（PageHeader）。 */}
         <div className="glass flex items-center gap-2.5 rounded-full py-1.5 pr-4 pl-1.5">
-          <span className="grid size-8 place-items-center rounded-full bg-accent text-sm font-semibold text-on-accent">
-            H
-          </span>
+          <img className="size-8 rounded-full object-cover" src={appIcon} alt="" />
           <div className="leading-tight">
             <div className="text-[14px] font-semibold">Hunter1</div>
             <p className="text-[11px] text-muted">求职工作台</p>

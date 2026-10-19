@@ -17,7 +17,9 @@ export function MobileCrawlPage() {
   const subtitle = status.isError
     ? "读取失败"
     : snapshot
-      ? `本轮共抓到 ${fetched} 条${failed > 0 ? ` · ${failed} 个站点失败` : ""}`
+      ? sites.length === 0 && !running
+        ? "本次启动后还没有抓取"
+        : `本轮共抓到 ${fetched} 条${failed > 0 ? ` · ${failed} 个站点失败` : ""}`
       : "正在读取状态…";
 
   return (
@@ -79,7 +81,8 @@ export function MobileCrawlPage() {
         )}
         {!status.isLoading && snapshot && sites.length === 0 && (
           <div className="mobile-empty">
-            还没有跑过抓取。点上方「开始抓取」跑一轮；站点来自后端注册表。
+            本次启动后还没有抓取。打开 App 时会按 24 小时窗口自动补抓，也可以点上方
+            「开始抓取」。
           </div>
         )}
         {sites.map((site) => (
@@ -88,6 +91,7 @@ export function MobileCrawlPage() {
       </div>
 
       <p className="mobile-foot">
+        打开 App 时每天自动补抓一轮；已有 JD 的岗位不会重复抓详情。<br />
         只抓公开列表页，不做登录、不绕验证码。<br />
         站点返回风控页时会显式报错，不会伪装成「今天没岗位」。
       </p>
