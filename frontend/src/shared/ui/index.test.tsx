@@ -91,7 +91,9 @@ describe("Toast", () => {
     const toast = screen.getByRole("status");
     expect(toast.parentElement).toBe(document.body);
     expect(toast.className).toContain("fixed");
-    expect(toast.className).toContain("bottom-[84px]");
+    // 手机端 dock 顶边在 844px 视口的 764px 附近；Toast 底边再留 16px，
+    // 100px 的偏移让两者之间保持约 20px，而不是原来的 4px。
+    expect(toast.className).toContain("bottom-[100px]");
     expect(toast.className).toContain("md:bottom-[104px]");
   });
 });
