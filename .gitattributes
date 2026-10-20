@@ -16,3 +16,5 @@
 *.ico binary
 *.zip binary
 *.exe binary
+*.webp binary
+*.jar binary

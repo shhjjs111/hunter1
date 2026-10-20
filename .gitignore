@@ -23,6 +23,25 @@ build/
 .data/
 *.log
 
+# 本地环境变量与签名材料 —— 一旦被 `git add -A` 卷入，密钥会永久留在历史里。
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.idsig
+*.apk
+*.aab
+*.aar
+keystore.properties
+signing.properties
+keystore-password.txt
+secrets.properties
+local.properties
+google-services.json
+
 # 协作框架的本地工作区：会话库（meridian.db + WAL，数 MB）、备份、临时探针。
 # 这不是项目源码，且体积可观 —— 一旦 `git add -A` 提交进去，即使随后删除，
 # 历史里仍然留着，无法干净撤销。所以整目录忽略。

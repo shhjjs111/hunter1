@@ -41,9 +41,9 @@ ROOT = Path(__file__).resolve().parents[2]
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
 #: 禁止进入仓库的**目录名**（路径段精确匹配，不是子串 —— 否则 `scripts/build.py`
-#: 会被 `build` 误伤）。覆盖四类：依赖、缓存、构建产物、工具链本地工作区。
-#: `.rivet` / `.workbuddy` / `.tools` 是本机工具链的私有区，`dist` / `build` 是
-#: 构建产物（可重建，且体积大）。
+#: 会被 `build` 误伤）。覆盖依赖、缓存、构建产物、运行态数据与工具链本地工作区。
+#: `.rivet` / `.workbuddy` / `.tools` / `.impeccable` 是本机工具的私有区；
+#: `.data` 是运行态数据库；`dist` / `build` / `.gradle` 是可重建产物。
 FORBIDDEN_SEGMENTS = frozenset(
     {
         "node_modules",
@@ -56,14 +56,35 @@ FORBIDDEN_SEGMENTS = frozenset(
         "venv",
         "dist",
         "build",
+        ".gradle",
+        ".cxx",
+        ".externalNativeBuild",
+        "capacitor-cordova-android-plugins",
         ".tools",
         ".rivet",
         ".workbuddy",
+        ".impeccable",
+        ".data",
         "coverage",
         "htmlcov",
         ".idea",
         ".vscode",
         ".DS_Store",
+    }
+)
+
+#: 绝不入库的**文件名**。`.env.example` 是唯一豁免：它是可公开的配置模板，
+#: 其余 `.env*` 都可能承载真实凭据。Android 的 `local.properties`、签名属性
+#: 与密码文件同理。
+FORBIDDEN_FILENAMES = frozenset(
+    {
+        ".env",
+        "keystore.properties",
+        "signing.properties",
+        "secrets.properties",
+        "keystore-password.txt",
+        "local.properties",
+        "google-services.json",
     }
 )
 
@@ -82,6 +103,15 @@ FORBIDDEN_SUFFIXES = (
     ".tar.gz",
     ".tgz",
     ".whl",
+    ".apk",
+    ".aab",
+    ".aar",
+    ".idsig",
+    ".jks",
+    ".keystore",
+    ".p12",
+    ".pfx",
+    ".mobileprovision",
     ".db",
     ".sqlite",
     ".sqlite3",
@@ -268,6 +298,16 @@ def judge_forbidden_paths(files: list[str]) -> list[str]:
             hit.append(segments[-1])
         if hit:
             bad.append(f"{rel}  ← 命中禁止目录段 {hit}")
+    return sorted(bad)
+
+
+def judge_forbidden_filenames(files: list[str]) -> list[str]:
+    """文件名属于「本地凭据 / 签名配置」类的文件（`.env.example` 除外）。"""
+    bad = []
+    for rel in files:
+        name = rel.rsplit("/", 1)[-1]
+        if name in FORBIDDEN_FILENAMES or (name.startswith(".env.") and name != ".env.example"):
+            bad.append(f"{rel}  ← 禁止的文件名 {name}")
     return sorted(bad)
 
 
@@ -471,6 +511,7 @@ def _commit_email_records() -> list[CommitEmailRecord]:
 JUDGES = {
     "被忽略却仍被跟踪": judge_ignored_but_tracked,
     "禁止目录段": judge_forbidden_paths,
+    "禁止文件名": judge_forbidden_filenames,
     "禁止扩展名": judge_forbidden_suffixes,
     "高置信度密钥": judge_secrets,
     "本机家目录路径": judge_home_paths,
@@ -490,6 +531,9 @@ class TestRepositoryIsClean:
 
     def test_no_forbidden_path_segments(self) -> None:
         assert judge_forbidden_paths(_tracked_files()) == []
+
+    def test_no_forbidden_filenames(self) -> None:
+        assert judge_forbidden_filenames(_tracked_files()) == []
 
     def test_no_forbidden_suffixes(self) -> None:
         assert judge_forbidden_suffixes(_tracked_files()) == []
@@ -516,6 +560,7 @@ class TestRepositoryIsClean:
         covered = {
             "被忽略却仍被跟踪",
             "禁止目录段",
+            "禁止文件名",
             "禁止扩展名",
             "高置信度密钥",
             "本机家目录路径",
@@ -612,9 +657,36 @@ class TestJudgesActuallyFire:
         assert judge_forbidden_paths(["node_modules/react/index.js"])
         assert judge_forbidden_paths(["frontend/dist/assets/index.js"])
         assert judge_forbidden_paths([".rivet/sessions/x.json"])
+        assert judge_forbidden_paths([".impeccable/questions/x.json"])
+        assert judge_forbidden_paths([".data/hunter1.db"])
+        assert judge_forbidden_paths(["frontend/android/.gradle/8.14.3/gc.properties"])
+        assert judge_forbidden_paths(
+            ["frontend/android/capacitor-cordova-android-plugins/src/main/x.java"]
+        )
         assert judge_forbidden_suffixes(["dist/hunter1-win32.zip"])
+        assert judge_forbidden_suffixes(["dist/hunter1-android-0.4.1.apk"])
+        assert judge_forbidden_suffixes(["frontend/android/app/release/app-release.aab"])
+        assert judge_forbidden_suffixes([".tools/android/hunter1-release.jks"])
+        assert judge_forbidden_suffixes(["android/signing.p12"])
         assert judge_forbidden_suffixes(["data/hunter1.db"])
         assert judge_forbidden_suffixes(["backend/src/hunter1/cli.pyc"])
+
+    def test_filename_judge_fires_on_local_credentials(self) -> None:
+        for rel in (
+            ".env",
+            "backend/.env.production",
+            "android/keystore.properties",
+            "android/signing.properties",
+            "android/secrets.properties",
+            "android/keystore-password.txt",
+            "frontend/android/local.properties",
+            "frontend/android/app/google-services.json",
+        ):
+            assert judge_forbidden_filenames([rel]), f"本地凭据文件未被检出：{rel}"
+
+    def test_filename_judge_ignores_public_template(self) -> None:
+        assert judge_forbidden_filenames([".env.example"]) == []
+        assert judge_forbidden_filenames(["docs/environment.md"]) == []
 
     def test_path_judges_ignore_legitimate_repo_files(self) -> None:
         """正常工程文件不该被路径判据误伤。"""
@@ -624,6 +696,7 @@ class TestJudgesActuallyFire:
             "frontend/package-lock.json",  # 锁文件，应当入库
             "contracts/openapi.json",  # 契约快照，应当入库
             "backend/hunter1.spec",
+            "frontend/android/gradle/wrapper/gradle-wrapper.jar",
             "docs/ARCHITECTURE.md",
         ):
             assert judge_forbidden_paths([rel]) == [], f"路径误报：{rel}"
