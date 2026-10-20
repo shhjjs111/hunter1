@@ -104,7 +104,7 @@ def client(tmp_path: Path) -> Iterator[tuple[TestClient, Database]]:
 
 
 class TestSliceApisAreMounted:
-    """五个切片的路由都要在组装后可达 —— 缺一个就是「接了一半」。"""
+    """七个切片的路由都要在组装后可达 —— 缺一个就是「接了一半」。"""
 
     def test_jobs_list(self, client) -> None:  # type: ignore[no-untyped-def]
         test_client, _db = client
@@ -159,6 +159,19 @@ class TestSliceApisAreMounted:
         payload = test_client.get("/api/assistant/conversations").json()
         assert payload["items"] == []
         assert payload["total"] == 0 and payload["has_next"] is False
+
+    def test_settings_read(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        response = test_client.get("/api/settings")
+        assert response.status_code == 200
+
+    def test_sync_snapshot(self, client) -> None:  # type: ignore[no-untyped-def]
+        test_client, _db = client
+        response = test_client.get("/api/sync/snapshot")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["version"] == 1
+        assert [job["id"] for job in payload["jobs"]] == [JOB_ID]
 
     def test_security_headers_are_present(self, client) -> None:  # type: ignore[no-untyped-def]
         test_client, _db = client
