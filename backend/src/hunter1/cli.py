@@ -170,12 +170,11 @@ def _port_problem(host: str, port: int) -> str | None:
     import errno
     import socket
 
-    # 预检只需验证端口在回环上可绑；--lan 的真实监听由 uvicorn 执行。
-    # 直接用 0.0.0.0 预检会被安全扫描视为“监听所有网卡”，且不增加检测价值。
-    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    # 预检固定绑定回环：--lan 的真实监听由 uvicorn 执行，预检只用于在启动前
+    # 发现常见的端口占用；不直接绑定 0.0.0.0，避免把预检误当成对外监听。
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
-            probe.bind((probe_host, port))
+            probe.bind(("127.0.0.1", port))
         except PermissionError:
             return f"端口 {port} 无权绑定（1024 以下是特权端口，需要管理员/root 权限）。"
         except OSError as exc:
