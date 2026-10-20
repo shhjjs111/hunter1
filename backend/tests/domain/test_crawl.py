@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from hunter1.domain.crawl import RawJob, job_identity, normalize_detail_url
+from hunter1.domain.crawl import RawJob, company_identity, job_identity, normalize_detail_url
 
 
 class TestRawJob:
@@ -110,3 +110,9 @@ class TestJobIdentity:
         identity = job_identity(detail_url="https://a.com/1")
         assert len(identity) == 64  # sha256 hex
         assert all(c in "0123456789abcdef" for c in identity)
+
+    def test_company_identity_matches_the_documented_basis(self) -> None:
+        """公司身份与抓取写入的 `jobs.company_id` 同源（32 位 sha256 前缀）。"""
+        expected = job_identity(detail_url="", company="字节跳动", title="__company__")[:32]
+        assert company_identity("字节跳动") == expected
+        assert len(company_identity("字节跳动")) == 32
