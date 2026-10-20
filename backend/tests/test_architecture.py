@@ -68,6 +68,9 @@ SLICE_DEPENDENCY_ALLOW: dict[str, tuple[str, ...]] = {
     "assistant": ("jobs",),
     "crawl": ("jobs",),
     "scoring": ("jobs",),
+    # 同步切片是跨切片的协调者：它只经三者的公开门面导出/合并数据，
+    # 不深链内部模块。方向仍然单向（sync → 业务切片），不会形成环。
+    "sync": ("applications", "jobs", "scoring"),
 }
 
 

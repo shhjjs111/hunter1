@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import ValidationError
 
@@ -20,6 +20,10 @@ from hunter1.slices.scoring.models import CandidateProfile
 # 画像存在通用键值配置区（与 LLM 配置同表）：它是**用户配置**，不是岗位数据，
 # 落在这里才能被界面改写后立刻生效，而不必改装配代码重启。
 PROFILE_KEY = "candidate_profile"
+
+#: 画像最后一次写入时间（同步冲突判定用）。与画像本体分开存，避免给
+#: `CandidateProfile` 加一个不属于领域语义的字段。
+PROFILE_UPDATED_AT_KEY = "candidate_profile_updated_at"
 
 #: match_score 的取值域，与 `Job.match_score` 的约束一致。
 SCORE_MIN = 0
@@ -118,7 +122,29 @@ class ScoreStore:
             raise ValueError(f"已保存的候选人画像不合法：{exc}") from exc
 
     def save_profile(self, profile: CandidateProfile) -> None:
+        self.save_profile_at(profile, datetime.now(UTC))
+
+    def save_profile_at(self, profile: CandidateProfile, updated_at: datetime) -> None:
+        """写入画像与它的更新时间（同步导入用，保留来源设备的时间）。"""
         self._db.settings().set_raw(PROFILE_KEY, profile.model_dump())
+        self._db.settings().set_raw(
+            PROFILE_UPDATED_AT_KEY,
+            {"at": updated_at.astimezone(UTC).isoformat()},
+        )
+
+    def load_profile_updated_at(self) -> datetime | None:
+        """读画像更新时间；没写过或格式不可信时返回 None（同步按「更旧」处理）。"""
+        raw = self._db.settings().get_raw(PROFILE_UPDATED_AT_KEY)
+        if raw is None:
+            return None
+        value = raw.get("at")
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed.astimezone(UTC) if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
-__all__ = ["PROFILE_KEY", "ScoreStore"]
+__all__ = ["PROFILE_KEY", "PROFILE_UPDATED_AT_KEY", "ScoreStore"]

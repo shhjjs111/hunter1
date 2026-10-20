@@ -889,6 +889,401 @@
         "title": "StreamRequest",
         "type": "object"
       },
+      "SyncApplication": {
+        "additionalProperties": false,
+        "description": "一条投递记录（按 `job_detail_url` 跨设备对齐）。",
+        "properties": {
+          "applied_at": {
+            "format": "date-time",
+            "title": "Applied At",
+            "type": "string"
+          },
+          "company": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Company",
+            "type": "string"
+          },
+          "job_detail_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Detail Url"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ApplicationStage",
+            "default": "applied"
+          },
+          "title": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "company",
+          "applied_at",
+          "updated_at"
+        ],
+        "title": "SyncApplication",
+        "type": "object"
+      },
+      "SyncCounts": {
+        "additionalProperties": false,
+        "description": "一次合并的计数（两端各自统计自己的库发生了什么）。",
+        "properties": {
+          "applications_created": {
+            "default": 0,
+            "title": "Applications Created",
+            "type": "integer"
+          },
+          "applications_kept": {
+            "default": 0,
+            "title": "Applications Kept",
+            "type": "integer"
+          },
+          "applications_skipped": {
+            "default": 0,
+            "title": "Applications Skipped",
+            "type": "integer"
+          },
+          "applications_updated": {
+            "default": 0,
+            "title": "Applications Updated",
+            "type": "integer"
+          },
+          "jobs_created": {
+            "default": 0,
+            "title": "Jobs Created",
+            "type": "integer"
+          },
+          "jobs_kept": {
+            "default": 0,
+            "title": "Jobs Kept",
+            "type": "integer"
+          },
+          "jobs_updated": {
+            "default": 0,
+            "title": "Jobs Updated",
+            "type": "integer"
+          },
+          "profile_updated": {
+            "default": false,
+            "title": "Profile Updated",
+            "type": "boolean"
+          }
+        },
+        "title": "SyncCounts",
+        "type": "object"
+      },
+      "SyncJob": {
+        "additionalProperties": false,
+        "description": "一台设备上的岗位事实 + 评分结论。",
+        "properties": {
+          "capture_status": {
+            "$ref": "#/components/schemas/CaptureStatus",
+            "default": "unknown"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "company": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Company",
+            "type": "string"
+          },
+          "detail_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Detail Url",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "jd_raw": {
+            "anyOf": [
+              {
+                "maxLength": 200000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jd Raw"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "match_score": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match Score"
+          },
+          "score_advantages": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Advantages"
+          },
+          "score_gaps": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Gaps"
+          },
+          "score_model": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Model"
+          },
+          "score_prompt_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Prompt Version"
+          },
+          "score_summary": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Summary"
+          },
+          "scored_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scored At"
+          },
+          "source": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "company",
+          "detail_url"
+        ],
+        "title": "SyncJob",
+        "type": "object"
+      },
+      "SyncMergeResponse": {
+        "additionalProperties": false,
+        "description": "合并结果 + 合并后的规范快照（调用方无需再拉一次）。",
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/SyncCounts"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/SyncSnapshot"
+          }
+        },
+        "required": [
+          "counts",
+          "snapshot"
+        ],
+        "title": "SyncMergeResponse",
+        "type": "object"
+      },
+      "SyncProfile": {
+        "additionalProperties": false,
+        "description": "候选人画像及其最后修改时间。",
+        "properties": {
+          "directions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Directions",
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Keywords",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Summary",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "updated_at"
+        ],
+        "title": "SyncProfile",
+        "type": "object"
+      },
+      "SyncSnapshot": {
+        "additionalProperties": false,
+        "description": "一台设备的完整可同步数据。",
+        "properties": {
+          "applications": {
+            "items": {
+              "$ref": "#/components/schemas/SyncApplication"
+            },
+            "title": "Applications",
+            "type": "array"
+          },
+          "exported_at": {
+            "format": "date-time",
+            "title": "Exported At",
+            "type": "string"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/SyncJob"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exported_at"
+        ],
+        "title": "SyncSnapshot",
+        "type": "object"
+      },
       "TurnResponse": {
         "description": "一次性对话的结果。",
         "properties": {
@@ -1748,6 +2143,55 @@
           }
         },
         "summary": "连通性探测（真发一次最小请求）"
+      }
+    },
+    "/api/sync/merge": {
+      "post": {
+        "operationId": "merge_api_sync_merge_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncSnapshot"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncMergeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "快照里的画像不合法（例如三项全空或条目超长）"
+          }
+        },
+        "summary": "合并另一台设备的快照，并返回合并后的规范快照"
+      }
+    },
+    "/api/sync/snapshot": {
+      "get": {
+        "operationId": "snapshot_api_sync_snapshot_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "导出本机可同步数据（岗位 / 投递 / 候选人画像）"
       }
     }
   }

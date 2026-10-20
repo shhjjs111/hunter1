@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from hunter1.platform.access import (
+    ACCESS_CODE_HEADER,
     COOKIE_NAME,
     LOGIN_PATH,
     AccessGateMiddleware,
@@ -74,6 +75,14 @@ def test_login_sets_cookie_and_unlocks_requests() -> None:
 
         assert client.get("/").status_code == 200
         assert client.post("/api/crawl").status_code == 200
+
+
+def test_native_client_header_unlocks_api_without_cookie() -> None:
+    """安卓 App 用请求头携带访问码 —— 与 Cookie 同一口令，不需要登录表单。"""
+    with _client() as client:
+        assert client.get("/api/jobs", headers={ACCESS_CODE_HEADER: TOKEN}).status_code == 200
+        assert client.post("/api/crawl", headers={ACCESS_CODE_HEADER: TOKEN}).status_code == 200
+        assert client.get("/api/jobs", headers={ACCESS_CODE_HEADER: "wrong"}).status_code == 401
 
 
 def test_wrong_code_is_rejected_without_cookie() -> None:

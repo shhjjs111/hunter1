@@ -115,3 +115,49 @@ class TestAccessGateWiring:
                 assert client.get("/api/jobs").status_code == 200
         finally:
             context.db.dispose()
+
+    def test_native_header_reaches_sync_endpoint_through_all_middleware(
+        self, tmp_path: Path
+    ) -> None:
+        """安卓 App 的访问码头必须穿过 Host / 安全边界 / 访问码三层，直达同步端点。"""
+        from fastapi.testclient import TestClient
+
+        from hunter1.main import create_app
+
+        class _Fetcher:
+            def get_text(self, *_args: object, **_kwargs: object) -> str:
+                raise AssertionError("测试不应发起抓取")
+
+        context = main_module.AppContext.default(
+            db_path=tmp_path / "h.db",
+            fetcher=_Fetcher(),  # type: ignore[arg-type]
+            access_token="test-code",
+        )
+        app = create_app(context)
+        snapshot = {
+            "version": 1,
+            "exported_at": "2026-10-20T12:00:00Z",
+            "jobs": [],
+            "applications": [],
+            "profile": None,
+        }
+        try:
+            with TestClient(app, client=("192.168.1.20", 5000)) as client:
+                denied = client.post("/api/sync/merge", json=snapshot)
+                assert denied.status_code == 401
+
+                allowed = client.post(
+                    "/api/sync/merge",
+                    json=snapshot,
+                    headers={"X-Hunter1-Access-Code": "test-code"},
+                )
+                assert allowed.status_code == 200
+                assert allowed.json()["snapshot"]["version"] == 1
+
+                pulled = client.get(
+                    "/api/sync/snapshot",
+                    headers={"X-Hunter1-Access-Code": "test-code"},
+                )
+                assert pulled.status_code == 200
+        finally:
+            context.db.dispose()

@@ -288,6 +288,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sync/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 合并另一台设备的快照，并返回合并后的规范快照 */
+        post: operations["merge_api_sync_merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sync/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 导出本机可同步数据（岗位 / 投递 / 候选人画像） */
+        get: operations["snapshot_api_sync_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -707,6 +741,171 @@ export interface components {
             conversation_id: string;
             /** Message */
             message: string;
+        };
+        /**
+         * SyncApplication
+         * @description 一条投递记录（按 `job_detail_url` 跨设备对齐）。
+         */
+        SyncApplication: {
+            /**
+             * Applied At
+             * Format: date-time
+             */
+            applied_at: string;
+            /** Company */
+            company: string;
+            /** Job Detail Url */
+            job_detail_url?: string | null;
+            /** Note */
+            note?: string | null;
+            /** @default applied */
+            stage: components["schemas"]["ApplicationStage"];
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * SyncCounts
+         * @description 一次合并的计数（两端各自统计自己的库发生了什么）。
+         */
+        SyncCounts: {
+            /**
+             * Applications Created
+             * @default 0
+             */
+            applications_created: number;
+            /**
+             * Applications Kept
+             * @default 0
+             */
+            applications_kept: number;
+            /**
+             * Applications Skipped
+             * @default 0
+             */
+            applications_skipped: number;
+            /**
+             * Applications Updated
+             * @default 0
+             */
+            applications_updated: number;
+            /**
+             * Jobs Created
+             * @default 0
+             */
+            jobs_created: number;
+            /**
+             * Jobs Kept
+             * @default 0
+             */
+            jobs_kept: number;
+            /**
+             * Jobs Updated
+             * @default 0
+             */
+            jobs_updated: number;
+            /**
+             * Profile Updated
+             * @default false
+             */
+            profile_updated: boolean;
+        };
+        /**
+         * SyncJob
+         * @description 一台设备上的岗位事实 + 评分结论。
+         */
+        SyncJob: {
+            /** @default unknown */
+            capture_status: components["schemas"]["CaptureStatus"];
+            /** City */
+            city?: string | null;
+            /** Company */
+            company: string;
+            /** Detail Url */
+            detail_url: string;
+            /** First Seen At */
+            first_seen_at?: string | null;
+            /** Id */
+            id: string;
+            /** Jd Raw */
+            jd_raw?: string | null;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Match Score */
+            match_score?: number | null;
+            /** Score Advantages */
+            score_advantages?: string | null;
+            /** Score Gaps */
+            score_gaps?: string | null;
+            /** Score Model */
+            score_model?: string | null;
+            /** Score Prompt Version */
+            score_prompt_version?: string | null;
+            /** Score Summary */
+            score_summary?: string | null;
+            /** Scored At */
+            scored_at?: string | null;
+            /**
+             * Source
+             * @default
+             */
+            source: string;
+            /** Title */
+            title: string;
+        };
+        /**
+         * SyncMergeResponse
+         * @description 合并结果 + 合并后的规范快照（调用方无需再拉一次）。
+         */
+        SyncMergeResponse: {
+            counts: components["schemas"]["SyncCounts"];
+            snapshot: components["schemas"]["SyncSnapshot"];
+        };
+        /**
+         * SyncProfile
+         * @description 候选人画像及其最后修改时间。
+         */
+        SyncProfile: {
+            /** Directions */
+            directions?: string[];
+            /** Keywords */
+            keywords?: string[];
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * SyncSnapshot
+         * @description 一台设备的完整可同步数据。
+         */
+        SyncSnapshot: {
+            /** Applications */
+            applications?: components["schemas"]["SyncApplication"][];
+            /**
+             * Exported At
+             * Format: date-time
+             */
+            exported_at: string;
+            /** Jobs */
+            jobs?: components["schemas"]["SyncJob"][];
+            profile?: components["schemas"]["SyncProfile"] | null;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
         };
         /**
          * TurnResponse
@@ -1368,6 +1567,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merge_api_sync_merge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncSnapshot"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncMergeResponse"];
+                };
+            };
+            /** @description 快照里的画像不合法（例如三项全空或条目超长） */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    snapshot_api_sync_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncSnapshot"];
                 };
             };
         };

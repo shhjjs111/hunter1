@@ -11,7 +11,15 @@
 详见 `SLICE.md`。
 """
 
-from hunter1.slices.scoring.models import CandidateProfile, ScoreCard, ScoringError
+from hunter1.slices.scoring.models import (
+    MAX_PROFILE_DIRECTIONS,
+    MAX_PROFILE_ITEM_CHARS,
+    MAX_PROFILE_KEYWORDS,
+    MAX_PROFILE_SUMMARY_CHARS,
+    CandidateProfile,
+    ScoreCard,
+    ScoringError,
+)
 from hunter1.slices.scoring.prompts import (
     PROMPT_VERSION,
     SCORE_SCHEMA,
@@ -24,6 +32,10 @@ from hunter1.slices.scoring.service import score_job
 from hunter1.slices.scoring.store import PROFILE_KEY, ScoreStore
 
 __all__ = [
+    "MAX_PROFILE_DIRECTIONS",
+    "MAX_PROFILE_ITEM_CHARS",
+    "MAX_PROFILE_KEYWORDS",
+    "MAX_PROFILE_SUMMARY_CHARS",
     "PROFILE_KEY",
     "PROMPT_VERSION",
     "SCORE_SCHEMA",

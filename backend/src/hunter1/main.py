@@ -48,6 +48,8 @@ from hunter1.slices.scoring.router import build_router as build_scoring_router
 from hunter1.slices.scoring.store import ScoreStore
 from hunter1.slices.settings.router import build_router as build_settings_router
 from hunter1.slices.settings.store import SettingsStore
+from hunter1.slices.sync.router import build_router as build_sync_router
+from hunter1.slices.sync.store import SyncStore
 
 API_PREFIX = "/api"
 
@@ -299,9 +301,10 @@ def create_app(context: AppContext) -> FastAPI:
     job_store = JobStore(context.db)
     _mount(build_jobs_router(store=job_store))
     _mount(build_crawl_router(runner=runner))
+    application_store = ApplicationStore(context.db)
     _mount(
         build_applications_router(
-            store=ApplicationStore(context.db),
+            store=application_store,
             jobs=job_store,
             clock=context.clock,
         )
@@ -327,6 +330,16 @@ def create_app(context: AppContext) -> FastAPI:
             clock=context.clock,
             # 评分失败文案的脱敏兜底（报告次要项）—— 与 settings 切片同款。
             api_key_provider=lambda: _current_api_key(context),
+        )
+    )
+    _mount(
+        build_sync_router(
+            store=SyncStore(
+                jobs=job_store,
+                applications=application_store,
+                scores=scoring_store,
+                clock=context.clock,
+            )
         )
     )
 

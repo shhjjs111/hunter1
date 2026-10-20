@@ -31,6 +31,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 #: 浏览器保存访问码的 Cookie 名。
 COOKIE_NAME = "hunter1_access"
 
+#: 原生客户端（安卓 App）携带访问码的请求头名。
+#: 浏览器用 Cookie；原生 HTTP 栈没有同源页面与 Cookie 流程，用显式请求头更直接。
+#: 两种方式共用同一个访问码，失败延迟与常量时间比较也共用。
+ACCESS_CODE_HEADER = "x-hunter1-access-code"
+
 #: 访问码文件（与 SQLite 放在同一目录）。
 TOKEN_FILE_NAME = "access_token"
 
@@ -144,6 +149,14 @@ def _cookie_value(scope: Scope, name: str) -> str | None:
             continue
         if name in jar:
             return jar[name].value
+    return None
+
+
+def _header_value(scope: Scope, name: str) -> str | None:
+    wanted = name.encode("latin-1")
+    for key, value in scope.get("headers", []):
+        if key.lower() == wanted:
+            return value.decode("latin-1")
     return None
 
 
@@ -266,7 +279,8 @@ class AccessGateMiddleware:
                     await _login_page()(scope, receive, send)
                 return
 
-        if _tokens_match(_cookie_value(scope, COOKIE_NAME) or "", self.token):
+        provided = _header_value(scope, ACCESS_CODE_HEADER) or _cookie_value(scope, COOKIE_NAME)
+        if _tokens_match(provided or "", self.token):
             await self.app(scope, receive, send)
             return
 
@@ -305,6 +319,7 @@ class AccessGateMiddleware:
 
 
 __all__ = [
+    "ACCESS_CODE_HEADER",
     "COOKIE_MAX_AGE",
     "COOKIE_NAME",
     "LOGIN_PATH",
