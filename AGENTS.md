@@ -10,13 +10,13 @@ hunter1/
 ├── backend/          Python API 服务（FastAPI + SQLite）
 │   ├── src/hunter1/
 │   │   ├── platform/   机制内核（零业务：db / llm / fetch / update / text）
-│   │   ├── slices/     业务垂直切片（jobs / crawl / applications / assistant / scoring / settings）
+│   │   ├── slices/     业务垂直切片（jobs / crawl / applications / assistant / scoring / settings / sync）
 │   │   ├── domain/     共享模型（过渡期，见 docs/ARCHITECTURE.md 的技术债）
 │   │   ├── application/ 端口协议（进程边界）
 │   │   ├── main.py     组装根 —— 唯一认识所有切片的地方
 │   │   └── cli.py      serve / crawl / update
 │   └── tests/          镜像 src 结构；tests/slices/<name> = 该切片的独立验证
-├── frontend/         React SPA（独立工程；features/ 与后端 slices/ 同名）
+├── frontend/         React SPA（独立工程；业务页面 features/ 与后端 slices/ 同名；sync 入口在手机配置页）
 ├── contracts/        OpenAPI 契约快照（生成物，禁手改）
 ├── scripts/          跨端工程脚本（check.sh / dev.sh / contracts.sh / build.py）
 └── docs/             架构白皮书与开发指引
@@ -72,8 +72,8 @@ hunter1/
 3. 更新 `backend/tests/test_architecture.py` 的依赖白名单（如需跨切片依赖）；
 4. 写 `backend/tests/slices/<name>/` 测试（含 router 测试）；
 5. `bash scripts/contracts.sh` 导出契约快照 + 前端类型；
-6. 建同名前端 feature：`frontend/src/features/<name>/`（api.ts + 页面 + 组件测试）；
-7. 在 `frontend/src/app/App.tsx` 的路由表加一条，`AppLayout.tsx` 的 NAV 加一项。
+6. 如该切片有 UI，建同名前端 feature：`frontend/src/features/<name>/`（api.ts + 页面 + 组件测试；`sync` 是入口在手机配置页的例外）；
+7. 如该切片有 UI，在 `frontend/src/app/App.tsx` 的路由表加一条，`AppLayout.tsx` 的 NAV 加一项。
 
 ## 提交纪律
 
@@ -100,9 +100,10 @@ hunter1/
 |---|---|
 | 被 `.gitignore` 排除却仍在索引里的文件 | 规则补了、已跟踪的没删 —— 上次事故的**根因形态** |
 | 依赖 / 缓存 / 产物目录（`node_modules`、`__pycache__`、`dist`、`build` …） | 可重建、体积大、污染 diff |
-| 本机工具链私有区（`.tools/`、`.rivet/`、`.workbuddy/`） | 与本项目无关；`.rivet.md` 曾因此被公开 |
-| 产物与数据扩展名（`.exe`/`.zip`/`.db`/`.log`/`.pyc` …） | 二进制与运行态数据；成品走 Release 不走仓库 |
+| 本机工具链私有区（`.tools/`、`.rivet/`、`.workbuddy/`、`.impeccable/`） | 与本项目无关；`.rivet.md` 曾因此被公开 |
+| 产物与数据扩展名（`.exe`/`.zip`/`.apk`/`.aab`/`.db`/`.log`/`.pyc` …） | 二进制与运行态数据；成品走 Release 不走仓库 |
 | 高置信度密钥形态（`sk-`/`ghp_`/`AKIA`/私钥头 …） | 泄漏即失效，且会留在历史里 |
+| 本地凭据与签名材料（`.env*`、`*.jks`/`*.keystore`/`*.p12`、`keystore.properties`、`google-services.json`） | 签名密钥与配置密码一旦入库，无法安全撤销 |
 | 带用户名的家目录路径（`C:\Users\<名>`、`/home/<名>`） | 把开发机目录布局暴露给所有人 |
 | 真实邮箱（保留域名除外） | 抓取夹具混进真实联系方式 = 代站点扩散个人数据 |
 | 单个文件 > 2 MiB | 手滑拖进压缩包/数据库的信号 |
