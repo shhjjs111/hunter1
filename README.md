@@ -21,10 +21,10 @@
 ```
 backend/src/hunter1/
 ├── platform/   机制内核（db / llm / fetch / update）
-├── slices/     业务切片（jobs crawl applications assistant scoring settings）
+├── slices/     业务切片（jobs crawl applications assistant scoring settings sync）
 └── main.py     组装根
 frontend/src/
-├── features/   ★ 与后端切片同名（认知对称）
+├── features/   ★ 业务页面（与后端切片同名；sync 入口在手机配置页）
 └── shared/     设计系统 / 契约客户端 / SSE 原语
 contracts/      OpenAPI 快照（生成物）
 ```
@@ -168,7 +168,7 @@ gh attestation verify hunter1-win32.zip --repo shhjjs111/hunter1
 
 | 维度 | 状态 |
 |---|---|
-| 后端切片 | ✅ 6 个（jobs / crawl / applications / assistant / scoring / settings） |
+| 后端切片 | ✅ 7 个（jobs / crawl / applications / assistant / scoring / settings / sync） |
 | 前端 SPA | ✅ 5 个页面（岗位库 / 抓取 / 投递 / 助手 / 配置） |
 | 契约流水线 | ✅ 导出 + 双漂移门禁（快照 + 前端类型） |
 | 测试 | 后端 + 前端全绿（含整体渲染验收） |

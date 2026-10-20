@@ -29,11 +29,11 @@ frontend/
 ## 构建
 
 前置：Node 20+、JDK 21、Android SDK 36（platform + build-tools）。
-本机曾用以下路径：
+把下面两处替换成你本机的实际安装位置：
 
 ```powershell
-$env:JAVA_HOME = "D:\hunter1\.tools\jdks\jdk21\jdk-21.0.12.1+1"
-$env:ANDROID_HOME = "D:\hunter1\.tools\android\sdk"
+$env:JAVA_HOME = "C:\path\to\hunter1\.tools\jdks\jdk21\jdk-21.0.12.1+1"
+$env:ANDROID_HOME = "C:\path\to\hunter1\.tools\android\sdk"
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 ```
 
@@ -61,6 +61,9 @@ Gradle wrapper 默认从 `services.gradle.org` 下载（会跳到 GitHub）。�
 ```
 https://mirrors.cloud.tencent.com/gradle/gradle-8.14.3-all.zip
 ```
+
+`gradle-wrapper.properties` 固定了官方发行包的 `distributionSha256Sum`；
+镜像必须提供与官方完全一致的文件，否则 wrapper 会拒绝使用。
 
 Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 

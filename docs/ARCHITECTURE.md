@@ -31,7 +31,7 @@
    5 个切片并行/串行迁移，跨切片冲突数为 0）；
 2. **验证可局部化** → `pytest tests/slices/<name>` 是该切片的独立验证命令，
    Agent 不必理解全仓库；
-3. **认知对称** → 前端 `features/` 与后端 `slices/` **同名**，看任一边能推断另一边。
+3. **认知对称** → 前端业务 `features/` 与后端 `slices/` **同名**（`sync` 无独立页面，入口在手机配置页），看任一边能推断另一边。
 
 **协议（Protocol）只保留给进程边界**（LLM、HTTP）。进程内的切片间不再需要抽象层 ——
 抽象层本身就是认知负担，而切片边界已经提供了隔离。
@@ -53,15 +53,18 @@
 ```mermaid
 flowchart LR
   subgraph Browser["浏览器"]
-    SPA["React SPA<br/>features: jobs crawl applications assistant settings"]
+    SPA["React SPA<br/>features: jobs crawl applications assistant scoring settings"]
   end
   subgraph Server["hunter1 进程"]
-    subgraph Slices["slices/ 业务切片（6）"]
-      J["jobs"]; C["crawl"]; AP["applications"]; AS["assistant"]; SC["scoring"]; ST["settings"]
+    subgraph Slices["slices/ 业务切片（7）"]
+      J["jobs"]; C["crawl"]; AP["applications"]; AS["assistant"]; SC["scoring"]; ST["settings"]; SY["sync"]
     end
     subgraph Platform["platform/ 机制内核（零业务）"]
       DB["db"]; GW["llm"]; FE["fetch"]; UP["update"]
     end
+    SY --> J
+    SY --> AP
+    SY --> SC
     Slices --> Platform
     MAIN["main.py 组装根"]
   end
@@ -96,6 +99,7 @@ flowchart LR
 | `assistant` | agent 循环 + 工具协议 + 会话 | platform, ports |
 | `scoring` | 匹配评分（**提示词与代码共置**） | platform, ports |
 | `settings` | LLM 配置读写与连通探测 | platform |
+| `sync` | 跨设备快照导出/合并（岗位 / 投递 / 画像） | platform, jobs, applications, scoring |
 
 ## 面向模型增长的三个设计
 
@@ -179,7 +183,7 @@ flowchart LR
 |---|---|---|
 | 后端全量 | `cd backend && pytest` | 全部后端测试（全绿） |
 | 单切片 | `pytest tests/slices/<name>` | 该切片独立可跑 |
-| 组装集成 | `pytest tests/test_slices_integration.py` | 6 切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
+| 组装集成 | `pytest tests/test_slices_integration.py` | 全切片端到端 + SPA 服务 + API 优先 + 路径穿越防护 |
 | 架构 | `pytest tests/test_architecture.py` | 依赖方向、深链、旧层（web/crawlers）清零 |
 | 前端 | `cd frontend && npm run check` | 类型 + lint + 测试（含整体渲染验收） |
 | 示例 | `pyright ../examples` + 四份离线示例实跑 | 示例不腐化（端口变更后假实现不失配） |

@@ -20,7 +20,7 @@
 ```
 src/hunter1/
 ├── platform/     机制内核（零业务）：db / llm / fetch / update / text
-├── slices/       业务切片（6）：jobs / crawl / applications / assistant / scoring / settings
+├── slices/       业务切片（7）：jobs / crawl / applications / assistant / scoring / settings / sync
 ├── domain/       共享模型（过渡期，见 docs/ARCHITECTURE.md 的技术债）
 ├── application/  进程边界端口协议（ports.py）
 ├── main.py       组装根 —— 唯一认识所有切片的地方

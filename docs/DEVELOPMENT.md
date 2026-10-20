@@ -100,13 +100,13 @@ Unix `bin/`）→ 项目自带解释器。第二项是必需的：实测 pip 把
 backend/
 ├── src/hunter1/
 │   ├── platform/     机制内核（db / llm / fetch / update / text）
-│   ├── slices/       业务切片（jobs crawl applications assistant scoring settings）
+│   ├── slices/       业务切片（jobs crawl applications assistant scoring settings sync）
 │   ├── domain/       共享模型（过渡期，见 docs/ARCHITECTURE.md）
 │   ├── application/  端口协议（进程边界）
 │   ├── main.py       组装根（挂路由 + 服务前端产物）
 │   └── cli.py        命令行入口
 └── tests/            镜像 src；tests/slices/<name> = 该切片独立验证
-frontend/             React SPA（features/ 与 slices/ 同名）
+frontend/             React SPA（业务页面与 slices/ 同名；sync 无独立页面）
 contracts/            OpenAPI 快照（生成物，禁手改）
 scripts/              check.sh / dev.sh / contracts.sh / build.py
 docs/                 架构白皮书与开发指引
@@ -151,8 +151,8 @@ hunter1 update --source <版本清单 URL>   # 检查更新
 
 1. **依赖方向**（`tests/test_architecture.py` 逐条断言，越权即红灯）：
    `platform ← slices`；`slices` 之间只允许
-   `crawl/scoring/applications/assistant → jobs`；进程边界协议从
-   `hunter1.application.ports` 取。完整表格见 `docs/ARCHITECTURE.md`。
+   `crawl/scoring/applications/assistant → jobs`，以及 `sync → jobs/applications/scoring`；
+   进程边界协议从 `hunter1.application.ports` 取。完整表格见 `docs/ARCHITECTURE.md`。
 2. **可测试性**：切片测试**不需要网络与数据库**（真 SQLite + 假外部世界）。
    环境特定的能力一律经端口注入（见 `main.py` 的 `AppContext`）。
 3. **TDD**：新增行为先写失败测试（RED），再实现（GREEN）。
@@ -303,7 +303,8 @@ CI 用 `contracts.sh --check` 拦截漏导出。
 按序执行，逐项确认：
 
 1. **版本号与说明**：改 `backend/src/hunter1/__init__.py` 的 `__version__`，并在
-   `CHANGELOG.md` 建同名版本小节。
+   `CHANGELOG.md` 建同名版本小节；同时把 `frontend/android/app/build.gradle` 的
+   `versionName` 改成同值，并**递增** `versionCode`（否则手机不会把它认成升级）。
 2. **锁文件**：`uv lock --project backend --python 3.12`，确认 `backend/uv.lock`
    随代码一起提交。
 3. **全量门禁**：`PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/check.sh`

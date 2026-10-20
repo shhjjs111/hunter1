@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -18,8 +19,10 @@ from hunter1 import __version__
 from hunter1.platform.update import parse_version
 
 ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = ROOT.parent
 PYPROJECT = ROOT / "pyproject.toml"
 VERSION_FILE = ROOT / "src" / "hunter1" / "__init__.py"
+ANDROID_BUILD = REPO_ROOT / "frontend" / "android" / "app" / "build.gradle"
 
 
 def _pyproject() -> dict:
@@ -55,3 +58,16 @@ class TestVersionValue:
     def test_matches_the_installed_package(self) -> None:
         """`hunter1.__version__` 必须来自包本身，而不是某个外部常量。"""
         assert isinstance(__version__, str) and __version__.strip() == __version__
+
+    def test_android_version_name_matches_the_package(self) -> None:
+        """Android 包与 Windows 包必须同名；否则 Release 会出现两个「版本」。"""
+        text = ANDROID_BUILD.read_text(encoding="utf-8")
+        match = re.search(r'^\s*versionName\s+"([^"]+)"', text, re.MULTILINE)
+        assert match, "frontend/android/app/build.gradle 缺少 versionName"
+        assert match.group(1) == __version__
+
+    def test_android_version_code_is_positive(self) -> None:
+        text = ANDROID_BUILD.read_text(encoding="utf-8")
+        match = re.search(r"^\s*versionCode\s+(\d+)\s*$", text, re.MULTILINE)
+        assert match, "frontend/android/app/build.gradle 缺少 versionCode"
+        assert int(match.group(1)) > 0
