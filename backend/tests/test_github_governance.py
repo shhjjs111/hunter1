@@ -11,6 +11,20 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 _USES = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", re.MULTILINE)
 _PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
 
+#: 锁文件里出现这些主机说明本地镜像配置渗进了公开仓库。CI 会按 `resolved`
+#: 地址下载 tarball；第三方镜像一旦不可用或被篡改，门禁/构建就不再可复现。
+_NPM_MIRROR_HOSTS = (
+    "registry.npmmirror.com",
+    "registry.npm.taobao.org",
+    "registry.yarnpkg.com",
+    "mirrors.cloud.tencent.com",
+)
+
+
+def judge_third_party_npm_registries(text: str) -> list[str]:
+    """Return mirror hosts embedded in a lockfile's resolved URLs."""
+    return sorted({host for host in _NPM_MIRROR_HOSTS if host in text})
+
 
 def judge_unpinned_actions(text: str) -> list[str]:
     """Return remote action references that are not pinned to a full commit SHA."""
@@ -85,6 +99,37 @@ def test_required_quality_status_context_stays_stable() -> None:
     text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert 'python-version: ["3.12"]' in text, (
         "quality job 的 matrix 必须保持 3.12，否则必需状态检查名称会漂移"
+    )
+
+
+def test_npm_lockfiles_use_public_registry() -> None:
+    lockfiles = (
+        ROOT / "frontend" / "package-lock.json",
+        ROOT / "frontend" / "tools" / "contract-codegen" / "package-lock.json",
+    )
+    violations = {}
+    for path in lockfiles:
+        text = path.read_text(encoding="utf-8")
+        hits = judge_third_party_npm_registries(text)
+        if hits:
+            violations[path.relative_to(ROOT).as_posix()] = hits
+        assert "registry.npmjs.org" in text, f"{path.name} 没有使用官方 npm registry"
+    assert not violations, f"锁文件包含第三方 npm 镜像：{violations}"
+
+
+def test_registry_judge_fires_on_mirror_hosts() -> None:
+    assert judge_third_party_npm_registries(
+        "https://registry.npmmirror.com/pkg/-/pkg-1.0.0.tgz"
+    ) == ["registry.npmmirror.com"]
+    assert judge_third_party_npm_registries("https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz") == []
+
+
+def test_gradle_wrapper_pins_distribution_checksum() -> None:
+    wrapper = ROOT / "frontend" / "android" / "gradle" / "wrapper" / "gradle-wrapper.properties"
+    text = wrapper.read_text(encoding="utf-8")
+    assert "distributionUrl=https\\://services.gradle.org/distributions/" in text
+    assert re.search(r"^distributionSha256Sum=[0-9a-f]{64}$", text, re.MULTILINE), (
+        "Gradle wrapper 必须固定发行包的 SHA256，避免下载链被替换"
     )
 
 
