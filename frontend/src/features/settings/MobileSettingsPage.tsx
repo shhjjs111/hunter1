@@ -1,7 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useMobileChrome } from "../../app/mobileChrome";
 import { useTheme, type ThemePreference } from "../../app/theme";
+import { isMobileApp } from "../../mobile";
+import {
+  loadSyncConfig,
+  saveSyncConfig,
+  syncWithDesktop,
+  type SyncConfig,
+  type SyncMode,
+} from "../../mobile/sync";
 import { MobileIcon } from "../../shared/ui/mobile";
 import { useProfile, useSaveProfile } from "../scoring/api";
 import { useSaveSettings, useSettings, useTestConnection } from "./api";
@@ -14,6 +23,7 @@ const THEME_OPTIONS: Array<{ value: ThemePreference; label: string }> = [
 
 export function MobileSettingsPage() {
   const { showToast } = useMobileChrome();
+  const queryClient = useQueryClient();
   const settings = useSettings();
   const save = useSaveSettings();
   const probe = useTestConnection();
@@ -28,6 +38,31 @@ export function MobileSettingsPage() {
   const [keywordsEdit, setKeywordsEdit] = useState<string | null>(null);
   const [directionsEdit, setDirectionsEdit] = useState<string | null>(null);
   const [summaryEdit, setSummaryEdit] = useState<string | null>(null);
+  const nativeApp = isMobileApp();
+  const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(null);
+  const [desktopUrl, setDesktopUrl] = useState("");
+  const [accessCode, setAccessCode] = useState("");
+  const [syncMode, setSyncMode] = useState<SyncMode | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!nativeApp) {
+      return;
+    }
+    let alive = true;
+    void loadSyncConfig().then((config) => {
+      if (!alive) {
+        return;
+      }
+      setSyncConfig(config);
+      // 用户可能已经开始输入：只在空值时回填，避免异步结果覆盖草稿。
+      setDesktopUrl((current) => current || config.desktopUrl);
+      setAccessCode((current) => current || config.accessCode);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [nativeApp]);
 
   const baseUrl = baseUrlEdit ?? settings.data?.base_url ?? "";
   const model = modelEdit ?? settings.data?.model ?? "";
@@ -54,6 +89,28 @@ export function MobileSettingsPage() {
         onError: (error) => showToast("error", error.message),
       },
     );
+  }
+
+  async function runSync(mode: SyncMode) {
+    setSyncError(null);
+    setSyncMode(mode);
+    try {
+      const saved = await saveSyncConfig({
+        desktopUrl: desktopUrl.trim(),
+        accessCode: accessCode.trim(),
+      });
+      setSyncConfig(saved);
+      const outcome = await syncWithDesktop(mode);
+      setSyncConfig(await loadSyncConfig());
+      await queryClient.invalidateQueries();
+      showToast("success", outcome.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSyncError(message);
+      showToast("error", message);
+    } finally {
+      setSyncMode(null);
+    }
   }
 
   return (
@@ -177,6 +234,77 @@ export function MobileSettingsPage() {
           {saveProfile.isPending ? "保存中…" : "保存画像"}
         </button>
       </div>
+
+      {nativeApp && (
+        <>
+          <h2 className="mobile-group-title">电脑同步</h2>
+          <div className="mobile-card mobile-settings-group mobile-no-swipe">
+            <div className="mobile-setting-field">
+              <label htmlFor="mobile-sync-url">电脑地址</label>
+              <input
+                id="mobile-sync-url"
+                value={desktopUrl}
+                onChange={(event) => setDesktopUrl(event.target.value)}
+                placeholder="http://192.168.1.5:8000"
+                autoComplete="url"
+                inputMode="url"
+              />
+            </div>
+            <div className="mobile-setting-field">
+              <label htmlFor="mobile-sync-code">访问码</label>
+              <input
+                id="mobile-sync-code"
+                type="password"
+                value={accessCode}
+                onChange={(event) => setAccessCode(event.target.value)}
+                placeholder="电脑端终端里显示的访问码"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          {syncConfig?.lastSyncAt ? (
+            <p className="mobile-sync-status">
+              上次同步：{new Date(syncConfig.lastSyncAt).toLocaleString("zh-CN", { hour12: false })}
+              <br />
+              {syncConfig.lastResult}
+            </p>
+          ) : (
+            <p className="mobile-sync-status">还没有同步过。</p>
+          )}
+          {syncError && <p className="mobile-error mt-3">{syncError}</p>}
+          <div className="mobile-sync-actions">
+            <button
+              type="button"
+              className="mobile-button primary"
+              disabled={syncMode !== null}
+              onClick={() => void runSync("both")}
+            >
+              {syncMode === "both" ? "同步中…" : "双向同步"}
+            </button>
+            <button
+              type="button"
+              className="mobile-button"
+              disabled={syncMode !== null}
+              onClick={() => void runSync("pull")}
+            >
+              {syncMode === "pull" ? "拉取中…" : "从电脑拉取"}
+            </button>
+            <button
+              type="button"
+              className="mobile-button"
+              disabled={syncMode !== null}
+              onClick={() => void runSync("push")}
+            >
+              {syncMode === "push" ? "推送中…" : "推送到电脑"}
+            </button>
+          </div>
+          <p className="mobile-foot">
+            同步岗位、投递与候选人画像；API Key 和聊天记录只留本机。
+            <br />
+            删除不会跨设备传播；手机与电脑需在同一 Wi-Fi，电脑端用 hunter1-lan.cmd 启动。
+          </p>
+        </>
+      )}
 
       <h2 className="mobile-group-title">外观</h2>
       <div className="mobile-card mobile-settings-group mobile-no-swipe">

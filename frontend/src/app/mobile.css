@@ -1160,6 +1160,22 @@
   flex: 1;
   height: 46px;
 }
+.mobile-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.mobile-sync-actions .mobile-button {
+  flex: 1 1 120px;
+  height: 44px;
+}
+.mobile-sync-status {
+  margin: 10px 6px 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
 
 /* ---------- toast / overlays ---------- */
 .mobile-toast {

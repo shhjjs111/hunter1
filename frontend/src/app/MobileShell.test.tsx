@@ -1,3 +1,5 @@
+import "fake-indexeddb/auto";
+
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -5,6 +7,7 @@ import { appRoutes } from "./App";
 import { applyInitialTheme } from "./theme";
 import { jsonResponse, renderRoutes, stubApi, stubMedia } from "../test-utils";
 import { maybeAutoCrawl } from "../mobile/localApi";
+import { resetDBForTests } from "../mobile/db";
 
 const mobileMock = vi.hoisted(() => ({ native: false }));
 
@@ -17,7 +20,8 @@ vi.mock("../mobile/localApi", () => ({
   maybeAutoCrawl: vi.fn().mockResolvedValue(false),
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resetDBForTests();
   mobileMock.native = false;
   vi.mocked(maybeAutoCrawl).mockClear();
   stubMedia({ reduced: true, mobile: true });

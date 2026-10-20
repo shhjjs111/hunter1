@@ -22,6 +22,8 @@ export interface ProfileRecord {
   keywords: string[];
   directions: string[];
   summary: string;
+  /** 最后一次保存时间；旧记录可能没有，同步时按最旧处理。 */
+  updatedAt?: string;
 }
 
 export interface MetaRecord {
@@ -30,6 +32,14 @@ export interface MetaRecord {
   /** 最近一次「尝试」开始时间；失败时用来做冷却，避免每次前台都重试。 */
   lastCrawlAttemptAt?: string | null;
   autoCrawl: boolean;
+}
+
+export interface SyncRecord {
+  key: "sync";
+  desktopUrl: string;
+  accessCode: string;
+  lastSyncAt: string | null;
+  lastResult: string | null;
 }
 
 export interface JobRecord {
@@ -77,7 +87,7 @@ export interface MessageRecord {
 }
 
 interface HunterDB extends DBSchema {
-  settings: { key: string; value: LLMRecord | ProfileRecord | MetaRecord };
+  settings: { key: string; value: LLMRecord | ProfileRecord | MetaRecord | SyncRecord };
   jobs: {
     key: string;
     value: JobRecord;
@@ -156,7 +166,11 @@ export async function getProfile(): Promise<ProfileRecord | null> {
 
 export async function saveProfile(record: Omit<ProfileRecord, "key">): Promise<ProfileRecord> {
   const db = await getDB();
-  const value: ProfileRecord = { key: "profile", ...record };
+  const value: ProfileRecord = {
+    key: "profile",
+    ...record,
+    updatedAt: record.updatedAt ?? new Date().toISOString(),
+  };
   await db.put("settings", value);
   return value;
 }
