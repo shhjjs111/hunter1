@@ -50,6 +50,7 @@ contracts/      OpenAPI 快照（生成物）
 
 - 不需要电脑，不需要同一 Wi-Fi；
 - 岗位、投递、画像与助手会话都存在手机本地（IndexedDB）；
+- 可在同一 Wi-Fi 下与电脑端双向同步岗位、投递与画像（不搬 API Key 与会话）；
 - 抓取招聘站和调用模型时才需要互联网；
 - 桌面 Web 端仍走原来的 FastAPI + SQLite，两边共用同一套 React 页面。
 
@@ -171,7 +172,7 @@ gh attestation verify hunter1-win32.zip --repo shhjjs111/hunter1
 | 契约流水线 | ✅ 导出 + 双漂移门禁（快照 + 前端类型） |
 | 测试 | 后端 + 前端全绿（含整体渲染验收） |
 | 手机端 | ✅ 响应式手机外壳；`--lan` 局域网访问 + 访问码 |
-| 安卓独立版 | ✅ Capacitor APK；本地 IndexedDB + 原生 HTTP；无需电脑 |
+| 安卓独立版 | ✅ Capacitor APK；本地 IndexedDB + 原生 HTTP；可与电脑双向同步 |
 | 打包分发 | ✅ 单目录产物（含使用说明与手机启动器），前端产物嵌入；自更新链路已实测 |
 
 ## 务实说明

@@ -13,7 +13,8 @@ frontend/
 │   ├── crawlers.ts      站点注册表 + HTML 解析
 │   ├── http.ts          CapacitorHttp（绕过 WebView CORS）
 │   ├── llm.ts           模型探测 / 评分 / 助手
-│   └── localApi.ts      拦截 /api/*，返回与 FastAPI 相同形状的 JSON
+│   ├── localApi.ts      拦截 /api/*，返回与 FastAPI 相同形状的 JSON
+│   └── sync.ts          与电脑端双向同步岗位 / 投递 / 画像
 ├── capacitor.config.ts  Capacitor 配置
 └── android/             Capacitor 生成的安卓工程
 ```
@@ -74,7 +75,7 @@ Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 
 - `versionName=0.4.0`、`versionCode=1`
 - `minSdk=24`、`targetSdk=36`
-- SHA256：`9756A8579F058CA685A2D13DCF6127DBEF2E9AF050F2893D8E46E15E37A73E7F`
+- SHA256：`9EC096DB011C027DECCD5ABAB84518F0B64716E8B9A883E6F842730269BFF329`
 
 签名密钥与密码保存在本机 `.tools/android/`（`hunter1-release.jks` 与
 `keystore-password.txt`），**不在仓库里**。请自行备份；丢失后无法覆盖安装升级，
@@ -88,6 +89,31 @@ Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 4. 岗位库查看、评分、记录投递。
 
 所有数据都在手机上；不需要运行 `hunter1.exe`，也不需要同一 Wi-Fi。
+
+## 与电脑同步（可选）
+
+手机独立版平时不依赖电脑；想在两边使用同一份岗位与投递记录时，可以在同一
+Wi-Fi 下同步：
+
+1. 电脑上双击 `hunter1-lan.cmd`（或运行 `hunter1 serve --lan`）；
+2. 记下终端打印的「手机访问」地址与「访问码」；
+3. 手机 App →「配置」→「电脑同步」，填入地址与访问码；
+4. 点「双向同步」（也可以只「从电脑拉取」或只「推送到电脑」）。
+
+同步内容：
+
+- 岗位事实与评分结论（按详情页 URL 对齐，不按 UUID）；
+- 投递记录（按岗位详情页 URL 对齐，`updated_at` 较新的阶段/备注胜出）；
+- 候选人画像（`updated_at` 较新的胜出）。
+
+**不搬**：API Key、助手会话历史、运行态抓取进度。它们只留在各自设备上。
+
+冲突规则是「较新的一方胜」，不做逐字段人工合并；两台设备同时改同一条记录时，
+以时间戳较晚的为准。同步请求走 `X-Hunter1-Access-Code` 请求头，和浏览器
+输入访问码是同一个口令，仍然只适用于「同一 Wi-Fi + 自己家的网络」信任模型。
+
+同步是**合并**而不是镜像：它只新增/更新对端已有的记录，**不会把对端的删除
+传播过来**。想彻底清掉一条投递，请在两边分别删除。
 
 ## 每日补抓与抓取节奏
 
@@ -112,5 +138,6 @@ Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
   前台会自动补抓（最多每 24 小时一轮），也可在「抓取」页手动再跑。
 - 抓取适配器与后端 `slices/crawl/sites.py` 同源，但站点改版时仍需同步更新选择器。
 - 助手在移动端走**非流式**请求：回答会一次性出现，暂不支持逐字输出与工具调用。
-- 暂无数据导出/备份入口；卸载 App 会丢失本地数据。
+- 暂无自动备份/定时同步：同步是手动按钮，且需要电脑端 `--lan` 在运行；
+  卸载 App 仍会清空手机本地数据。
 - 目前只构建 Android；iOS 需要额外的 Xcode/签名流程。
