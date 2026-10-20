@@ -103,7 +103,7 @@ jobs:
           subject-path: dist/hunter1-win32.zip
           sbom-path: dist/sbom.spdx.json
 
-      - name: 创建草稿、上传资产、核对后发布
+      - name: 创建草稿、上传资产并核对
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
@@ -128,4 +128,4 @@ jobs:
             dist/SHA256SUMS.txt
           COUNT="$(gh release view "$TAG" --json assets --jq '.assets | length')"
           test "$COUNT" = "4"
-          gh release edit "$TAG" --draft=false
+          echo "::notice::$TAG 草稿已创建（4 个自动资产）。上传安卓 APK 与校验和、核对后，再手动发布。"

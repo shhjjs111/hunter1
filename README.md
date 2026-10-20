@@ -45,8 +45,9 @@ contracts/      OpenAPI 快照（生成物）
 
 ### 安卓独立 App（无需电脑）
 
-`frontend/android/` 里是 Capacitor 安卓工程。构建后得到
-`frontend/android/app/build/outputs/apk/debug/app-debug.apk`，安装到手机即可：
+`frontend/android/` 里是 Capacitor 安卓工程。安装包随
+[GitHub Release](https://github.com/shhjjs111/hunter1/releases) 提供
+（`hunter1-android-<version>.apk`）；也可按 `docs/ANDROID.md` 本地构建：
 
 - 不需要电脑，不需要同一 Wi-Fi；
 - 岗位、投递、画像与助手会话都存在手机本地（IndexedDB）；

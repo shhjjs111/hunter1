@@ -30,9 +30,11 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
 - 已启用 immutable releases；正式发布后不得替换资产或改写说明。
 - 推送 `v*` tag 会触发 `Release` workflow，在 GitHub Windows runner 上重新执行
   全量门禁和打包，禁止复用本机旧产物。
-- Release 必须包含平台产物、`manifest.json`、`sbom.spdx.json` 与
-  `SHA256SUMS.txt`，说明从 `CHANGELOG.md` 的对应版本小节提取。
-- 发布前先在 draft release 上传并核对资产，再转正式发布；资产同时生成 GitHub
+- Release 必须包含平台产物、`manifest.json`、`sbom.spdx.json`、
+  `SHA256SUMS.txt`，以及 release 签名的安卓 APK 与 APK 校验和；说明从
+  `CHANGELOG.md` 的对应版本小节提取。
+- `Release` workflow 只创建 draft 并上传自动构建的资产；安卓 APK 由发布者在
+  draft 阶段上传、核对资产后再手动转正式发布。Windows 资产同时生成 GitHub
   build provenance 与 SBOM attestation。
 - Windows Authenticode 证书尚未配置，因此 exe 目前不是受操作系统信任的签名
   二进制。证书接入前不得把“已签名”作为对外声明。
