@@ -7,6 +7,14 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-20
+
+### Added
+
+- **安卓 APK 随 Release 分发**：GitHub Release 附带 release 签名 APK
+  （`versionName=0.4.1`、`versionCode=2`），与 Windows 包同版本发布；
+  APK SHA256：`53BE1A3E34A751CD7B9B3F3E6AEFBB418C9307CEFACE2849C791A4820056A3A6`。
+
 ## [0.4.0] - 2026-10-20
 
 ### Added
