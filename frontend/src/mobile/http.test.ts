@@ -61,7 +61,8 @@ describe("外部 HTTP 适配", () => {
 
   it("超时与普通错误变成可读文案", () => {
     expect(readableHttpError(new DOMException("late", "TimeoutError"))).toContain("请求超时");
-    expect(readableHttpError(new Error("boom"))).toBe("boom");
-    expect(readableHttpError("plain")).toBe("plain");
+    expect(readableHttpError(new Error("HTTP 401：bad key"))).toContain("鉴权");
+    expect(readableHttpError(new Error("boom"))).toBe("操作失败，请重试");
+    expect(readableHttpError("plain")).toBe("操作失败，请重试");
   });
 });
