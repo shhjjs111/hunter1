@@ -20,15 +20,15 @@ import {
   scoreJob,
   testConnection,
 } from "./llm";
+import { safeErrorText } from "./http";
 
 const APPLICATIONS_PAGE_SIZE = 50;
 const CONVERSATIONS_PAGE_SIZE = 50;
 const JOBS_PAGE_SIZE = 20;
 
 function json(data: unknown, status = 200): Response {
-  // 本地 App 的用户就是数据所有者：错误详情只回显给本人。
-  // `safeErrorMessage` 已去掉堆栈与换行，这里显式抑制栈信息外泄的通用告警。
-  // lgtm[js/stack-trace-exposure]
+  // 本地 App 的用户就是数据所有者；`safeErrorMessage` 只回显首行并截断，
+  // 不会返回 `error.stack`。
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -43,9 +43,7 @@ function failure(status: number, detail: string): Response {
  * 只把错误的第一行回显给界面：用户可以据此修正配置，但看不到堆栈与文件路径。
  */
 export function safeErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const firstLine = message.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return firstLine.slice(0, 300) || "操作失败，请重试";
+  return safeErrorText(error);
 }
 
 function now(): string {

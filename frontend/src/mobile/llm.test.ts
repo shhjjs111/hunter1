@@ -104,7 +104,7 @@ describe("模型探测与评分", () => {
       api_key: "bad",
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toContain("401");
+    expect(result.message).toContain("鉴权");
   });
 
   it("评分解析围栏 JSON 并拒绝超范围分数", async () => {

@@ -73,16 +73,42 @@ export async function requestJson<T>(url: string, options: RequestOptions = {}):
   }
 }
 
-export function readableHttpError(error: unknown): string {
+const SAFE_ERROR_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/timeout|abort/i, "请求超时：检查网络或端点地址"],
+  [/模型未配置/i, "模型未配置：请先在「配置」页填好 base_url / 模型 / API Key"],
+  [
+    /画像未配置|画像至少/i,
+    "候选人画像未配置或不合法：请先在「配置」页填写关键词 / 方向 / 背景摘要",
+  ],
+  [/base_url 与模型名不能为空|API Key 不能为空/i, "请先填完 base_url、模型名与 API Key"],
+  [/模型没有返回内容|模型没有给出/i, "模型没有返回有效结果，请重试"],
+  [/401|unauthorized/i, "鉴权失败：请检查 API Key"],
+  [/403|forbidden/i, "请求被拒绝：请检查访问权限"],
+  [/404|not found/i, "接口不存在：请检查 base_url"],
+  [/429|rate limit|too many/i, "请求过于频繁：请稍后重试"],
+  [/\b5\d\d\b/, "上游服务出错：请稍后重试"],
+  [/非 JSON|JSON/i, "上游返回了非 JSON 响应"],
+  [/network|fetch|connect|ssl|tls/i, "网络连接失败：检查网络或地址"],
+];
+
+/**
+ * 把任意异常收敛为固定文案。绝不回显 `error.message` / `error.stack`：
+ * 本地 API 的错误会进入 HTTP 响应，原始文本可能带端点、路径或堆栈信息。
+ */
+export function safeErrorText(error: unknown): string {
   const named = error as { name?: unknown; message?: unknown } | null;
   if (named?.name === "TimeoutError" || named?.name === "AbortError") {
     return "请求超时：检查网络或端点地址";
   }
-  if (error instanceof Error) {
-    return error.message;
+  const message = error instanceof Error ? error.message : String(error);
+  for (const [pattern, text] of SAFE_ERROR_RULES) {
+    if (pattern.test(message)) {
+      return text;
+    }
   }
-  if (typeof named?.message === "string") {
-    return named.message;
-  }
-  return String(error);
+  return "操作失败，请重试";
+}
+
+export function readableHttpError(error: unknown): string {
+  return safeErrorText(error);
 }

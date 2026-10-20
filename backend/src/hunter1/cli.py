@@ -172,6 +172,8 @@ def _port_problem(host: str, port: int) -> str | None:
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
+            # 这里只探测端口能否绑定，不承接流量；--lan 的真实监听由 uvicorn 执行。
+            # lgtm[py/bind-socket-all-network-interfaces]
             probe.bind((host, port))
         except PermissionError:
             return f"端口 {port} 无权绑定（1024 以下是特权端口，需要管理员/root 权限）。"

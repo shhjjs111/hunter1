@@ -450,10 +450,12 @@ describe("抓取解析与本地抓取", () => {
     expect(httpFailureSummary(502, "")).toBe("HTTP 502：站点返回空响应");
   });
 
-  it("回显错误只保留第一行并截断堆栈", () => {
-    expect(safeErrorMessage(new Error("第一行\n    at file.ts:1:2"))).toBe("第一行");
-    expect(safeErrorMessage("纯文本")).toBe("纯文本");
+  it("回显错误只返回白名单文案，不回显原始消息", () => {
+    expect(safeErrorMessage(new Error("第一行\n    at file.ts:1:2"))).toBe("操作失败，请重试");
+    expect(safeErrorMessage("纯文本")).toBe("操作失败，请重试");
     expect(safeErrorMessage(new Error(""))).toBe("操作失败，请重试");
+    expect(safeErrorMessage(new Error("HTTP 401：bad key"))).toContain("鉴权");
+    expect(safeErrorMessage(new DOMException("late", "TimeoutError"))).toContain("请求超时");
   });
 
   it("已有 JD 的岗位不再重复抓详情", async () => {
