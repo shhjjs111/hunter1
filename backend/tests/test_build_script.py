@@ -630,6 +630,22 @@ class TestVersionFile:
         assert problems and any("VERSION" in p for p in problems)
 
 
+class TestDistExtras:
+    """解压后第一眼要能看到使用说明与手机访问启动器。"""
+
+    def test_writes_guide_and_launcher(self, tmp_path: Path) -> None:
+        dist = _make_dist(tmp_path)
+        build.write_dist_extras(dist)
+
+        guide = dist / build.GUIDE_NAME
+        assert guide.read_text(encoding="utf-8") == build.GUIDE_SOURCE.read_text(encoding="utf-8")
+
+        launcher = dist / build.LAN_LAUNCHER_NAME
+        raw = launcher.read_bytes()
+        assert b"hunter1.exe serve --lan" in raw
+        assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+
+
 class TestVersionOutputJudgment:
     """`exe --version` 的判据（纯函数，不依赖真产物）。"""
 

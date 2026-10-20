@@ -5,6 +5,10 @@ import { App } from "./app/App";
 import "./app/styles.css";
 import "./app/mobile.css";
 import { applyInitialTheme } from "./app/theme";
+import { installMobileBackend } from "./mobile";
+
+// 安卓独立 App：先把本地 API 装上，再让 React 发第一个请求。
+installMobileBackend();
 
 // 挂载前同步设好主题，避免首帧先闪一下错误的配色
 applyInitialTheme();

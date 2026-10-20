@@ -4,8 +4,46 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyInitialTheme } from "../../app/theme";
 import { jsonResponse, renderWithChrome, stubApi, stubMedia } from "../../test-utils";
 import { MobileSettingsPage } from "./MobileSettingsPage";
+import { loadSyncConfig, saveSyncConfig, syncWithDesktop } from "../../mobile/sync";
+
+vi.mock("../../mobile", () => ({ isMobileApp: vi.fn(() => true) }));
+vi.mock("../../mobile/sync", () => ({
+  loadSyncConfig: vi.fn(),
+  saveSyncConfig: vi.fn(),
+  syncWithDesktop: vi.fn(),
+}));
+
+const EMPTY_COUNTS = {
+  jobs_created: 0,
+  jobs_updated: 0,
+  jobs_kept: 0,
+  applications_created: 0,
+  applications_updated: 0,
+  applications_kept: 0,
+  applications_skipped: 0,
+  profile_updated: false,
+};
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(loadSyncConfig).mockResolvedValue({
+    desktopUrl: "http://192.168.1.5:8000",
+    accessCode: "code-123",
+    lastSyncAt: null,
+    lastResult: null,
+  });
+  vi.mocked(saveSyncConfig).mockImplementation(async (patch) => ({
+    desktopUrl: "",
+    accessCode: "",
+    lastSyncAt: null,
+    lastResult: null,
+    ...patch,
+  }));
+  vi.mocked(syncWithDesktop).mockResolvedValue({
+    local: EMPTY_COUNTS,
+    desktop: EMPTY_COUNTS,
+    message: "双向完成",
+  });
   stubMedia({ reduced: true });
   window.localStorage.clear();
   delete document.documentElement.dataset.theme;
@@ -91,5 +129,26 @@ describe("MobileSettingsPage", () => {
     renderWithChrome(<MobileSettingsPage />);
     expect(await screen.findByText("已保存的配置不可用 —— 请重新填写并保存")).toBeTruthy();
     expect(screen.getByText(/已保存的模型配置不合法/)).toBeTruthy();
+  });
+
+  it("电脑同步：回显地址、保存访问码并提示结果", async () => {
+    stubApi();
+    const { chrome } = renderWithChrome(<MobileSettingsPage />);
+
+    expect(await screen.findByLabelText("电脑地址")).toHaveProperty(
+      "value",
+      "http://192.168.1.5:8000",
+    );
+    fireEvent.change(screen.getByLabelText("访问码"), { target: { value: "new-code" } });
+    fireEvent.click(screen.getByRole("button", { name: "双向同步" }));
+
+    await waitFor(() =>
+      expect(saveSyncConfig).toHaveBeenCalledWith({
+        desktopUrl: "http://192.168.1.5:8000",
+        accessCode: "new-code",
+      }),
+    );
+    await waitFor(() => expect(syncWithDesktop).toHaveBeenCalledWith("both"));
+    await waitFor(() => expect(chrome.showToast).toHaveBeenCalledWith("success", "双向完成"));
   });
 });

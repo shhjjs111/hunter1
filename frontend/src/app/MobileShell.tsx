@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 
+import appIcon from "../assets/app-icon.png";
 import envDark from "../assets/env-dark.webp";
 import envLight from "../assets/env-light.webp";
 import { MobileJobsPage } from "../features/jobs/MobileJobsPage";
@@ -9,6 +11,8 @@ import { MobileApplicationsPage } from "../features/applications/MobileApplicati
 import { MobileAssistantPage } from "../features/assistant/MobileAssistantPage";
 import { MobileSettingsPage } from "../features/settings/MobileSettingsPage";
 import { useCrawlStatus } from "../features/crawl/api";
+import { isMobileApp } from "../mobile";
+import { maybeAutoCrawl } from "../mobile/localApi";
 import { MobileIcon } from "../shared/ui/mobile";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MobileChromeContext, type ToastTone } from "./mobileChrome";
@@ -23,6 +27,7 @@ export function MobileShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
+  const queryClient = useQueryClient();
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
   const crawl = useCrawlStatus();
   const routeIndex = navIndex(location.pathname);
@@ -100,6 +105,43 @@ export function MobileShell() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!isMobileApp()) {
+      return;
+    }
+    let disposed = false;
+    const attempt = () => {
+      void maybeAutoCrawl().then((started) => {
+        if (disposed || !started) {
+          return;
+        }
+        // 本地实现会立刻把 running 置位；重取一次让抓取页马上看到进度。
+        void queryClient.invalidateQueries({ queryKey: ["crawl", "status"] });
+        showToast("success", "已开始每日自动抓取");
+      });
+    };
+    // App 首次打开 + 从后台切回前台都补一次；是否真的跑由 24 小时窗口决定。
+    // 首屏先画出来再抓：抓取的第一页 HTML 很大，解析会占用主线程，紧跟挂载启动
+    // 会把 Android WebView 的首帧拖成白屏（模拟器实测）。
+    const bootTimer = window.setTimeout(attempt, 600);
+    const onForeground = () => {
+      if (document.visibilityState === "visible") {
+        attempt();
+      }
+    };
+    document.addEventListener("visibilitychange", onForeground);
+    window.addEventListener("focus", onForeground);
+    // 用户把 App 一直开着时，前台定时检查也能跨过 24 小时窗口。
+    const timer = window.setInterval(onForeground, 60 * 60 * 1000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(bootTimer);
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onForeground);
+      window.removeEventListener("focus", onForeground);
+    };
+  }, [queryClient, showToast]);
 
   useEffect(() => {
     if (sceneRef.current) {
@@ -222,7 +264,7 @@ export function MobileShell() {
               </button>
             ) : (
               <div className="mobile-brand glass">
-                <span className="mobile-brand-logo">H</span>
+                <img className="mobile-brand-logo" src={appIcon} alt="" />
                 <div>
                   <b>Hunter1</b>
                   <small>求职工作台</small>

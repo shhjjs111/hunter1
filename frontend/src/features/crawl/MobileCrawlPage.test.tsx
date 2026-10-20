@@ -67,14 +67,15 @@ describe("MobileCrawlPage", () => {
     expect(await screen.findByText(/读取抓取进度失败/)).toBeTruthy();
   });
 
-  it("还没跑过抓取时给出空状态", async () => {
+  it("本次启动后还没跑过抓取时给出空状态", async () => {
     stubApi((_request, url) =>
       url.pathname === "/api/crawl/status"
         ? jsonResponse({ ...CRAWL_IDLE, sites: [], total_fetched: 0, total_created: 0 })
         : undefined,
     );
     renderWithChrome(<MobileCrawlPage />);
-    expect(await screen.findByText(/还没有跑过抓取/)).toBeTruthy();
+    expect(await screen.findByText("本次启动后还没有抓取")).toBeTruthy();
+    expect(screen.getByText(/打开 App 时会按 24 小时窗口自动补抓/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "开始抓取" })).toBeTruthy();
   });
 });

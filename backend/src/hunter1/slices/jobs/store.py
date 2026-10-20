@@ -41,5 +41,26 @@ class JobStore:
         repository: SqliteJobRepository = self._db.jobs()
         return repository.count(keyword=keyword) if keyword else repository.count()
 
+    def all(self) -> list[Job]:
+        """整库岗位（同步快照用）。
+
+        按页读取而不是一次性 `list(limit=None)`：仓储的 `check_page` 会拒绝
+        `limit=-1`，而同步确实需要全量。500 与仓储内部的 `IN (...)` 分块同量级。
+        """
+        repository: SqliteJobRepository = self._db.jobs()
+        items: list[Job] = []
+        offset = 0
+        page_size = 500
+        while True:
+            batch = repository.list(limit=page_size, offset=offset)
+            items.extend(batch)
+            if len(batch) < page_size:
+                return items
+            offset += page_size
+
+    def upsert_facts(self, job: Job) -> None:
+        """只写岗位事实列（不碰评分列）。同步导入与抓取共用同一约束。"""
+        self._db.jobs().upsert_facts(job)
+
 
 __all__ = ["JobStore"]

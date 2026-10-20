@@ -594,3 +594,82 @@ class TestNoArgsDefaultsToServe:
         assert crawl_args.command == "crawl"
         _p, update_args = _parse_args(["update"])
         assert update_args.command == "update"
+
+
+class TestLanServe:
+    """`--lan` 的安全契约：绑非回环地址就必须有访问码。"""
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *extra: str,
+    ) -> tuple[dict[str, object], Path]:
+        import socket
+
+        import uvicorn
+
+        captured: dict[str, object] = {}
+
+        def fake_run(_app: object, **kwargs: object) -> None:
+            captured.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(uvicorn, "run", fake_run)
+        monkeypatch.setattr("hunter1.cli.detect_lan_ip", lambda: "192.168.1.5")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = str(probe.getsockname()[1])
+        db_file = tmp_path / "data" / "h.h.db"
+        with pytest.raises(SystemExit):
+            main(["serve", "--db", str(db_file), "--no-browser", "--port", port, *extra])
+        return captured, db_file
+
+    def test_lan_binds_all_interfaces_and_prints_access_code(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        captured, db_file = self._run(tmp_path, monkeypatch, "--lan")
+        out = capsys.readouterr().out
+        assert captured["host"] == "0.0.0.0"
+        assert "手机访问：http://192.168.1.5:" in out
+        assert "访问码：" in out
+        token_file = db_file.parent / "access_token"
+        assert token_file.is_file()
+        assert token_file.read_text(encoding="utf-8").strip() in out
+
+    def test_explicit_all_interfaces_also_requires_a_code(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        captured, db_file = self._run(tmp_path, monkeypatch, "--host", "0.0.0.0")
+        out = capsys.readouterr().out
+        assert captured["host"] == "0.0.0.0"
+        assert "访问码：" in out
+        assert (db_file.parent / "access_token").is_file()
+
+    def test_loopback_serve_does_not_create_a_code(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        captured, db_file = self._run(tmp_path, monkeypatch)
+        out = capsys.readouterr().out
+        assert captured["host"] == "127.0.0.1"
+        assert "访问码：" not in out
+        assert not (db_file.parent / "access_token").exists()
+
+
+class TestLanFlag:
+    def test_lan_defaults_off(self) -> None:
+        args = _build_parser().parse_args(["serve"])
+        assert args.lan is False
+
+    def test_lan_can_be_enabled(self) -> None:
+        args = _build_parser().parse_args(["serve", "--lan"])
+        assert args.lan is True

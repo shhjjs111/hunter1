@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from hunter1.application.ports import Crawler, JobRepository
-from hunter1.domain.crawl import RawJob, job_identity
+from hunter1.domain.crawl import RawJob, company_identity, job_identity
 from hunter1.domain.models import CaptureStatus, Job
 
 
@@ -298,7 +298,7 @@ def _company_id(raw: RawJob) -> str:
     所以「改动会让全库公司关联断裂」这句话把影响说大了 —— 眼下的实际后果只是
     `jobs.company_id` 的分组错乱，再往后接公司维度的功能时才会真的疼。
     """
-    return job_identity(detail_url="", company=raw.company, title="__company__")[:32]
+    return company_identity(raw.company)
 
 
 def crawl_all(

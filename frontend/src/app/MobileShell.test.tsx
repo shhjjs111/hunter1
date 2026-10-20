@@ -1,11 +1,29 @@
+import "fake-indexeddb/auto";
+
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { appRoutes } from "./App";
 import { applyInitialTheme } from "./theme";
 import { jsonResponse, renderRoutes, stubApi, stubMedia } from "../test-utils";
+import { maybeAutoCrawl } from "../mobile/localApi";
+import { resetDBForTests } from "../mobile/db";
 
-beforeEach(() => {
+const mobileMock = vi.hoisted(() => ({ native: false }));
+
+vi.mock("../mobile", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../mobile")>();
+  return { ...actual, isMobileApp: () => mobileMock.native };
+});
+
+vi.mock("../mobile/localApi", () => ({
+  maybeAutoCrawl: vi.fn().mockResolvedValue(false),
+}));
+
+beforeEach(async () => {
+  await resetDBForTests();
+  mobileMock.native = false;
+  vi.mocked(maybeAutoCrawl).mockClear();
   stubMedia({ reduced: true, mobile: true });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -30,6 +48,21 @@ function dock() {
 }
 
 describe("MobileShell", () => {
+  it("原生平台打开和回到前台会检查每日补抓", async () => {
+    stubApi();
+    mobileMock.native = true;
+    const auto = vi.mocked(maybeAutoCrawl);
+    renderRoutes(appRoutes, "/");
+    await screen.findByText("AI产品经理");
+    await waitFor(() => expect(auto).toHaveBeenCalledTimes(1));
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(auto.mock.calls.length).toBeGreaterThan(1));
+    const beforeFocus = auto.mock.calls.length;
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() => expect(auto.mock.calls.length).toBeGreaterThan(beforeFocus));
+  });
+
   it("渲染五个常驻页面与 Dock，非当前页不可聚焦", async () => {
     stubApi();
     const { container } = renderRoutes(appRoutes, "/");

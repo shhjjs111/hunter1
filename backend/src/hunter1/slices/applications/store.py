@@ -63,6 +63,18 @@ class ApplicationStore:
     def count(self) -> int:
         return self._db.applications().count()
 
+    def all(self) -> list[Application]:
+        """整库投递记录（同步快照用）。"""
+        items: list[Application] = []
+        offset = 0
+        page_size = 500
+        while True:
+            batch = self._db.applications().list(limit=page_size, offset=offset)
+            items.extend(batch)
+            if len(batch) < page_size:
+                return items
+            offset += page_size
+
     def delete(self, application_id: str) -> None:
         self._db.applications().delete(application_id)
 

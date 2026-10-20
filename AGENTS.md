@@ -30,7 +30,8 @@ hunter1/
   （即该切片 `__init__.py` 导出的公开面）。禁止深链内部模块
   （如 `...slices.jobs.store`）—— 深链让领地边界失效，并行改动的冲突会回来。
 - **依赖方向白名单**（架构测试钉死，越权即红灯）：
-  `platform` ← `slices`；`slices` 之间只允许 `crawl/scoring/applications/assistant → jobs`。
+  `platform` ← `slices`；`slices` 之间只允许 `crawl/scoring/applications/assistant → jobs`，
+  以及 `sync → jobs/applications/scoring`（同步切片只做跨切片的数据搬运）。
   进程边界协议从 `hunter1.application.ports` 取（显式豁免，见架构测试的
   `SHARED_PORT_MODULE`）。
 - **同切片内串行，跨切片并行。**

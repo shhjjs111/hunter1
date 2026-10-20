@@ -138,4 +138,14 @@ def job_identity(
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
-__all__ = ["RawJob", "job_identity", "normalize_detail_url"]
+def company_identity(company: str) -> str:
+    """公司身份的稳定哈希（sha256 前 128 位）。
+
+    与 `slices.crawl.service._company_id` 使用同一 basis。抽到领域层是为了让
+    同步切片在「电脑上没有这条岗位」时也能生成与抓取路径一致的 `company_id`，
+    而不是各自维护一份格式字符串。
+    """
+    return job_identity(detail_url="", company=company, title="__company__")[:32]
+
+
+__all__ = ["RawJob", "company_identity", "job_identity", "normalize_detail_url"]

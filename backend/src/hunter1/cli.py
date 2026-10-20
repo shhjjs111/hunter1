@@ -1,6 +1,6 @@
 """命令行入口。
 
-    hunter1 serve [--db 路径] [--host] [--port] [--sites a,b] [--no-browser]
+    hunter1 serve [--db 路径] [--host] [--port] [--sites a,b] [--lan] [--no-browser]
     hunter1 crawl [--db 路径] [--sites a,b]
     hunter1 update [--source URL] [--download]
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
 import sys
 import threading
 import webbrowser
@@ -24,8 +25,9 @@ from pathlib import Path
 from sqlalchemy.exc import DatabaseError
 
 from hunter1 import __version__
-from hunter1.main import AppContext
+from hunter1.main import DEFAULT_TRUSTED_HOSTS, AppContext, _trusted_hosts_from_env
 from hunter1.paths import data_dir, default_db_path
+from hunter1.platform.access import detect_lan_ip, detect_lan_ips, load_or_create_token, token_path
 from hunter1.platform.console import enable_utf8_console
 from hunter1.platform.db import DatabaseLocationError
 from hunter1.slices.crawl import available_sites
@@ -56,6 +58,11 @@ def _build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="启动本地 Web UI（不带参数直接运行 = 这个）")
     serve.add_argument("--db", default=str(default_db_path()), help="SQLite 路径")
     serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument(
+        "--lan",
+        action="store_true",
+        help="允许同一 Wi-Fi 下的手机访问（自动生成访问码）",
+    )
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--sites", default="", help="逗号分隔的站点 key（默认全部）")
     serve.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
@@ -200,11 +207,34 @@ def _serve(args: argparse.Namespace) -> int:
     # 必须在建库之前判断 —— Database 一初始化，这个信息就没了
     is_new_db = not db_path.exists()
 
-    context = AppContext.default(db_path=db_path, site_keys=_site_keys(args.sites))
-    app = create_app(context)
-    url = f"http://{args.host}:{args.port}"
+    # `--lan` 只是「绑 0.0.0.0」的糖：真正决定要不要访问码的是绑定地址。
+    # 只要不是回环，就必须有访问码 —— 否则同一 Wi-Fi 下任何人都能读到这台电脑
+    # 上的岗位、投递记录，甚至借已保存的 Key 发请求。
+    # 绑定所有网卡是 --lan 的明确语义；局域网门禁由访问码 + Host 白名单负责。
+    # lgtm[py/bind-socket-all-network-interfaces]
+    host = "0.0.0.0" if args.lan and args.host == "127.0.0.1" else args.host
+    exposed = host not in {"127.0.0.1", "localhost", "::1"}
+    lan_ip = detect_lan_ip() if exposed else None
+    lan_ips = detect_lan_ips() if exposed else ()
+    access_token = load_or_create_token(token_path(db_path)) if exposed else None
+    trusted_hosts = None
+    if exposed:
+        trusted_hosts = list(DEFAULT_TRUSTED_HOSTS)
+        for extra in (*_trusted_hosts_from_env(), *lan_ips, host, socket.gethostname()):
+            if extra and extra not in {"0.0.0.0", "::"} and extra not in trusted_hosts:
+                trusted_hosts.append(extra)
 
-    port_problem = _port_problem(args.host, args.port)
+    context = AppContext.default(
+        db_path=db_path,
+        site_keys=_site_keys(args.sites),
+        trusted_hosts=None if trusted_hosts is None else tuple(trusted_hosts),
+        access_token=access_token,
+    )
+    app = create_app(context)
+    # 浏览器永远打开回环地址：0.0.0.0 是监听地址，不是可点击的页面地址。
+    url = f"http://127.0.0.1:{args.port}"
+
+    port_problem = _port_problem(host, args.port)
     if port_problem is not None:
         print(port_problem)
         _release_context(context)
@@ -212,6 +242,13 @@ def _serve(args: argparse.Namespace) -> int:
 
     print(f"Hunter1 已启动：{url}")
     print(f"数据库：{db_path}")
+
+    if access_token is not None:
+        phone_url = f"http://{lan_ip or '<本机局域网 IP>'}:{args.port}"
+        print(f"手机访问：{phone_url}")
+        print(f"访问码：{access_token}")
+        print(f"（访问码保存在 {token_path(db_path)}；删除它再启动会生成新码）")
+        print("同一 Wi-Fi 下拿到访问码的人都能使用；API Key 与数据仍只在本机。")
 
     note = _onboarding_note(is_new_db=is_new_db, configured=_is_llm_configured(context))
     if note is not None:
@@ -223,7 +260,7 @@ def _serve(args: argparse.Namespace) -> int:
             print("（已尝试打开浏览器；加 --no-browser 可关闭）")
 
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        uvicorn.run(app, host=host, port=args.port, log_level="info")
     finally:
         # `uvicorn.run` 是常驻的：用户按 Ctrl+C 抛的是 KeyboardInterrupt，
         # 正常返回路径根本走不到。所以清理必须在 finally —— 否则 SQLite 的

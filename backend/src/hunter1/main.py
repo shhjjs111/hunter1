@@ -32,6 +32,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
 from hunter1.domain.settings import LLMSettings
+from hunter1.platform.access import AccessGateMiddleware
 from hunter1.platform.db import Database
 from hunter1.platform.web_security import SecurityBoundaryMiddleware
 from hunter1.slices.applications.router import build_router as build_applications_router
@@ -47,6 +48,8 @@ from hunter1.slices.scoring.router import build_router as build_scoring_router
 from hunter1.slices.scoring.store import ScoreStore
 from hunter1.slices.settings.router import build_router as build_settings_router
 from hunter1.slices.settings.store import SettingsStore
+from hunter1.slices.sync.router import build_router as build_sync_router
+from hunter1.slices.sync.store import SyncStore
 
 API_PREFIX = "/api"
 
@@ -158,6 +161,8 @@ class AppContext:
     #: 允许的 Host 头（DNS rebinding 防线，理由见 `create_app` 里的说明）。
     #: 默认见 `DEFAULT_TRUSTED_HOSTS`；生产装配可用 `HUNTER1_TRUSTED_HOSTS` 覆盖。
     trusted_hosts: tuple[str, ...] = DEFAULT_TRUSTED_HOSTS
+    #: 非空时启用局域网访问码门禁（只有监听非回环地址才会由 CLI 传入）。
+    access_token: str | None = None
 
     def crawler_factory(self) -> list[Crawler]:
         """构造本轮要跑的抓取器（默认全部注册站点）。"""
@@ -172,6 +177,8 @@ class AppContext:
         db_path: str | Path,
         site_keys: list[str] | None = None,
         fetcher: TextFetcher | None = None,
+        trusted_hosts: tuple[str, ...] | None = None,
+        access_token: str | None = None,
     ) -> AppContext:
         """按本机默认配置装配（真实 SQLite + 真实 HTTP 抓取器）。"""
         database = Database(db_path)
@@ -201,7 +208,8 @@ class AppContext:
             # 生产装配读 `HUNTER1_TRUSTED_HOSTS`：`--host 0.0.0.0`（README 文档化的
             # 临时演示用法）必须能把实际使用的主机名 / IP 放进白名单，否则会被
             # Host 校验全线挡成 400。默认仍是只允许回环。
-            trusted_hosts=_trusted_hosts_from_env(),
+            trusted_hosts=(_trusted_hosts_from_env() if trusted_hosts is None else trusted_hosts),
+            access_token=access_token,
         )
 
 
@@ -230,6 +238,10 @@ def create_app(context: AppContext) -> FastAPI:
     # 装配无需逐处改 `base_url`。**它不削弱防护** —— `testserver` 是不可公网解析的
     # 单标签名（浏览器对它的请求根本发不出去），DNS rebinding 的攻击者既不能注册它、
     # 也不能让浏览器把请求的 Host 写成它；而真实攻击的 Host 永远是攻击者域名。
+    # 访问码门禁放在最内层：Host 校验与安全响应头仍然先跑，未授权的 401 也带
+    # 同一组安全头。默认 `access_token=None` 时完全不挂载，单机行为不变。
+    if context.access_token:
+        app.add_middleware(AccessGateMiddleware, token=context.access_token)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(context.trusted_hosts))
     # 纯 ASGI 中间件：校验跨站写入并补安全头。放在 TrustedHost 之后注册，
     # 因此位于更外层 —— Host 被拒的 400 响应也带同一组安全头。
@@ -289,9 +301,10 @@ def create_app(context: AppContext) -> FastAPI:
     job_store = JobStore(context.db)
     _mount(build_jobs_router(store=job_store))
     _mount(build_crawl_router(runner=runner))
+    application_store = ApplicationStore(context.db)
     _mount(
         build_applications_router(
-            store=ApplicationStore(context.db),
+            store=application_store,
             jobs=job_store,
             clock=context.clock,
         )
@@ -317,6 +330,16 @@ def create_app(context: AppContext) -> FastAPI:
             clock=context.clock,
             # 评分失败文案的脱敏兜底（报告次要项）—— 与 settings 切片同款。
             api_key_provider=lambda: _current_api_key(context),
+        )
+    )
+    _mount(
+        build_sync_router(
+            store=SyncStore(
+                jobs=job_store,
+                applications=application_store,
+                scores=scoring_store,
+                clock=context.clock,
+            )
         )
     )
 

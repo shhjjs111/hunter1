@@ -18,6 +18,9 @@ export default tseslint.config(
   {
     ignores: [
       "dist/**",
+      // Capacitor 生成的安卓工程（含构建产物），不是前端源码
+      "android/**",
+      "coverage/**",
       // 生成物，禁手改（见 AGENTS.md 契约纪律）
       "src/shared/api/schema.d.ts",
       // 契约生成器的独立依赖树，不参与主工程 lint
