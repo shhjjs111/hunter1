@@ -7,10 +7,13 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-20
+
 ### Added
 
-- **手机 ↔ 电脑同步**：同一 Wi-Fi 下可双向同步岗位、投递与候选人画像；
-  按详情页 URL 对齐，时间戳较新的一方胜出。API Key 与助手会话只留本机。
+- **安卓 APK 随 Release 分发**：GitHub Release 附带 release 签名 APK
+  （`versionName=0.4.1`、`versionCode=2`），与 Windows 包同版本发布；
+  APK SHA256：`53BE1A3E34A751CD7B9B3F3E6AEFBB418C9307CEFACE2849C791A4820056A3A6`。
 
 ## [0.4.0] - 2026-10-20
 
@@ -22,6 +25,8 @@
   记住 30 天。非回环监听默认强制访问码，未授权请求返回 401。
 - 分发包附带 `使用说明.md` 与 `hunter1-lan.cmd`，双击即可开启手机访问。
 - **安卓独立 App**：Capacitor APK，数据存手机本地（IndexedDB），抓取与模型调用走原生 HTTP；不需要电脑或同一 Wi-Fi。
+- **手机 ↔ 电脑同步**：同一 Wi-Fi 下可双向同步岗位、投递与候选人画像；
+  按详情页 URL 对齐，时间戳较新的一方胜出。API Key 与助手会话只留本机。
 
 ### Fixed
 

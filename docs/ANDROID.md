@@ -69,13 +69,16 @@ Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 | 用途 | 路径 |
 |---|---|
 | 调试 / 快速试用 | `frontend/android/app/build/outputs/apk/debug/app-debug.apk` |
-| 正式分发（release 签名） | `dist/hunter1-android-0.4.0.apk` |
+| 正式分发（release 签名） | `dist/hunter1-android-0.4.1.apk` |
 
 本次 release 包：
 
-- `versionName=0.4.0`、`versionCode=1`
+- `versionName=0.4.1`、`versionCode=2`
 - `minSdk=24`、`targetSdk=36`
-- SHA256：`9EC096DB011C027DECCD5ABAB84518F0B64716E8B9A883E6F842730269BFF329`
+- SHA256：`53BE1A3E34A751CD7B9B3F3E6AEFBB418C9307CEFACE2849C791A4820056A3A6`
+
+正式 APK 随 [GitHub Release](https://github.com/shhjjs111/hunter1/releases) 提供；
+本地构建产物在 `dist/`，不进入 Git 仓库。
 
 签名密钥与密码保存在本机 `.tools/android/`（`hunter1-release.jks` 与
 `keystore-password.txt`），**不在仓库里**。请自行备份；丢失后无法覆盖安装升级，

@@ -75,7 +75,10 @@ def test_release_workflow_is_tag_driven_and_attested() -> None:
     assert "make_sbom.py" in text
     assert "SHA256SUMS.txt" in text
     assert "--draft" in text
-    assert 'gh release edit "$TAG" --draft=false' in text
+    assert 'gh release edit "$TAG" --draft=false' not in text, (
+        "Release workflow 只创建草稿；安卓 APK 需在人工核对后随草稿一起发布"
+    )
+    assert "安卓 APK" in text
 
 
 def test_required_quality_status_context_stays_stable() -> None:
