@@ -19,6 +19,8 @@ from hunter1.domain.settings import LLMSettings
 from hunter1.platform.db.schema import SettingRow
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from hunter1.platform.db.database import Database
 
 LLM_KEY = "llm"
@@ -63,21 +65,26 @@ class SqliteSettingsRepository:
 
     # ---- 通用键值 ----
 
-    def get_raw(self, key: str) -> dict[str, Any] | None:
-        with self._db.session() as session:
-            row = session.get(SettingRow, key)
-            if row is None:
-                return None
-            return _as_object(row.value, key)
+    def get_raw(self, key: str, *, session: Session | None = None) -> dict[str, Any] | None:
+        if session is None:
+            with self._db.session() as own:
+                return self.get_raw(key, session=own)
+        row = session.get(SettingRow, key)
+        if row is None:
+            return None
+        return _as_object(row.value, key)
 
-    def set_raw(self, key: str, value: dict[str, Any]) -> None:
-        with self._db.session() as session:
-            row = session.get(SettingRow, key)
-            if row is None:
-                row = SettingRow(key=key)
-                session.add(row)
-            row.value = dict(value)
-            session.commit()
+    def set_raw(self, key: str, value: dict[str, Any], *, session: Session | None = None) -> None:
+        if session is None:
+            with self._db.session() as own:
+                self.set_raw(key, value, session=own)
+                own.commit()
+            return
+        row = session.get(SettingRow, key)
+        if row is None:
+            row = SettingRow(key=key)
+            session.add(row)
+        row.value = dict(value)
 
     def delete_raw(self, key: str) -> None:
         with self._db.session() as session:

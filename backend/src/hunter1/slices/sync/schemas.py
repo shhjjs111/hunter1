@@ -38,7 +38,39 @@ class _SyncModel(BaseModel):
 
 
 class SyncJob(_SyncModel):
-    """一台设备上的岗位事实 + 评分结论。"""
+    """一台设备上的岗位事实 + 评分结论（**导出形状**）。
+
+    这一层的字段刻意不设长度上限、也不校验 `detail_url` 非空：库里可能存着
+    「截断提示让正文刚好超过上限」的 JD、历史遗留的超长结论，或者详情 URL 为空
+    的岗位。导出是「把本机事实搬出去」，任何一条坏数据都不该让整份快照 500。
+    需要写库的校验留给导入模型（`SyncJobImport`），在事务里动任何一行之前完成。
+    """
+
+    id: str
+    title: str
+    company: str
+    city: str | None = None
+    source: str = ""
+    detail_url: str = ""
+    jd_raw: str | None = None
+    capture_status: CaptureStatus = CaptureStatus.UNKNOWN
+    match_score: int | None = Field(default=None, ge=0, le=100)
+    score_summary: str | None = None
+    score_advantages: str | None = None
+    score_gaps: str | None = None
+    score_model: str | None = None
+    score_prompt_version: str | None = None
+    scored_at: datetime | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+
+class SyncJobImport(SyncJob):
+    """合并请求里的岗位：在导出形状上重新加回写库前的全部校验。
+
+    导出要容忍历史坏数据，但**导入**会写进本机库，不能把超长正文、空标题或
+    越界字段带进来。上限与各切片自己的表单 / 落库约束保持一致。
+    """
 
     id: str = Field(min_length=1, max_length=255)
     title: str = Field(min_length=1, max_length=512)
@@ -47,19 +79,14 @@ class SyncJob(_SyncModel):
     source: str = Field(default="", max_length=128)
     detail_url: str = Field(min_length=1, max_length=2048)
     jd_raw: str | None = Field(default=None, max_length=MAX_JD_CHARS)
-    capture_status: CaptureStatus = CaptureStatus.UNKNOWN
-    match_score: int | None = Field(default=None, ge=0, le=100)
     score_summary: str | None = Field(default=None, max_length=MAX_SCORE_TEXT_CHARS)
     score_advantages: str | None = Field(default=None, max_length=MAX_SCORE_TEXT_CHARS)
     score_gaps: str | None = Field(default=None, max_length=MAX_SCORE_TEXT_CHARS)
     score_model: str | None = Field(default=None, max_length=128)
     score_prompt_version: str | None = Field(default=None, max_length=64)
-    scored_at: datetime | None = None
-    first_seen_at: datetime | None = None
-    last_seen_at: datetime | None = None
 
     @model_validator(mode="after")
-    def _seen_order(self) -> SyncJob:
+    def _seen_order(self) -> SyncJobImport:
         if self.first_seen_at is None or self.last_seen_at is None:
             return self
         try:
@@ -72,18 +99,27 @@ class SyncJob(_SyncModel):
 
 
 class SyncApplication(_SyncModel):
-    """一条投递记录（按 `job_detail_url` 跨设备对齐）。"""
+    """一条投递记录（按 `job_detail_url` 跨设备对齐；导出形状）。"""
+
+    job_detail_url: str | None = None
+    title: str
+    company: str
+    stage: ApplicationStage = ApplicationStage.APPLIED
+    note: str | None = None
+    applied_at: datetime
+    updated_at: datetime
+
+
+class SyncApplicationImport(SyncApplication):
+    """合并请求里的投递：在导出形状上重新加回长度与时间先后校验。"""
 
     job_detail_url: str | None = Field(default=None, max_length=2048)
     title: str = Field(min_length=1, max_length=512)
     company: str = Field(min_length=1, max_length=255)
-    stage: ApplicationStage = ApplicationStage.APPLIED
     note: str | None = Field(default=None, max_length=MAX_NOTE_CHARS)
-    applied_at: datetime
-    updated_at: datetime
 
     @model_validator(mode="after")
-    def _time_order(self) -> SyncApplication:
+    def _time_order(self) -> SyncApplicationImport:
         try:
             out_of_order = self.applied_at > self.updated_at
         except TypeError as exc:
@@ -114,12 +150,22 @@ class SyncProfile(_SyncModel):
 
 
 class SyncSnapshot(_SyncModel):
-    """一台设备的完整可同步数据。"""
+    """一台设备的完整可同步数据（**导出形状**）。"""
 
     version: Literal[1] = 1
     exported_at: datetime
     jobs: list[SyncJob] = Field(default_factory=list)
     applications: list[SyncApplication] = Field(default_factory=list)
+    profile: SyncProfile | None = None
+
+
+class SyncSnapshotImport(_SyncModel):
+    """合并请求体：字段与导出形状一致，但保留时间先后校验。"""
+
+    version: Literal[1] = 1
+    exported_at: datetime
+    jobs: list[SyncJobImport] = Field(default_factory=list)
+    applications: list[SyncApplicationImport] = Field(default_factory=list)
     profile: SyncProfile | None = None
 
 
@@ -148,9 +194,12 @@ __all__ = [
     "MAX_NOTE_CHARS",
     "MAX_SCORE_TEXT_CHARS",
     "SyncApplication",
+    "SyncApplicationImport",
     "SyncCounts",
     "SyncJob",
+    "SyncJobImport",
     "SyncMergeResponse",
     "SyncProfile",
     "SyncSnapshot",
+    "SyncSnapshotImport",
 ]

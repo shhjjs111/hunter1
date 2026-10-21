@@ -12,10 +12,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from hunter1.domain.models import Application
 from hunter1.platform.db import Database
 from hunter1.platform.db.applications import SqliteApplicationRepository
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 class ApplicationStore:
@@ -24,17 +28,23 @@ class ApplicationStore:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    def insert_for_job(self, application: Application) -> Application:
+    def insert_for_job(
+        self, application: Application, *, session: Session | None = None
+    ) -> Application:
         """插入一条投递；该岗位已有记录时返回既有的那条（并发下也是幂等的）。
 
         竞态兜底在数据库（`UNIQUE(job_id)`）—— 见 `platform/db/applications.py`
         的 `insert_for_job`。平台仓储的 `upsert` 按主键判断，挡不住「两个请求各生成
         新 uuid」，所以生产路径不走它。
         """
-        return self._db.applications().insert_for_job(application)
+        return self._db.applications().insert_for_job(application, session=session)
 
     def update_existing(
-        self, application: Application, *, expected_updated_at: datetime | None = None
+        self,
+        application: Application,
+        *,
+        expected_updated_at: datetime | None = None,
+        session: Session | None = None,
     ) -> bool:
         """只更新已存在的行；行已被删返回 False（**不**把它插回去）。
 
@@ -42,7 +52,7 @@ class ApplicationStore:
         传了就是**乐观锁** —— 拿下并发下的读-改-写丢更新（阶段推进就是这种写法）。
         """
         return self._db.applications().update_existing(
-            application, expected_updated_at=expected_updated_at
+            application, expected_updated_at=expected_updated_at, session=session
         )
 
     def get(self, application_id: str) -> Application | None:
@@ -63,13 +73,16 @@ class ApplicationStore:
     def count(self) -> int:
         return self._db.applications().count()
 
-    def all(self) -> list[Application]:
-        """整库投递记录（同步快照用）。"""
+    def all(self, *, session: Session | None = None) -> list[Application]:
+        """整库投递记录（同步快照用）。
+
+        传入 `session` 时所有页共用同一个快照，避免翻页期间写入导致漏行/重行。
+        """
         items: list[Application] = []
         offset = 0
         page_size = 500
         while True:
-            batch = self._db.applications().list(limit=page_size, offset=offset)
+            batch = self._db.applications().list(limit=page_size, offset=offset, session=session)
             items.extend(batch)
             if len(batch) < page_size:
                 return items

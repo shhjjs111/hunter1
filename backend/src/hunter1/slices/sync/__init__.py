@@ -15,21 +15,27 @@
 from hunter1.slices.sync.router import build_router
 from hunter1.slices.sync.schemas import (
     SyncApplication,
+    SyncApplicationImport,
     SyncCounts,
     SyncJob,
+    SyncJobImport,
     SyncMergeResponse,
     SyncProfile,
     SyncSnapshot,
+    SyncSnapshotImport,
 )
 from hunter1.slices.sync.store import SyncStore
 
 __all__ = [
     "SyncApplication",
+    "SyncApplicationImport",
     "SyncCounts",
     "SyncJob",
+    "SyncJobImport",
     "SyncMergeResponse",
     "SyncProfile",
     "SyncSnapshot",
+    "SyncSnapshotImport",
     "SyncStore",
     "build_router",
 ]

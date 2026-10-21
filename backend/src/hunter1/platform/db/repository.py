@@ -17,6 +17,8 @@ from hunter1.platform.db.tolerance import restore_int_in_range, restore_time_ord
 from hunter1.platform.text import normalize_job_title
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from hunter1.platform.db.database import Database
 
 #: `get_many` 每次 `IN (...)` 的 id 个数上限。
@@ -173,19 +175,22 @@ class SqliteJobRepository:
             row.match_score = job.match_score
             session.commit()
 
-    def upsert_facts(self, job: Job) -> None:
+    def upsert_facts(self, job: Job, *, session: Session | None = None) -> None:
         """抓取路径的写入：只写事实列，**不触碰 match_score**。
 
         这样 crawl 与 scoring 各写各的列，二者并发的读-改-写不再互相覆盖。
         岗位不存在时照常插入（match_score 保持默认 NULL，由评分填充）。
         """
-        with self._db.session() as session:
-            row = session.get(JobRow, job.id)
-            if row is None:
-                row = JobRow(id=job.id)
-                session.add(row)
-            _assign_facts(row, job)
-            session.commit()
+        if session is None:
+            with self._db.session() as own:
+                self.upsert_facts(job, session=own)
+                own.commit()
+            return
+        row = session.get(JobRow, job.id)
+        if row is None:
+            row = JobRow(id=job.id)
+            session.add(row)
+        _assign_facts(row, job)
 
     def set_score(
         self,
@@ -198,6 +203,7 @@ class SqliteJobRepository:
         summary: str | None = None,
         advantages: str | None = None,
         gaps: str | None = None,
+        session: Session | None = None,
     ) -> bool:
         """只更新评分相关的几列；返回是否有行被更新（False = 岗位不存在）。
 
@@ -205,36 +211,43 @@ class SqliteJobRepository:
         定向 `UPDATE ... SET match_score=?, score_model=?, ... WHERE id=?` ——
         不会像整行 upsert 那样把抓取线程同时更新的标题/城市/JD 回滚掉。
 
-        溯源（model / prompt_version / scored_at）与分数、与上面三段文本一样**无条件
-        写入**（含写回 None）：分开写会出现「分数是新的、溯源是旧的」这种半截状态，
-        而它的用途恰恰是回溯。不传就是不传 —— 留空是「不知道」，沿用旧值却是「说错了」。
-
-        结论文本（summary / advantages / gaps）**无条件写入**（含写回 None）：它们是
-        这一版的结论，重评一次就该整组替换 —— 沿用上一次的「优势」配上这一次的分数
-        只会让人以为模型自相矛盾。
+        溯源（model / prompt_version / scored_at）与分数、与三段文本一起**无条件
+        写入**（含写回 None）：分开写会出现「分数是新的、溯源是旧的」这种半截状态。
+        传入 `session` 时复用调用方的事务，不自行提交。
         """
-        with self._db.session() as session:
-            row = session.get(JobRow, job_id)
-            if row is None:
-                return False
-            row.match_score = score
-            row.score_summary = summary
-            row.score_advantages = advantages
-            row.score_gaps = gaps
-            # 溯源**无条件**写入（含 None），与分数和上面三段文本同一次 UPDATE。
-            # 「只在非 None 时写」会留下「新分数 + 旧模型名」—— 而这几列的用途恰恰是
-            # 回溯「这条分是哪个模型、哪一版提示词打的」：留空是「不知道」，留着旧值是
-            # 「说错了」，后者更坏（调用方无从分辨）。
-            row.score_model = model
-            row.score_prompt_version = prompt_version
-            row.scored_at = scored_at
-            session.commit()
-            return True
+        if session is None:
+            with self._db.session() as own:
+                changed = self.set_score(
+                    job_id,
+                    score,
+                    model=model,
+                    prompt_version=prompt_version,
+                    scored_at=scored_at,
+                    summary=summary,
+                    advantages=advantages,
+                    gaps=gaps,
+                    session=own,
+                )
+                own.commit()
+                return changed
+        row = session.get(JobRow, job_id)
+        if row is None:
+            return False
+        row.match_score = score
+        row.score_summary = summary
+        row.score_advantages = advantages
+        row.score_gaps = gaps
+        row.score_model = model
+        row.score_prompt_version = prompt_version
+        row.scored_at = scored_at
+        return True
 
-    def get(self, job_id: str) -> Job | None:
-        with self._db.session() as session:
+    def get(self, job_id: str, *, session: Session | None = None) -> Job | None:
+        if session is not None:
             row = session.get(JobRow, job_id)
             return _to_job(row) if row is not None else None
+        with self._db.session() as own:
+            return self.get(job_id, session=own)
 
     def get_many(self, job_ids: Sequence[str]) -> dict[str, Job]:
         """一次取回一批岗位（见 `JobRepository.get_many` 的端口说明）。
@@ -292,11 +305,15 @@ class SqliteJobRepository:
             total = session.scalar(statement)
             return int(total or 0)
 
-    def list(self, *, limit: int = 100, offset: int = 0) -> list[Job]:
+    def list(
+        self, *, limit: int = 100, offset: int = 0, session: Session | None = None
+    ) -> list[Job]:
         check_page(limit=limit, offset=offset)
-        with self._db.session() as session:
-            statement = select(JobRow).order_by(*_JOB_ORDER).limit(limit).offset(offset)
-            return [_to_job(row) for row in session.scalars(statement)]
+        if session is None:
+            with self._db.session() as own:
+                return self.list(limit=limit, offset=offset, session=own)
+        statement = select(JobRow).order_by(*_JOB_ORDER).limit(limit).offset(offset)
+        return [_to_job(row) for row in session.scalars(statement)]
 
     def search(self, *, keyword: str, limit: int = 20, offset: int = 0) -> list[Job]:
         """按关键词搜索岗位（在归一化标题上匹配，大小写/全角/括号不敏感）。

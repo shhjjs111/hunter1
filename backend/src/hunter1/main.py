@@ -335,6 +335,7 @@ def create_app(context: AppContext) -> FastAPI:
     _mount(
         build_sync_router(
             store=SyncStore(
+                db=context.db,
                 jobs=job_store,
                 applications=application_store,
                 scores=scoring_store,

@@ -13,12 +13,15 @@ UUID，因此所有合并都先按 URL 归一再判断「是不是同一条」�
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from hunter1.domain.crawl import company_identity, job_identity, normalize_detail_url
 from hunter1.domain.models import Application, CaptureStatus, Job
+from hunter1.platform.db import Database
 from hunter1.slices.applications import ApplicationStore
 from hunter1.slices.jobs import JobStore
 from hunter1.slices.scoring import ScoreStore
@@ -28,7 +31,11 @@ from hunter1.slices.sync.schemas import (
     SyncJob,
     SyncProfile,
     SyncSnapshot,
+    SyncSnapshotImport,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 #: 旧数据没有画像时间戳时的兜底：任何带真实时间的同步都能覆盖它。
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -107,11 +114,13 @@ class SyncStore:
     def __init__(
         self,
         *,
+        db: Database,
         jobs: JobStore,
         applications: ApplicationStore,
         scores: ScoreStore,
         clock: Callable[[], datetime],
     ) -> None:
+        self._db = db
         self._jobs = jobs
         self._applications = applications
         self._scores = scores
@@ -120,16 +129,31 @@ class SyncStore:
     # ---- 导出 ----
 
     def export_snapshot(self) -> SyncSnapshot:
-        jobs = self._jobs.all()
+        """导出本机全部可同步数据。
+
+        **一条坏数据不能让整份快照 500**：JD 可能因截断提示刚好超长、详情 URL
+        可能为空、画像可能损坏。这里统一用宽松的导出模型；画像读失败按「未配置」
+        处理（并留一行 stderr，避免静默吞掉数据损坏）。
+        """
+        with self._db.session() as session:
+            jobs = self._jobs.all(session=session)
+            applications = self._applications.all(session=session)
+            try:
+                profile = self._scores.load_profile(session=session)
+            except ValueError as exc:
+                print(
+                    f"同步导出：本机候选人画像不可用，已按未配置处理：{exc}",
+                    file=sys.stderr,
+                )
+                profile = None
+            profile_at = self._scores.load_profile_updated_at(session=session) or EPOCH
         job_urls = {job.id: job.detail_url for job in jobs}
-        profile = self._scores.load_profile()
-        profile_at = self._scores.load_profile_updated_at() or EPOCH
         return SyncSnapshot(
             exported_at=_utc(self._clock()) or datetime.now(UTC),
             jobs=[_sync_job(job) for job in jobs],
             applications=[
                 _sync_application(application, job_urls.get(application.job_id))
-                for application in self._applications.all()
+                for application in applications
             ],
             profile=SyncProfile(
                 keywords=profile.keywords,
@@ -143,112 +167,122 @@ class SyncStore:
 
     # ---- 合并 ----
 
-    def merge_snapshot(self, snapshot: SyncSnapshot) -> tuple[SyncCounts, SyncSnapshot]:
-        """把另一台设备的快照合并进本机，并返回合并后的规范快照。"""
+    def merge_snapshot(self, snapshot: SyncSnapshotImport) -> tuple[SyncCounts, SyncSnapshot]:
+        """把另一台设备的快照合并进本机，并返回合并后的规范快照。
+
+        整段写入包在**一个事务**里：岗位、评分、投递、画像分属不同切片，但必须
+        一起成功或一起回滚。否则中途失败会让调用方看到 422/500，本机却已经改了
+        一半（旧实现每一步各自 commit）。
+        """
         now = _utc(self._clock()) or datetime.now(UTC)
         counts = SyncCounts()
-        # 先校验画像，再动任何一行：否则一份坏画像会在岗位/投递已经写进去之后
-        # 才报 422，调用方看到「失败」但本机其实已经被改了一半。
+        # 先校验画像，再动任何一行：坏画像属于可直接拒绝的输入问题。
         incoming_profile = snapshot.profile.to_candidate() if snapshot.profile else None
 
-        by_url: dict[str, Job] = {}
-        for job in self._jobs.all():
-            url = normalize_detail_url(job.detail_url)
-            if url:
-                by_url[url] = job
+        with self._db.transaction() as session:
+            by_url: dict[str, Job] = {}
+            for job in self._jobs.all(session=session):
+                url = normalize_detail_url(job.detail_url)
+                if url:
+                    by_url[url] = job
 
-        incoming_jobs: dict[str, SyncJob] = {}
-        for item in snapshot.jobs:
-            url = normalize_detail_url(item.detail_url)
-            if not url:
-                continue
-            previous = incoming_jobs.get(url)
-            if previous is None or _newer(item.last_seen_at, previous.last_seen_at):
-                incoming_jobs[url] = item
+            incoming_jobs: dict[str, SyncJob] = {}
+            for item in snapshot.jobs:
+                url = normalize_detail_url(item.detail_url)
+                if not url:
+                    continue
+                previous = incoming_jobs.get(url)
+                if previous is None or _newer(item.last_seen_at, previous.last_seen_at):
+                    incoming_jobs[url] = item
 
-        for url, item in incoming_jobs.items():
-            existing = by_url.get(url)
-            if existing is None:
-                created = self._create_job(item, url, now)
-                self._jobs.upsert_facts(created)
-                self._write_score(created, item)
-                by_url[url] = created
-                counts.jobs_created += 1
-                continue
+            for url, item in incoming_jobs.items():
+                existing = by_url.get(url)
+                if existing is None:
+                    created = self._create_job(item, url, now, session=session)
+                    self._jobs.upsert_facts(created, session=session)
+                    self._write_score(created, item, session=session)
+                    by_url[url] = created
+                    counts.jobs_created += 1
+                    continue
 
-            merged, facts_changed, score_changed = self._merge_job(existing, item, url)
-            if facts_changed:
-                self._jobs.upsert_facts(merged)
-            if score_changed:
-                self._write_score(merged, item)
-            by_url[url] = merged
-            if facts_changed or score_changed:
-                counts.jobs_updated += 1
-            else:
-                counts.jobs_kept += 1
+                merged, facts_changed, score_changed = self._merge_job(existing, item, url)
+                if facts_changed:
+                    self._jobs.upsert_facts(merged, session=session)
+                if score_changed:
+                    self._write_score(merged, item, session=session)
+                by_url[url] = merged
+                if facts_changed or score_changed:
+                    counts.jobs_updated += 1
+                else:
+                    counts.jobs_kept += 1
 
-        existing_applications = {app.job_id: app for app in self._applications.all()}
-        incoming_applications: dict[str, SyncApplication] = {}
-        for item in snapshot.applications:
-            url = normalize_detail_url(item.job_detail_url or "")
-            if not url:
-                continue
-            previous = incoming_applications.get(url)
-            if previous is None or _newer(item.updated_at, previous.updated_at):
-                incoming_applications[url] = item
+            existing_applications = {
+                app.job_id: app for app in self._applications.all(session=session)
+            }
+            incoming_applications: dict[str, SyncApplication] = {}
+            for item in snapshot.applications:
+                url = normalize_detail_url(item.job_detail_url or "")
+                if not url:
+                    continue
+                previous = incoming_applications.get(url)
+                if previous is None or _newer(item.updated_at, previous.updated_at):
+                    incoming_applications[url] = item
 
-        for url, item in incoming_applications.items():
-            job = by_url.get(url)
-            if job is None:
-                # 投递记录指向的岗位不在这份快照里：不猜、不建半条记录。
-                counts.applications_skipped += 1
-                continue
-            current = existing_applications.get(job.id)
-            if current is None:
-                created = Application(
-                    id=uuid4().hex,
-                    job_id=job.id,
-                    company=item.company,
-                    title=item.title,
-                    stage=item.stage,
-                    applied_at=_utc(item.applied_at) or now,
-                    updated_at=_utc(item.updated_at) or now,
-                    note=item.note,
-                )
-                stored = self._applications.insert_for_job(created)
-                existing_applications[job.id] = stored
-                counts.applications_created += 1
-                continue
-            if _newer(item.updated_at, current.updated_at):
-                updated = Application(
-                    id=current.id,
-                    job_id=job.id,
-                    company=item.company,
-                    title=item.title,
-                    stage=item.stage,
-                    applied_at=_utc(item.applied_at) or current.applied_at,
-                    updated_at=_utc(item.updated_at) or current.updated_at,
-                    note=item.note,
-                )
-                self._applications.update_existing(updated)
-                existing_applications[job.id] = updated
-                counts.applications_updated += 1
-            else:
-                counts.applications_kept += 1
+            for url, item in incoming_applications.items():
+                job = by_url.get(url)
+                if job is None:
+                    # 投递记录指向的岗位不在这份快照里：不猜、不建半条记录。
+                    counts.applications_skipped += 1
+                    continue
+                current = existing_applications.get(job.id)
+                if current is None:
+                    created = Application(
+                        id=uuid4().hex,
+                        job_id=job.id,
+                        company=item.company,
+                        title=item.title,
+                        stage=item.stage,
+                        applied_at=_utc(item.applied_at) or now,
+                        updated_at=_utc(item.updated_at) or now,
+                        note=item.note,
+                    )
+                    stored = self._applications.insert_for_job(created, session=session)
+                    existing_applications[job.id] = stored
+                    counts.applications_created += 1
+                    continue
+                if _newer(item.updated_at, current.updated_at):
+                    updated = Application(
+                        id=current.id,
+                        job_id=job.id,
+                        company=item.company,
+                        title=item.title,
+                        stage=item.stage,
+                        applied_at=_utc(item.applied_at) or current.applied_at,
+                        updated_at=_utc(item.updated_at) or current.updated_at,
+                        note=item.note,
+                    )
+                    self._applications.update_existing(updated, session=session)
+                    existing_applications[job.id] = updated
+                    counts.applications_updated += 1
+                else:
+                    counts.applications_kept += 1
 
-        if snapshot.profile is not None and incoming_profile is not None:
-            current_at = self._scores.load_profile_updated_at()
-            current_profile = self._scores.load_profile()
-            if current_profile is None or _newer(snapshot.profile.updated_at, current_at):
-                self._scores.save_profile_at(
-                    incoming_profile,
-                    _utc(snapshot.profile.updated_at) or now,
-                )
-                counts.profile_updated = True
+            if snapshot.profile is not None and incoming_profile is not None:
+                current_at = self._scores.load_profile_updated_at(session=session)
+                current_profile = self._scores.load_profile(session=session)
+                if current_profile is None or _newer(snapshot.profile.updated_at, current_at):
+                    self._scores.save_profile_at(
+                        incoming_profile,
+                        _utc(snapshot.profile.updated_at) or now,
+                        session=session,
+                    )
+                    counts.profile_updated = True
 
         return counts, self.export_snapshot()
 
-    def _create_job(self, item: SyncJob, url: str, now: datetime) -> Job:
+    def _create_job(
+        self, item: SyncJob, url: str, now: datetime, *, session: Session | None = None
+    ) -> Job:
         # 客户端可能只带 last_seen_at（手机 JobRecord 不存 first_seen）。
         # 此时 first_seen 必须退到 last_seen，而不是服务器当前时间 —— 后者可能
         # 晚于客户端的 last_seen，直接违反 first_seen <= last_seen 的不变量。
@@ -256,7 +290,7 @@ class SyncStore:
         first_seen = _utc(item.first_seen_at) or last_seen or now
         last_seen = last_seen or first_seen
         candidate_id = job_identity(detail_url=url, company=item.company, title=item.title)
-        if self._jobs.get(candidate_id) is not None:
+        if self._jobs.get(candidate_id, session=session) is not None:
             # 极窄冲突：同一个 UUID 已属于另一条 URL。退回随机 id，副本仍按 URL 去重。
             candidate_id = uuid4().hex
         return Job(
@@ -342,7 +376,7 @@ class SyncStore:
         facts_changed = any(getattr(existing, field) != getattr(merged, field) for field in facts)
         return merged, facts_changed, score_changed
 
-    def _write_score(self, job: Job, item: SyncJob) -> None:
+    def _write_score(self, job: Job, item: SyncJob, *, session: Session | None = None) -> None:
         if item.match_score is None:
             return
         self._scores.save_score(
@@ -354,6 +388,7 @@ class SyncStore:
             summary=item.score_summary,
             advantages=item.score_advantages,
             gaps=item.score_gaps,
+            session=session,
         )
 
 
