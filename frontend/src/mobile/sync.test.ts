@@ -230,6 +230,24 @@ describe("合并快照", () => {
     expect(result.profile_updated).toBe(true);
     expect((await getProfile())?.keywords).toEqual(["新"]);
   });
+
+  it("中途写入失败时整份回滚", async () => {
+    const badProfile = {
+      keywords: [() => "not-cloneable"],
+      directions: [],
+      summary: "",
+      updated_at: LATER,
+    } as unknown as SyncSnapshot["profile"];
+
+    await expect(
+      mergeLocalSnapshot(snapshot({ jobs: [syncJob()], profile: badProfile })),
+    ).rejects.toBeDefined();
+
+    const db = await getDB();
+    expect(await db.getAll("jobs")).toEqual([]);
+    expect(await db.getAll("applications")).toEqual([]);
+    expect(await getProfile()).toBeNull();
+  });
 });
 
 describe("与电脑同步", () => {

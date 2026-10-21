@@ -3,7 +3,6 @@ import {
   getDB,
   getProfile,
   newId,
-  saveProfile,
   type ApplicationRecord,
   type ApplicationStage,
   type JobRecord,
@@ -270,174 +269,197 @@ export async function mergeLocalSnapshot(snapshot: SyncSnapshot): Promise<SyncCo
   }
   const db = await getDB();
   const counts = emptyCounts();
+  // 读、算、写必须在同一个 IndexedDB 事务里：否则中途失败会留下半份岗位 /
+  // 投递 / 画像，下一次同步看到的数据取决于上次失败停在哪一步。
+  const tx = db.transaction(["jobs", "applications", "settings"], "readwrite");
+  const jobsStore = tx.objectStore("jobs");
+  const applicationsStore = tx.objectStore("applications");
+  const settingsStore = tx.objectStore("settings");
   const writes: Array<Promise<unknown>> = [];
-
-  const jobs = await db.getAll("jobs");
-  const byUrl = new Map<string, JobRecord>();
-  const usedIds = new Set<string>();
-  for (const job of jobs) {
-    const url = normalizeSyncUrl(job.detailUrl);
-    if (url) {
-      byUrl.set(url, job);
-    }
-    usedIds.add(job.id);
-  }
-
-  const incomingJobs = new Map<string, SyncJob>();
-  for (const item of snapshot.jobs ?? []) {
-    const url = normalizeSyncUrl(item.detail_url);
-    if (!url) {
-      continue;
-    }
-    const previous = incomingJobs.get(url);
-    if (!previous || isNewer(item.last_seen_at, previous.last_seen_at)) {
-      incomingJobs.set(url, item);
-    }
-  }
-
-  for (const [url, incoming] of incomingJobs) {
-    const existing = byUrl.get(url);
-    if (!existing) {
-      const id = incoming.id && !usedIds.has(incoming.id) ? incoming.id : newId();
-      usedIds.add(id);
-      const created: JobRecord = {
-        id,
-        title: incoming.title,
-        company: incoming.company,
-        city: incoming.city ?? null,
-        source: incoming.source || incoming.company,
-        detailUrl: url,
-        jdRaw: incoming.jd_raw ?? null,
-        captureStatus: incoming.capture_status,
-        matchScore: incoming.match_score ?? null,
-        lastSeenAt: incoming.last_seen_at ?? new Date().toISOString(),
-        scoreSummary: incoming.score_summary ?? null,
-        scoreAdvantages: incoming.score_advantages ?? null,
-        scoreGaps: incoming.score_gaps ?? null,
-        scoreModel: incoming.score_model ?? null,
-        scorePromptVersion: incoming.score_prompt_version ?? null,
-        scoredAt: incoming.scored_at ?? null,
-      };
-      byUrl.set(url, created);
-      counts.jobs_created += 1;
-      writes.push(db.put("jobs", created));
-      continue;
+  try {
+    const [jobs, applications, storedProfile] = await Promise.all([
+      jobsStore.getAll(),
+      applicationsStore.getAll(),
+      settingsStore.get("profile"),
+    ]);
+    const byUrl = new Map<string, JobRecord>();
+    const usedIds = new Set<string>();
+    for (const job of jobs) {
+      const url = normalizeSyncUrl(job.detailUrl);
+      if (url) {
+        byUrl.set(url, job);
+      }
+      usedIds.add(job.id);
     }
 
-    const incomingNewer = isNewer(incoming.last_seen_at, existing.lastSeenAt);
-    let merged: JobRecord = { ...existing };
-    if (incomingNewer) {
-      merged = {
-        ...merged,
-        title: incoming.title,
-        company: incoming.company,
-        city: incoming.city ?? merged.city,
-        source: incoming.source || merged.source,
-        detailUrl: url,
-        jdRaw: incoming.jd_raw ?? merged.jdRaw,
-        captureStatus:
-          incoming.capture_status === "unknown"
-            ? merged.captureStatus
-            : incoming.capture_status,
-        lastSeenAt: incoming.last_seen_at ?? merged.lastSeenAt,
-      };
-    } else {
-      // 较旧的快照只能补空，不能覆盖较新一方的字段。
-      merged = {
-        ...merged,
-        city: merged.city ?? incoming.city ?? null,
-        source: merged.source || incoming.source || incoming.company,
-        jdRaw: merged.jdRaw ?? incoming.jd_raw ?? null,
-        captureStatus:
-          merged.captureStatus === "unknown" && incoming.capture_status !== "unknown"
-            ? incoming.capture_status
-            : merged.captureStatus,
-      };
-    }
-    if (scoreIsNewer(existing, incoming)) {
-      merged = copyScore(merged, incoming);
+    const incomingJobs = new Map<string, SyncJob>();
+    for (const item of snapshot.jobs ?? []) {
+      const url = normalizeSyncUrl(item.detail_url);
+      if (!url) {
+        continue;
+      }
+      const previous = incomingJobs.get(url);
+      if (!previous || isNewer(item.last_seen_at, previous.last_seen_at)) {
+        incomingJobs.set(url, item);
+      }
     }
 
-    if (sameJob(existing, merged)) {
-      counts.jobs_kept += 1;
-    } else {
-      counts.jobs_updated += 1;
-      writes.push(db.put("jobs", merged));
-    }
-    byUrl.set(url, merged);
-  }
-
-  const applications = await db.getAll("applications");
-  const byJob = new Map(applications.map((app) => [app.jobId, app]));
-  const incomingApplications = new Map<string, SyncApplication>();
-  for (const item of snapshot.applications ?? []) {
-    const url = normalizeSyncUrl(item.job_detail_url ?? "");
-    if (!url) {
-      continue;
-    }
-    const previous = incomingApplications.get(url);
-    if (!previous || isNewer(item.updated_at, previous.updated_at)) {
-      incomingApplications.set(url, item);
-    }
-  }
-
-  for (const [url, incoming] of incomingApplications) {
-    const job = byUrl.get(url);
-    if (!job) {
-      counts.applications_skipped += 1;
-      continue;
-    }
-    const existing = byJob.get(job.id);
-    if (existing) {
-      if (isNewer(incoming.updated_at, existing.updatedAt)) {
-        const updated: ApplicationRecord = {
-          ...existing,
+    for (const [url, incoming] of incomingJobs) {
+      const existing = byUrl.get(url);
+      if (!existing) {
+        const id = incoming.id && !usedIds.has(incoming.id) ? incoming.id : newId();
+        usedIds.add(id);
+        const created: JobRecord = {
+          id,
           title: incoming.title,
           company: incoming.company,
-          stage: incoming.stage as ApplicationStage,
-          note: incoming.note ?? null,
-          appliedAt: incoming.applied_at,
-          updatedAt: incoming.updated_at,
+          city: incoming.city ?? null,
+          source: incoming.source || incoming.company,
+          detailUrl: url,
+          jdRaw: incoming.jd_raw ?? null,
+          captureStatus: incoming.capture_status,
+          matchScore: incoming.match_score ?? null,
+          lastSeenAt: incoming.last_seen_at ?? new Date().toISOString(),
+          scoreSummary: incoming.score_summary ?? null,
+          scoreAdvantages: incoming.score_advantages ?? null,
+          scoreGaps: incoming.score_gaps ?? null,
+          scoreModel: incoming.score_model ?? null,
+          scorePromptVersion: incoming.score_prompt_version ?? null,
+          scoredAt: incoming.scored_at ?? null,
         };
-        byJob.set(job.id, updated);
-        counts.applications_updated += 1;
-        writes.push(db.put("applications", updated));
-      } else {
-        counts.applications_kept += 1;
+        byUrl.set(url, created);
+        counts.jobs_created += 1;
+        writes.push(jobsStore.put(created));
+        continue;
       }
-      continue;
-    }
-    const created: ApplicationRecord = {
-      id: newId(),
-      jobId: job.id,
-      title: incoming.title,
-      company: incoming.company,
-      stage: incoming.stage as ApplicationStage,
-      note: incoming.note ?? null,
-      appliedAt: incoming.applied_at,
-      updatedAt: incoming.updated_at,
-    };
-    byJob.set(job.id, created);
-    counts.applications_created += 1;
-    writes.push(db.put("applications", created));
-  }
 
-  if (snapshot.profile) {
-    const local = await getProfile();
-    if (!local || isNewer(snapshot.profile.updated_at, local.updatedAt)) {
-      const profile: Omit<ProfileRecord, "key"> = {
-        keywords: snapshot.profile.keywords ?? [],
-        directions: snapshot.profile.directions ?? [],
-        summary: snapshot.profile.summary,
-        updatedAt: snapshot.profile.updated_at,
+      const incomingNewer = isNewer(incoming.last_seen_at, existing.lastSeenAt);
+      let merged: JobRecord = { ...existing };
+      if (incomingNewer) {
+        merged = {
+          ...merged,
+          title: incoming.title,
+          company: incoming.company,
+          city: incoming.city ?? merged.city,
+          source: incoming.source || merged.source,
+          detailUrl: url,
+          jdRaw: incoming.jd_raw ?? merged.jdRaw,
+          captureStatus:
+            incoming.capture_status === "unknown"
+              ? merged.captureStatus
+              : incoming.capture_status,
+          lastSeenAt: incoming.last_seen_at ?? merged.lastSeenAt,
+        };
+      } else {
+        // 较旧的快照只能补空，不能覆盖较新一方的字段。
+        merged = {
+          ...merged,
+          city: merged.city ?? incoming.city ?? null,
+          source: merged.source || incoming.source || incoming.company,
+          jdRaw: merged.jdRaw ?? incoming.jd_raw ?? null,
+          captureStatus:
+            merged.captureStatus === "unknown" && incoming.capture_status !== "unknown"
+              ? incoming.capture_status
+              : merged.captureStatus,
+        };
+      }
+      if (scoreIsNewer(existing, incoming)) {
+        merged = copyScore(merged, incoming);
+      }
+
+      if (sameJob(existing, merged)) {
+        counts.jobs_kept += 1;
+      } else {
+        counts.jobs_updated += 1;
+        writes.push(jobsStore.put(merged));
+      }
+      byUrl.set(url, merged);
+    }
+
+    const byJob = new Map(applications.map((app) => [app.jobId, app]));
+    const incomingApplications = new Map<string, SyncApplication>();
+    for (const item of snapshot.applications ?? []) {
+      const url = normalizeSyncUrl(item.job_detail_url ?? "");
+      if (!url) {
+        continue;
+      }
+      const previous = incomingApplications.get(url);
+      if (!previous || isNewer(item.updated_at, previous.updated_at)) {
+        incomingApplications.set(url, item);
+      }
+    }
+
+    for (const [url, incoming] of incomingApplications) {
+      const job = byUrl.get(url);
+      if (!job) {
+        counts.applications_skipped += 1;
+        continue;
+      }
+      const existing = byJob.get(job.id);
+      if (existing) {
+        if (isNewer(incoming.updated_at, existing.updatedAt)) {
+          const updated: ApplicationRecord = {
+            ...existing,
+            title: incoming.title,
+            company: incoming.company,
+            stage: incoming.stage as ApplicationStage,
+            note: incoming.note ?? null,
+            appliedAt: incoming.applied_at,
+            updatedAt: incoming.updated_at,
+          };
+          byJob.set(job.id, updated);
+          counts.applications_updated += 1;
+          writes.push(applicationsStore.put(updated));
+        } else {
+          counts.applications_kept += 1;
+        }
+        continue;
+      }
+      const created: ApplicationRecord = {
+        id: newId(),
+        jobId: job.id,
+        title: incoming.title,
+        company: incoming.company,
+        stage: incoming.stage as ApplicationStage,
+        note: incoming.note ?? null,
+        appliedAt: incoming.applied_at,
+        updatedAt: incoming.updated_at,
       };
-      await saveProfile(profile);
-      counts.profile_updated = true;
+      byJob.set(job.id, created);
+      counts.applications_created += 1;
+      writes.push(applicationsStore.put(created));
     }
-  }
 
-  await Promise.all(writes);
-  return counts;
+    if (snapshot.profile) {
+      const local = storedProfile as ProfileRecord | undefined;
+      if (!local || isNewer(snapshot.profile.updated_at, local.updatedAt)) {
+        const profile: ProfileRecord = {
+          key: "profile",
+          keywords: snapshot.profile.keywords ?? [],
+          directions: snapshot.profile.directions ?? [],
+          summary: snapshot.profile.summary,
+          updatedAt: snapshot.profile.updated_at,
+        };
+        writes.push(settingsStore.put(profile));
+        counts.profile_updated = true;
+      }
+    }
+
+    await Promise.all(writes);
+    await tx.done;
+    return counts;
+  } catch (error) {
+    // 同步抛错（例如不可结构化克隆的数据）不会自动回滚已排队的请求，
+    // 必须显式中止，兑现「整份成功或整份失败」。
+    try {
+      tx.abort();
+    } catch {
+      // 事务已经结束（提交完成或请求错误已触发 abort）。
+    }
+    await Promise.allSettled(writes);
+    await tx.done.catch(() => undefined);
+    throw error;
+  }
 }
 
 function summarizeOne(label: string, counts: SyncCounts): string {
