@@ -21,7 +21,7 @@
   `publish` 三个 job，顶层 `permissions: {}`；构建产物经固定到 commit SHA 的
   upload/download-artifact 传递。
 - 公网明文 `http://` 的 LLM 端点改为拒绝保存/探测（本机与内网 http 不受影响）；
-  手机端桌面地址与模型地址也只允许 https 或内网 http。
+  手机端桌面地址与模型地址也只允许 https 或内网 http，并在保存/探测前校验地址格式。
 - 安卓 `allowBackup=false`，避免本地 Key 跟着云备份离开设备。
 - **APK 进入发布供应链**：`release.yml` 用固定证书构建/签名 APK，
   `verify_apk.py` 校验版本、debuggable、allowBackup、权限与证书指纹，并把 APK

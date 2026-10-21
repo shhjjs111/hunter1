@@ -1,6 +1,11 @@
 import { getLLM, getProfile, saveLLM, type JobRecord, type LLMRecord } from "./db";
 import { requestText, readableHttpError } from "./http";
-import { assertCleartextAllowed, isPublicCleartext, sameOrigin } from "./netPolicy";
+import {
+  assertCleartextAllowed,
+  isPublicCleartext,
+  normalizeHttpBaseUrl,
+  sameOrigin,
+} from "./netPolicy";
 
 export interface SettingsView {
   base_url: string;
@@ -56,10 +61,10 @@ export async function saveSettings(form: {
   api_key: string;
 }): Promise<SettingsView> {
   const existing = await getLLM();
-  const baseUrl = form.base_url.trim().replace(/\/+$/, "");
-  if (!baseUrl || !form.model.trim()) {
+  if (!form.base_url.trim() || !form.model.trim()) {
     throw new Error("base_url 与模型名不能为空");
   }
+  const baseUrl = normalizeHttpBaseUrl(form.base_url);
   const typedKey = form.api_key.trim();
   // 空 key 只在端点没变时可复用。改了 scheme/host/port 还沿用旧 key，
   // 等于把密钥悄悄发给另一台服务器（与电脑端同一策略）。
@@ -158,7 +163,13 @@ export async function testConnection(form: {
   api_key: string;
 }): Promise<{ ok: boolean; message: string }> {
   const existing = await getLLM();
-  const baseUrl = form.base_url.trim().replace(/\/+$/, "") || existing?.baseUrl || "";
+  let baseUrl: string;
+  try {
+    const rawBase = form.base_url.trim() || existing?.baseUrl || "";
+    baseUrl = rawBase ? normalizeHttpBaseUrl(rawBase) : "";
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
   const typedKey = form.api_key.trim();
   if (typedKey === "" && existing?.apiKey && baseUrl && !sameOrigin(existing.baseUrl, baseUrl)) {
     return { ok: false, message: "端点地址已改变：请重新输入 API Key 后再测试" };

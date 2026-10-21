@@ -82,6 +82,16 @@ describe("模型配置视图", () => {
     ).rejects.toThrow("API Key 不能为空");
   });
 
+  it("保存与探测都拒绝非法端点", async () => {
+    await expect(
+      saveSettings({ base_url: "not-a-url", model: "m", api_key: "k" }),
+    ).rejects.toThrow("合法的 http");
+
+    const probe = await testConnection({ base_url: "not-a-url", model: "m", api_key: "k" });
+    expect(probe).toMatchObject({ ok: false });
+    expect(probe.message).toContain("合法的 http");
+  });
+
   it("端点变更后不会把旧 Key 复用并发送到新地址", async () => {
     await saveLLM({ baseUrl: "https://api.example.com/v1", model: "m", apiKey: "secret" });
 

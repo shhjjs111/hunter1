@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { assertCleartextAllowed, isPrivateHost, isPublicCleartext, sameOrigin } from "./netPolicy";
+import {
+  assertCleartextAllowed,
+  isPrivateHost,
+  isPublicCleartext,
+  normalizeHttpBaseUrl,
+  sameOrigin,
+} from "./netPolicy";
 
 describe("明文 HTTP 边界", () => {
   it.each([
@@ -49,5 +55,14 @@ describe("明文 HTTP 边界", () => {
     expect(sameOrigin("http://api.example.com", "https://api.example.com")).toBe(false);
     expect(sameOrigin("https://api.example.com", "https://evil.example.com")).toBe(false);
     expect(sameOrigin("https://api.example.com:8443", "https://api.example.com")).toBe(false);
+  });
+
+  it("normalizeHttpBaseUrl 校验协议与主机名并去掉尾部斜杠", () => {
+    expect(normalizeHttpBaseUrl(" https://API.example.com/v1/ ")).toBe(
+      "https://api.example.com/v1",
+    );
+    expect(normalizeHttpBaseUrl("http://127.0.0.1:11434/")).toBe("http://127.0.0.1:11434");
+    expect(() => normalizeHttpBaseUrl("not-a-url")).toThrow(/合法的 http/);
+    expect(() => normalizeHttpBaseUrl("ftp://example.com/v1")).toThrow(/http:\/\//);
   });
 });

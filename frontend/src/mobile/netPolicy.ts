@@ -81,3 +81,25 @@ export function sameOrigin(left: string, right: string): boolean {
     return false;
   }
 }
+
+/** 校验并归一化 http(s) 端点；与后端 `LLMSettings` 的 base_url 规则对齐。 */
+export function normalizeHttpBaseUrl(raw: string): string {
+  const text = raw.trim();
+  if (!text) {
+    throw new Error("base_url 不能为空");
+  }
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error("base_url 必须是合法的 http(s) 地址");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("base_url 必须以 http:// 或 https:// 开头");
+  }
+  if (!url.hostname) {
+    throw new Error("base_url 缺少主机名");
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${path}${url.search}`;
+}
