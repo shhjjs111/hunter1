@@ -381,6 +381,10 @@ class Database:
         """
         session = Session(self.engine, future=True)
         try:
+            # 延迟事务会先拿读锁，真正写入时才升级写锁；两个并发同步可能同时
+            # 读到旧快照，随后在升级时互相卡住。BEGIN IMMEDIATE 在入口就拿写锁，
+            # 让第二个写入者按 busy_timeout 排队，而不是做一次无效的读-改-写。
+            session.execute(text("BEGIN IMMEDIATE"))
             yield session
             session.commit()
         except BaseException:
