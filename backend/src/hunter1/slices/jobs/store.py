@@ -11,9 +11,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from hunter1.domain.models import Job
 from hunter1.platform.db import Database
 from hunter1.platform.db.repository import SqliteJobRepository
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 
 class JobStore:
@@ -24,8 +29,8 @@ class JobStore:
 
     # ---- 岗位 ----
 
-    def get(self, job_id: str) -> Job | None:
-        return self._db.jobs().get(job_id)
+    def get(self, job_id: str, *, session: Session | None = None) -> Job | None:
+        return self._db.jobs().get(job_id, session=session)
 
     def get_by_prefix(self, prefix: str, *, limit: int = 20) -> list[Job]:
         return self._db.jobs().get_by_prefix(prefix, limit=limit)
@@ -41,26 +46,30 @@ class JobStore:
         repository: SqliteJobRepository = self._db.jobs()
         return repository.count(keyword=keyword) if keyword else repository.count()
 
-    def all(self) -> list[Job]:
+    def all(self, *, session: Session | None = None) -> list[Job]:
         """整库岗位（同步快照用）。
 
         按页读取而不是一次性 `list(limit=None)`：仓储的 `check_page` 会拒绝
         `limit=-1`，而同步确实需要全量。500 与仓储内部的 `IN (...)` 分块同量级。
+
+        传入 `session` 时所有页共用同一个事务/快照 —— 否则每页各开一个 Session，
+        翻页期间的写入会让 `OFFSET` 分页漏行或重行（同步按 URL 去重时就会建出
+        重复岗位）。
         """
         repository: SqliteJobRepository = self._db.jobs()
         items: list[Job] = []
         offset = 0
         page_size = 500
         while True:
-            batch = repository.list(limit=page_size, offset=offset)
+            batch = repository.list(limit=page_size, offset=offset, session=session)
             items.extend(batch)
             if len(batch) < page_size:
                 return items
             offset += page_size
 
-    def upsert_facts(self, job: Job) -> None:
+    def upsert_facts(self, job: Job, *, session: Session | None = None) -> None:
         """只写岗位事实列（不碰评分列）。同步导入与抓取共用同一约束。"""
-        self._db.jobs().upsert_facts(job)
+        self._db.jobs().upsert_facts(job, session=session)
 
 
 __all__ = ["JobStore"]

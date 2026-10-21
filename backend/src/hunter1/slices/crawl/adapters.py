@@ -264,7 +264,9 @@ def parse_detail_page(html: str, selector: str | None) -> str | None:
     if not text:
         return None
     if len(text) > MAX_JD_CHARS:
-        text = text[:MAX_JD_CHARS] + JD_TRUNCATED_NOTICE
+        # 截断标记本身也占长度：`text[:MAX_JD_CHARS] + 标记` 会超上限，
+        # 而同步模型曾把 20 万字当硬上限 —— 每条被截断的 JD 都能让快照 500。
+        text = text[: MAX_JD_CHARS - len(JD_TRUNCATED_NOTICE)] + JD_TRUNCATED_NOTICE
     return text
 
 

@@ -4,13 +4,10 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+# 顶层不放任何权限：令牌只发给真正需要它的 job（见下方 permissions）。
+permissions: {}
 
 env:
-  GH_TOKEN: ${{ github.token }}
   PYTHONUTF8: "1"
   UV_VERSION: "0.12.23"
 
@@ -19,9 +16,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
     timeout-minutes: 35
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
@@ -45,6 +44,17 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: 安装 JDK 21
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
       - name: 校验 tag、版本与 main 祖先关系
         run: |
           set -euo pipefail
@@ -66,6 +76,37 @@ jobs:
       - name: 重建并执行完整门禁
         run: PY="$(pwd)/backend/.venv/Scripts/python.exe" bash scripts/check.sh --with-pack
 
+      - name: 构建、签名并校验 Android APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${ANDROID_KEYSTORE_BASE64:?缺少 secret ANDROID_KEYSTORE_BASE64}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?缺少 secret ANDROID_KEYSTORE_PASSWORD}"
+          : "${ANDROID_KEY_ALIAS:?缺少 secret ANDROID_KEY_ALIAS}"
+          : "${ANDROID_KEY_PASSWORD:?缺少 secret ANDROID_KEY_PASSWORD}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/hunter1-release.jks"
+          export HUNTER1_ANDROID_KEYSTORE="$RUNNER_TEMP/hunter1-release.jks"
+          export HUNTER1_ANDROID_KEYSTORE_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
+          export HUNTER1_ANDROID_KEY_ALIAS="$ANDROID_KEY_ALIAS"
+          export HUNTER1_ANDROID_KEY_PASSWORD="$ANDROID_KEY_PASSWORD"
+          (cd frontend && npx cap sync android)
+          (cd frontend/android && cmd //c gradlew.bat assembleRelease -PappVersion="$VERSION" --no-daemon)
+          APK="frontend/android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          cp "$APK" "dist/hunter1-android-$VERSION.apk"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          EXPECTED_CODE=$((10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH))
+          PY="$(pwd)/backend/.venv/Scripts/python.exe"
+          "$PY" scripts/verify_apk.py \
+            --apk "dist/hunter1-android-$VERSION.apk" \
+            --version "$VERSION" \
+            --version-code "$EXPECTED_CODE"
+
       - name: 生成清单、SBOM、发布说明和校验和
         run: |
           set -euo pipefail
@@ -80,19 +121,51 @@ jobs:
             --url-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG" \
             --version "$VERSION" \
             --out dist/manifest.json
-          "$PY" scripts/make_sbom.py --output dist/sbom.spdx.json
+          "$PY" scripts/make_sbom.py --output dist/sbom.spdx.json \
+            --artifact "hunter1-win32=$ZIP" \
+            --artifact "hunter1-android=dist/hunter1-android-$VERSION.apk"
           "$PY" scripts/release_notes.py --version "$VERSION" --out dist/release-notes.md
           (
             cd dist
-            sha256sum "$(basename "$ZIP")" manifest.json sbom.spdx.json > SHA256SUMS.txt
+            sha256sum "$(basename "$ZIP")" "hunter1-android-$VERSION.apk" manifest.json sbom.spdx.json > SHA256SUMS.txt
             sha256sum -c SHA256SUMS.txt
           )
+
+      - name: 上传待签名/发布的构建产物
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          if-no-files-found: error
+          path: |
+            dist/hunter1-win32.zip
+            dist/*.apk
+            dist/manifest.json
+            dist/sbom.spdx.json
+            dist/SHA256SUMS.txt
+            dist/release-notes.md
+
+  attest:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: 取回构建产物
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: dist
 
       - name: 生成构建来源证明
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/hunter1-win32.zip
+            dist/*.apk
             dist/manifest.json
             dist/sbom.spdx.json
             dist/SHA256SUMS.txt
@@ -100,8 +173,29 @@ jobs:
       - name: 生成 SBOM 证明
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/hunter1-win32.zip
+          subject-path: |
+            dist/hunter1-win32.zip
+            dist/*.apk
           sbom-path: dist/sbom.spdx.json
+
+  publish:
+    needs: [build, attest]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 取回构建产物
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: dist
 
       - name: 创建草稿、上传资产并核对
         run: |
@@ -123,9 +217,10 @@ jobs:
             --notes-file dist/release-notes.md
           gh release upload "$TAG" \
             dist/hunter1-win32.zip \
+            dist/hunter1-android-*.apk \
             dist/manifest.json \
             dist/sbom.spdx.json \
             dist/SHA256SUMS.txt
           COUNT="$(gh release view "$TAG" --json assets --jq '.assets | length')"
-          test "$COUNT" = "4"
-          echo "::notice::$TAG 草稿已创建（4 个自动资产）。上传安卓 APK 与校验和、核对后，再手动发布。"
+          test "$COUNT" = "5"
+          echo "::notice::$TAG 草稿已创建（5 个自动资产：Windows 包、APK、清单、SBOM、校验和）。核对后手动发布。"

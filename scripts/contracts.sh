@@ -11,13 +11,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -z "${PY:-}" ]]; then
-  if [[ -x "$ROOT/.tools/python/python.exe" ]]; then
+  # 优先用项目虚拟环境：全新克隆上 `.tools/` 不存在（它是本机工具链的
+  # .gitignore 区），而 `python` 可能是一个没装 fastapi 的系统解释器 ——
+  # 直接跑会得到一句 ModuleNotFoundError，看起来像契约坏了。
+  if [[ -x "$ROOT/backend/.venv/Scripts/python.exe" ]]; then
+    PY="$ROOT/backend/.venv/Scripts/python.exe"
+  elif [[ -x "$ROOT/backend/.venv/bin/python" ]]; then
+    PY="$ROOT/backend/.venv/bin/python"
+  elif [[ -x "$ROOT/.tools/python/python.exe" ]]; then
     PY="$ROOT/.tools/python/python.exe"
   elif [[ -x "$ROOT/.tools/python/bin/python3" ]]; then
     PY="$ROOT/.tools/python/bin/python3"
   else
     PY="python"
   fi
+fi
+
+if ! "$PY" -c "import fastapi" >/dev/null 2>&1; then
+  echo "✗ 当前解释器无法导入 fastapi：$PY"
+  echo "  先在仓库根目录执行：uv sync --project backend --extra dev --extra web --extra db --extra crawler"
+  echo "  或用 PY=... 指定已装好依赖的解释器。"
+  exit 2
 fi
 
 # 把**真 node** 的目录提到 PATH 最前（与 check.sh 同名段落，那边有完整推导）。

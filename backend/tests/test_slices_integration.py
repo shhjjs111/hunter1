@@ -688,6 +688,28 @@ class TestScoringReachableInProduction:
         assert "模型" in detail and "画像" not in detail, f"要指出是模型配置问题，实际：{detail}"
         app.state.context.db.dispose()
 
+    def test_legacy_public_plaintext_config_is_not_used(self, tmp_path: Path) -> None:
+        """旧库里残留的公网 http 配置可以被读出提示，但绝不能再拿去发请求。"""
+        from hunter1.domain.settings import LLMSettings
+        from hunter1.slices.scoring import CandidateProfile
+        from hunter1.slices.scoring.store import ScoreStore
+
+        app = _production_context(tmp_path, "prod-plaintext.db")
+        db = app.state.context.db
+        db.jobs().upsert(_seeded_job())
+        ScoreStore(db).save_profile(CandidateProfile(keywords=["集成"]))
+        db.settings().save_llm(
+            LLMSettings(base_url="http://api.example.com/v1", model="m", api_key="sk-x")
+        )
+
+        with TestClient(app) as test_client:
+            response = test_client.post(f"/api/scoring/{JOB_ID}")
+
+        assert response.status_code == 409, f"期望 409，实际 {response.status_code}"
+        detail = response.json()["detail"]
+        assert "明文" in detail and "https" in detail, f"要给出修复方向，实际：{detail}"
+        db.dispose()
+
 
 class TestStructuredDegradationIsRememberedAcrossRequests:
     """降级发现只付一次代价 —— **在生产装配下**验证，不是单元级。

@@ -67,17 +67,20 @@ export function usePager({ count, index, reduced, onSettle, dom }: UsePagerOptio
       env.style.transform = `translate3d(${-p * width * 0.055}px,0,0)`;
     }
 
-    const tintLow = Math.max(0, Math.min(count - 1, Math.floor(Math.max(0, Math.min(count - 1, p)))));
+    // 先夹到合法页区间，再取「页内小数部分」。旧写法 `Math.min(1, p) - low`
+    // 在 p >= 1 时恒为负（被下面夹成 0），于是第 2 页之后色值一直停在第一页。
+    const clamped = Math.max(0, Math.min(count - 1, p));
+    const tintLow = Math.floor(clamped);
     const tintHigh = Math.min(count - 1, tintLow + 1);
-    const tintFraction = Math.max(0, Math.min(1, p)) - tintLow;
+    const tintFraction = Math.max(0, Math.min(1, clamped - tintLow));
     const from = MODULE_TINTS[tintLow] ?? MODULE_TINTS[0];
     const to = MODULE_TINTS[tintHigh] ?? MODULE_TINTS[0];
     const tint = from.map((value, i) => Math.round(value + (to[i] - value) * tintFraction));
     dom.shell()?.style.setProperty("--tint", `rgb(${tint.join(" ")})`);
 
-    const low = Math.max(0, Math.min(count - 1, Math.floor(p)));
+    const low = Math.floor(clamped);
     const high = Math.min(count - 1, low + 1);
-    const fraction = Math.max(0, Math.min(1, p)) - low;
+    const fraction = Math.max(0, Math.min(1, clamped - low));
     const first = dom.tab(low);
     const second = dom.tab(high);
     const pill = dom.pill();

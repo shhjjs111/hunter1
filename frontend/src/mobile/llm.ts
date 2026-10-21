@@ -1,5 +1,11 @@
 import { getLLM, getProfile, saveLLM, type JobRecord, type LLMRecord } from "./db";
 import { requestText, readableHttpError } from "./http";
+import {
+  assertCleartextAllowed,
+  isPublicCleartext,
+  normalizeHttpBaseUrl,
+  sameOrigin,
+} from "./netPolicy";
 
 export interface SettingsView {
   base_url: string;
@@ -43,19 +49,10 @@ export function settingsView(record: LLMRecord | null): SettingsView | null {
     masked_key: maskKey(record.apiKey),
     configured: Boolean(record.baseUrl && record.model && record.apiKey),
     broken: false,
-    warning: record.baseUrl.startsWith("http://") && !isPrivateHost(record.baseUrl)
+    warning: isPublicCleartext(record.baseUrl)
       ? "当前端点使用明文 HTTP，API Key 会以明文传输。"
       : null,
   };
-}
-
-function isPrivateHost(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname;
-    return host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.");
-  } catch {
-    return false;
-  }
 }
 
 export async function saveSettings(form: {
@@ -64,14 +61,21 @@ export async function saveSettings(form: {
   api_key: string;
 }): Promise<SettingsView> {
   const existing = await getLLM();
-  const apiKey = form.api_key.trim() || existing?.apiKey || "";
-  const baseUrl = form.base_url.trim().replace(/\/+$/, "");
-  if (!baseUrl || !form.model.trim()) {
+  if (!form.base_url.trim() || !form.model.trim()) {
     throw new Error("base_url 与模型名不能为空");
   }
+  const baseUrl = normalizeHttpBaseUrl(form.base_url);
+  const typedKey = form.api_key.trim();
+  // 空 key 只在端点没变时可复用。改了 scheme/host/port 还沿用旧 key，
+  // 等于把密钥悄悄发给另一台服务器（与电脑端同一策略）。
+  if (typedKey === "" && existing?.apiKey && !sameOrigin(existing.baseUrl, baseUrl)) {
+    throw new Error("端点地址已改变：请重新输入 API Key（旧 Key 不会发送到新地址）");
+  }
+  const apiKey = typedKey || existing?.apiKey || "";
   if (!apiKey) {
     throw new Error("API Key 不能为空");
   }
+  assertCleartextAllowed(baseUrl);
   const record = await saveLLM({ baseUrl, model: form.model.trim(), apiKey });
   return settingsView(record) as SettingsView;
 }
@@ -85,6 +89,7 @@ async function chat(
   messages: Array<{ role: string; content: string }>,
   options: { maxTokens?: number; json?: boolean } = {},
 ): Promise<{ content: string; model: string | null }> {
+  assertCleartextAllowed(settings.baseUrl);
   const body: Record<string, unknown> = {
     model: settings.model,
     messages,
@@ -158,16 +163,28 @@ export async function testConnection(form: {
   api_key: string;
 }): Promise<{ ok: boolean; message: string }> {
   const existing = await getLLM();
+  let baseUrl: string;
+  try {
+    const rawBase = form.base_url.trim() || existing?.baseUrl || "";
+    baseUrl = rawBase ? normalizeHttpBaseUrl(rawBase) : "";
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+  const typedKey = form.api_key.trim();
+  if (typedKey === "" && existing?.apiKey && baseUrl && !sameOrigin(existing.baseUrl, baseUrl)) {
+    return { ok: false, message: "端点地址已改变：请重新输入 API Key 后再测试" };
+  }
   const settings: LLMRecord = {
     key: "llm",
-    baseUrl: form.base_url.trim().replace(/\/+$/, "") || existing?.baseUrl || "",
+    baseUrl,
     model: form.model.trim() || existing?.model || "",
-    apiKey: form.api_key.trim() || existing?.apiKey || "",
+    apiKey: typedKey || existing?.apiKey || "",
   };
   if (!settings.baseUrl || !settings.model || !settings.apiKey) {
     return { ok: false, message: "请先填完 base_url、模型名与 API Key" };
   }
   try {
+    assertCleartextAllowed(settings.baseUrl);
     await chat(settings, [{ role: "user", content: "只回复 OK" }], { maxTokens: 8 });
     return { ok: true, message: "连接成功，模型可用。" };
   } catch (error) {

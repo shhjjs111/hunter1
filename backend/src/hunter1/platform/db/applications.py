@@ -17,6 +17,8 @@ from hunter1.platform.db.schema import ApplicationRow
 from hunter1.platform.db.tolerance import restore_time_order
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from hunter1.platform.db.database import Database
 
 
@@ -64,90 +66,104 @@ class SqliteApplicationRepository:
             _copy_into(row, application)
             session.commit()
 
-    def insert_for_job(self, application: Application) -> Application:
+    def insert_for_job(
+        self, application: Application, *, session: Session | None = None
+    ) -> Application:
         """插入一条投递；**该岗位已有记录时返回既有的那条**。
 
-        「重复点击不该堆出多条投递」这条不变量由 `applications/service.py` 的
-        「先读后写」表达，但那段判断在并发下会失效：两个请求都读到空、各插一条。
-        真正的兜底必须在数据库 —— `uq_applications_job`（UNIQUE(job_id)）拒掉第二个
-        INSERT，这里再读一次把既有的那条交出去（对调用方就是「幂等」）。
+        「重复点击不该堆出多条投递」这条不变量由数据库兜底：
+        `uq_applications_job`（UNIQUE(job_id)）拒掉第二个 INSERT，这里再读一次把
+        既有的那条交出去（对调用方就是「幂等」）。
 
-        之所以不靠 `upsert`：upsert 按**主键**判断存在性，而两个并发请求各自生成了
-        新的 uuid，主键根本不会撞 —— 撞的是 job_id。
+        传入 `session` 时复用调用方的事务：只 flush、不提交；唯一约束冲突会原样
+        抛出，由外层事务回滚（同步合并宁可整份失败重试，也不留下半份数据）。
         """
-        with self._db.session() as session:
+        if session is not None:
+            row = ApplicationRow(id=application.id)
+            _copy_into(row, application)
+            session.add(row)
+            session.flush()
+            return application
+        with self._db.session() as own:
             try:
                 row = ApplicationRow(id=application.id)
                 _copy_into(row, application)
-                session.add(row)
-                session.commit()
+                own.add(row)
+                own.commit()
                 return application
             except IntegrityError as exc:
-                session.rollback()
-                existing = session.scalars(
+                own.rollback()
+                existing = own.scalars(
                     select(ApplicationRow)
                     .where(ApplicationRow.job_id == application.job_id)
                     .order_by(ApplicationRow.updated_at.desc(), ApplicationRow.id.asc())
                 ).first()
                 if existing is None:
-                    # 撞的不是「同岗位唯一」这条约束 —— 原样抛，别把别的问题藏起来
+                    # 撞的不是「同岗位唯一」这条约束 —— 原样抛，别把别的问题藏起来。
                     raise exc
                 return _to_application(existing)
 
     def update_existing(
-        self, application: Application, *, expected_updated_at: datetime | None = None
+        self,
+        application: Application,
+        *,
+        expected_updated_at: datetime | None = None,
+        session: Session | None = None,
     ) -> bool:
-        """只更新**已存在**的行；行不在（已被删）返回 `False`，**不插入**。
+        """只更新**已存在**的行；行不在（已被删）返回 `False`，**不插回**。
 
-        原先的阶段推进是 `get` 之后再 `upsert`：两步之间记录被删除时，upsert 会把
-        它当成新记录插回去 —— 用户明明删了，刷新又回来了（静默撤销删除）。
+        `expected_updated_at` 是**乐观锁**：写入时要求行仍是调用方读到的那一版，
+        否则两个并发请求后写的会整体覆盖先写的。`None` = 不做版本校验。
 
-        `expected_updated_at` 是**乐观锁**：调用方给出它**读到**的那一版的
-        `updated_at`，写入时要求行仍是那一版。否则两个并发请求各读一次、各写一次，
-        后写的那个会把先写的整体覆盖掉（读-改-写丢更新）—— 而两边的响应都是 200，
-        没人会知道有一边的改动消失了。
-
-        传 `None` = 不做版本校验（只在调用方明确要覆盖时才用）。
+        传入 `session` 时复用调用方的事务，不自行提交。
         """
-        with self._db.session() as session:
-            statement = update(ApplicationRow).where(ApplicationRow.id == application.id)
-            if expected_updated_at is not None:
-                # 与读取时同一格式（`UtcDateTime` 的 bind/result 是对称的），
-                # 所以这里是精确比较，不需要容差。
-                statement = statement.where(ApplicationRow.updated_at == expected_updated_at)
-            outcome = session.execute(
-                statement.values(
-                    job_id=application.job_id,
-                    company=application.company,
-                    title=application.title,
-                    stage=application.stage.value,
-                    applied_at=application.applied_at,
-                    updated_at=application.updated_at,
-                    note=application.note,
+        if session is None:
+            with self._db.session() as own:
+                changed = self.update_existing(
+                    application,
+                    expected_updated_at=expected_updated_at,
+                    session=own,
                 )
+                own.commit()
+                return changed
+        statement = update(ApplicationRow).where(ApplicationRow.id == application.id)
+        if expected_updated_at is not None:
+            statement = statement.where(ApplicationRow.updated_at == expected_updated_at)
+        outcome = session.execute(
+            statement.values(
+                job_id=application.job_id,
+                company=application.company,
+                title=application.title,
+                stage=application.stage.value,
+                applied_at=application.applied_at,
+                updated_at=application.updated_at,
+                note=application.note,
             )
-            session.commit()
-            # `rowcount` 只在 CursorResult 上（DML 一定返回它），而 `Result` 的静态类型
-            # 没有这个属性 —— 用 isinstance 收窄事实，别用 cast / type: ignore 糊过去。
-            return isinstance(outcome, CursorResult) and outcome.rowcount > 0
+        )
+        # `rowcount` 只在 CursorResult 上（DML 一定返回它），而 `Result` 的静态类型
+        # 没有这个属性 —— 用 isinstance 收窄事实，别用 cast / type: ignore 糊过去。
+        return isinstance(outcome, CursorResult) and outcome.rowcount > 0
 
     def get(self, application_id: str) -> Application | None:
         with self._db.session() as session:
             row = session.get(ApplicationRow, application_id)
             return _to_application(row) if row is not None else None
 
-    def list(self, *, limit: int = 100, offset: int = 0) -> list[Application]:
-        # 第二键 id：同 updated_at 行的顺序 SQL 不作保证，而本方法直接走 offset 分页
-        # （批量导入/脚本写入时同秒不罕见）。与 jobs 仓储同款，理由见 repository.py 的 _JOB_ORDER。
+    def list(
+        self, *, limit: int = 100, offset: int = 0, session: Session | None = None
+    ) -> list[Application]:
+        # 第二键 id：同 updated_at 行的顺序 SQL 不作保证，而本方法直接用 offset 分页。
         check_page(limit=limit, offset=offset)
-        with self._db.session() as session:
-            statement = (
-                select(ApplicationRow)
-                .order_by(ApplicationRow.updated_at.desc(), ApplicationRow.id.asc())
-                .limit(limit)
-                .offset(offset)
-            )
-            return [_to_application(row) for row in session.scalars(statement)]
+        if session is None:
+            with self._db.session() as own:
+                return self.list(limit=limit, offset=offset, session=own)
+        statement = (
+            select(ApplicationRow)
+            .order_by(ApplicationRow.updated_at.desc(), ApplicationRow.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return [_to_application(row) for row in session.scalars(statement)]
 
     def by_job(self, job_id: str) -> list[Application]:
         with self._db.session() as session:

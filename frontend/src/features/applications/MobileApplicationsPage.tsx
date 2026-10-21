@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useMobileChrome } from "../../app/mobileChrome";
+import { useRowTasks } from "../../shared/useRowTasks";
 import { ActionSheet, ConfirmDialog } from "../../shared/ui/mobile";
 import {
   STAGE_LABELS,
@@ -22,6 +23,9 @@ export function MobileApplicationsPage() {
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
   const saveNote = useSaveNote();
+  const stageTask = useRowTasks();
+  const noteTask = useRowTasks();
+  const removeTask = useRowTasks();
   const [filter, setFilter] = useState<Filter>("all");
   const [stageOverrides, setStageOverrides] = useState<Record<string, ApplicationStage>>({});
   const [stageTargetId, setStageTargetId] = useState<string | null>(null);
@@ -88,7 +92,7 @@ export function MobileApplicationsPage() {
       return;
     }
     const stage = value as ApplicationStage;
-    if (stage === target.stage) {
+    if (stage === target.stage || !stageTask.begin(target.id)) {
       return;
     }
     setStageOverrides((prev) => ({ ...prev, [target.id]: stage }));
@@ -111,6 +115,7 @@ export function MobileApplicationsPage() {
           });
           showToast("error", error.message);
         },
+        onSettled: () => stageTask.settle(target.id),
       },
     );
   }
@@ -119,6 +124,9 @@ export function MobileApplicationsPage() {
     const target = deleteTarget;
     setDeleteTarget(null);
     if (!target) {
+      return;
+    }
+    if (!removeTask.begin(target.id)) {
       return;
     }
     setDeletingId(target.id);
@@ -130,6 +138,7 @@ export function MobileApplicationsPage() {
         setDeletingId(null);
         showToast("error", error.message);
       },
+      onSettled: () => removeTask.settle(target.id),
     });
   }
 
@@ -174,15 +183,22 @@ export function MobileApplicationsPage() {
               stage={stageOf(application)}
               deleting={deletingId === application.id}
               onOpenStage={() => setStageTargetId(application.id)}
-              onSaveNote={(note) =>
+              onSaveNote={(note) => {
+                if (!noteTask.begin(application.id)) {
+                  return;
+                }
                 saveNote.mutate(
                   { applicationId: application.id, stage: stageOf(application), note },
                   {
                     onSuccess: () => showToast("success", "备注已保存。"),
-                    onError: (error) => showToast("error", error.message),
+                    onError: (error) => {
+                      noteTask.setError(application.id, error.message);
+                      showToast("error", error.message);
+                    },
+                    onSettled: () => noteTask.settle(application.id),
                   },
-                )
-              }
+                );
+              }}
             />
           ))}
           {!applications.isLoading && visible.length === 0 && (

@@ -59,15 +59,20 @@ class TestVersionValue:
         """`hunter1.__version__` 必须来自包本身，而不是某个外部常量。"""
         assert isinstance(__version__, str) and __version__.strip() == __version__
 
-    def test_android_version_name_matches_the_package(self) -> None:
-        """Android 包与 Windows 包必须同名；否则 Release 会出现两个「版本」。"""
+    def test_android_default_version_matches_the_package(self) -> None:
+        """本地构建的默认版本必须与包一致；发布时 workflow 用 tag 覆盖。"""
         text = ANDROID_BUILD.read_text(encoding="utf-8")
-        match = re.search(r'^\s*versionName\s+"([^"]+)"', text, re.MULTILINE)
-        assert match, "frontend/android/app/build.gradle 缺少 versionName"
+        match = re.search(r'project\.findProperty\("appVersion"\)\s*\?:\s*"([^"]+)"', text)
+        assert match, "frontend/android/app/build.gradle 缺少默认 appVersion"
         assert match.group(1) == __version__
+        assert "versionName appVersionName" in text
 
-    def test_android_version_code_is_positive(self) -> None:
+    def test_android_version_code_is_derived_and_positive(self) -> None:
+        """versionCode 必须由 semver 派生，保证随版本单调递增。"""
         text = ANDROID_BUILD.read_text(encoding="utf-8")
-        match = re.search(r"^\s*versionCode\s+(\d+)\s*$", text, re.MULTILINE)
-        assert match, "frontend/android/app/build.gradle 缺少 versionCode"
-        assert int(match.group(1)) > 0
+        assert "versionParts[0].toInteger() * 1_000_000" in text
+        assert "versionParts[1].toInteger() * 1_000" in text
+        assert "versionParts[2].toInteger()" in text
+        assert "versionCode appVersionCode" in text
+        major, minor, patch = (int(part) for part in __version__.split("."))
+        assert major * 1_000_000 + minor * 1_000 + patch > 0

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useMobileChrome } from "../../app/mobileChrome";
 import { MobileIcon, Sheet } from "../../shared/ui/mobile";
+import { useRowTasks } from "../../shared/useRowTasks";
 import { useApplyToJob, useApplications } from "../applications/api";
 import { useScoreJob, useJobScore, type ScoreView } from "../scoring/api";
 import { ScoreRing } from "../scoring/components/ScoreRing";
@@ -21,6 +22,8 @@ export function MobileJobsPage() {
   const applications = useApplications(1);
   const apply = useApplyToJob();
   const score = useScoreJob();
+  const applyTask = useRowTasks();
+  const scoreTask = useRowTasks();
   const crawl = useCrawlStatus();
   const [appliedLocal, setAppliedLocal] = useState<Set<string>>(() => new Set());
   const [detailJob, setDetailJob] = useState<JobSummary | null>(null);
@@ -99,27 +102,32 @@ export function MobileJobsPage() {
   const href = detailJob ? safeHref(detailJob.detail_url) : null;
 
   function runScore(job: JobSummary) {
+    if (!scoreTask.begin(job.id)) {
+      return; // 同一岗位已在评分：连点不会再发一次
+    }
     score.mutate(job.id, {
       onSuccess: (data) => {
         setScorePreview({ jobId: job.id, data });
         showToast("success", `已评分：${data.score} 分`);
       },
       onError: (error) => showToast("error", error.message),
+      onSettled: () => scoreTask.settle(job.id),
     });
   }
 
   function runApply(job: JobSummary) {
+    if (!applyTask.begin(job.id)) {
+      return;
+    }
     apply.mutate(job.id, {
       onSuccess: () => {
         setAppliedLocal((prev) => new Set(prev).add(job.id));
         showToast("success", "已记录投递。");
       },
       onError: (error) => showToast("error", error.message),
+      onSettled: () => applyTask.settle(job.id),
     });
   }
-
-  const scoringId = score.isPending ? score.variables : undefined;
-  const applyingId = apply.isPending ? apply.variables : undefined;
 
   return (
     <div>
@@ -187,8 +195,8 @@ export function MobileJobsPage() {
                 key={job.id}
                 job={job}
                 applied={appliedIds.has(job.id)}
-                scoring={scoringId === job.id}
-                applying={applyingId === job.id}
+                scoring={scoreTask.has(job.id)}
+                applying={applyTask.has(job.id)}
                 onOpen={() => setDetailJob(job)}
                 onScore={() => runScore(job)}
                 onApply={() => runApply(job)}
@@ -251,19 +259,19 @@ export function MobileJobsPage() {
                 <button
                   type="button"
                   className="mobile-button primary"
-                  disabled={scoringId === detailJob.id}
+                  disabled={scoreTask.has(detailJob.id)}
                   onClick={() => runScore(detailJob)}
                 >
-                  {scoringId === detailJob.id ? "评分中…" : "评分"}
+                  {scoreTask.has(detailJob.id) ? "评分中…" : "评分"}
                 </button>
               ) : (
                 <button
                   type="button"
                   className="mobile-button primary"
-                  disabled={applyingId === detailJob.id}
+                  disabled={applyTask.has(detailJob.id)}
                   onClick={() => runApply(detailJob)}
                 >
-                  {applyingId === detailJob.id ? "记录中…" : "记录投递"}
+                  {applyTask.has(detailJob.id) ? "记录中…" : "记录投递"}
                 </button>
               )}
             </>

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from hunter1.domain.crawl import company_identity, job_identity
 from hunter1.domain.models import Application, ApplicationStage, CaptureStatus, Job
@@ -15,8 +18,15 @@ from hunter1.platform.db import Database
 from hunter1.slices.applications import ApplicationStore
 from hunter1.slices.jobs import JobStore
 from hunter1.slices.scoring import CandidateProfile, ScoreStore
-from hunter1.slices.sync import SyncStore, build_router
-from hunter1.slices.sync.schemas import SyncApplication, SyncJob, SyncProfile, SyncSnapshot
+from hunter1.slices.sync import SyncBodyLimitMiddleware, SyncStore, build_router
+from hunter1.slices.sync import router as sync_router
+from hunter1.slices.sync.schemas import (
+    MAX_JD_CHARS,
+    SyncApplicationImport,
+    SyncJobImport,
+    SyncProfile,
+    SyncSnapshotImport,
+)
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(hours=1)
@@ -47,8 +57,16 @@ def scores(db: Database) -> ScoreStore:
 
 
 @pytest.fixture()
-def store(jobs: JobStore, applications: ApplicationStore, scores: ScoreStore) -> SyncStore:
-    return SyncStore(jobs=jobs, applications=applications, scores=scores, clock=lambda: NOW)
+def store(
+    db: Database, jobs: JobStore, applications: ApplicationStore, scores: ScoreStore
+) -> SyncStore:
+    return SyncStore(
+        db=db,
+        jobs=jobs,
+        applications=applications,
+        scores=scores,
+        clock=lambda: NOW,
+    )
 
 
 def _seed_job(
@@ -92,7 +110,7 @@ def _seed_application(db: Database, job_id: str) -> None:
     )
 
 
-def _job(**overrides: object) -> SyncJob:
+def _job(**overrides: object) -> SyncJobImport:
     base: dict[str, object] = {
         "id": "mobile-job-id",
         "title": "AI产品经理",
@@ -106,16 +124,16 @@ def _job(**overrides: object) -> SyncJob:
         "last_seen_at": LATER,
     }
     base.update(overrides)
-    return SyncJob(**base)  # type: ignore[arg-type]
+    return SyncJobImport(**base)  # type: ignore[arg-type]
 
 
 def _snapshot(
     *,
-    jobs: list[SyncJob] | None = None,
-    applications: list[SyncApplication] | None = None,
+    jobs: list[SyncJobImport] | None = None,
+    applications: list[SyncApplicationImport] | None = None,
     profile: SyncProfile | None = None,
-) -> SyncSnapshot:
-    return SyncSnapshot(
+) -> SyncSnapshotImport:
+    return SyncSnapshotImport(
         exported_at=NOW,
         jobs=jobs or [],
         applications=applications or [],
@@ -265,7 +283,7 @@ class TestMergeJobs:
 class TestMergeApplications:
     def test_application_is_aligned_by_detail_url(self, store: SyncStore, db: Database) -> None:
         job_id = _seed_job(db)
-        incoming = SyncApplication(
+        incoming = SyncApplicationImport(
             job_detail_url=URL,
             title="AI产品经理",
             company="字节跳动",
@@ -288,7 +306,7 @@ class TestMergeApplications:
     ) -> None:
         job_id = _seed_job(db)
         _seed_application(db, job_id)
-        older = SyncApplication(
+        older = SyncApplicationImport(
             job_detail_url=URL,
             title="AI产品经理",
             company="字节跳动",
@@ -296,7 +314,7 @@ class TestMergeApplications:
             applied_at=NOW - timedelta(days=2),
             updated_at=NOW,
         )
-        newer = SyncApplication(
+        newer = SyncApplicationImport(
             job_detail_url=URL,
             title="AI产品经理",
             company="字节跳动",
@@ -312,7 +330,7 @@ class TestMergeApplications:
         assert db.applications().by_job(job_id)[0].stage is ApplicationStage.OFFER
 
     def test_application_without_job_is_skipped(self, store: SyncStore) -> None:
-        incoming = SyncApplication(
+        incoming = SyncApplicationImport(
             job_detail_url="https://unknown.example/job/9",
             title="未知岗位",
             company="某公司",
@@ -345,6 +363,141 @@ class TestMergeProfile:
         assert scores.load_profile().keywords == ["新"]  # type: ignore[union-attr]
 
 
+class TestExportTolerance:
+    def test_oversize_jd_and_empty_url_still_export(self, db: Database, store: SyncStore) -> None:
+        db.jobs().upsert(
+            Job(
+                id="long-jd",
+                company_id=company_identity("某公司"),
+                title="超长 JD",
+                detail_url="https://example.com/jobs/long",
+                source="某公司",
+                jd_raw="x" * (MAX_JD_CHARS + 1),
+                capture_status=CaptureStatus.COMPLETE,
+                first_seen_at=NOW,
+                last_seen_at=NOW,
+            )
+        )
+        db.jobs().upsert(
+            Job(
+                id="no-url",
+                company_id=company_identity("某公司"),
+                title="没有详情链接",
+                detail_url="",
+                source="某公司",
+                capture_status=CaptureStatus.PENDING,
+                first_seen_at=NOW,
+                last_seen_at=NOW,
+            )
+        )
+
+        snapshot = store.export_snapshot()
+
+        exported = {job.id: job for job in snapshot.jobs}
+        assert exported["long-jd"].jd_raw is not None
+        assert len(exported["long-jd"].jd_raw) == MAX_JD_CHARS + 1
+        assert exported["no-url"].detail_url == ""
+
+    def test_corrupt_profile_is_exported_as_missing(self, db: Database, store: SyncStore) -> None:
+        from hunter1.slices.scoring.store import PROFILE_KEY
+
+        db.settings().set_raw(PROFILE_KEY, {"keywords": ["AI"], "summary": 123})
+
+        assert store.export_snapshot().profile is None
+
+
+class TestMergeAtomicity:
+    def test_failure_mid_merge_rolls_back_every_write(
+        self, db: Database, store: SyncStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original = store._jobs.upsert_facts
+        calls = 0
+
+        def fail_on_second(job: Job, *, session: object = None) -> None:
+            nonlocal calls
+            calls += 1
+            original(job, session=session)  # type: ignore[arg-type]
+            if calls == 2:
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(store._jobs, "upsert_facts", fail_on_second)
+        first = _job(detail_url="https://example.com/jobs/a", id="a")
+        second = _job(detail_url="https://example.com/jobs/b", id="b")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            store.merge_snapshot(_snapshot(jobs=[first, second]))
+
+        assert db.jobs().count() == 0
+
+
+class TestMergeConcurrency:
+    def test_two_merges_are_serialized_without_lock_errors(
+        self, db: Database, store: SyncStore
+    ) -> None:
+        barrier = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def merge(index: int) -> None:
+            try:
+                barrier.wait()
+                store.merge_snapshot(
+                    _snapshot(
+                        jobs=[
+                            _job(
+                                id=f"remote-{index}",
+                                detail_url=f"https://example.com/jobs/{index}",
+                            )
+                        ]
+                    )
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=merge, args=(index,)) for index in (1, 2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert errors == []
+        assert db.jobs().count() == 2
+
+
+class TestImportValidation:
+    """导出可以宽容历史数据，导入不能把不可写进库的字段放过去。"""
+
+    @pytest.mark.parametrize(
+        "field",
+        ["title", "company", "detail_url", "jd_raw", "score_summary"],
+    )
+    def test_job_rejects_fields_that_cannot_be_written(self, field: str) -> None:
+        value = {
+            "title": "",
+            "company": "",
+            "detail_url": "",
+            "jd_raw": "x" * (MAX_JD_CHARS + 1),
+            "score_summary": "x" * 2001,
+        }[field]
+        with pytest.raises(ValidationError):
+            _job(**{field: value})
+
+    @pytest.mark.parametrize(
+        "field",
+        ["title", "company", "note"],
+    )
+    def test_application_rejects_fields_that_cannot_be_written(self, field: str) -> None:
+        values: dict[str, object] = {
+            "job_detail_url": URL,
+            "title": "AI产品经理",
+            "company": "字节跳动",
+            "applied_at": NOW,
+            "updated_at": LATER,
+        }
+        values[field] = "" if field in {"title", "company"} else "x" * 2001
+        with pytest.raises(ValidationError):
+            SyncApplicationImport(**values)  # type: ignore[arg-type]
+
+
 class TestRouter:
     def test_snapshot_and_merge_are_typed_endpoints(self, store: SyncStore) -> None:
         app = FastAPI()
@@ -360,6 +513,71 @@ class TestRouter:
             payload = merged.json()
             assert payload["counts"]["jobs_created"] == 1
             assert payload["snapshot"]["jobs"][0]["detail_url"] == URL
+
+    def test_too_many_jobs_is_422(self, store: SyncStore, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sync_router, "MAX_SYNC_JOBS", 1)
+        app = FastAPI()
+        app.include_router(build_router(store=store), prefix="/api")
+        payload = _snapshot(
+            jobs=[
+                _job(id="a", detail_url="https://example.com/jobs/a"),
+                _job(id="b", detail_url="https://example.com/jobs/b"),
+            ]
+        )
+        with TestClient(app) as client:
+            response = client.post("/api/sync/merge", json=payload.model_dump(mode="json"))
+        assert response.status_code == 422
+        assert "条目过多" in response.json()["detail"]
+
+    def test_oversized_body_is_413(self, store: SyncStore) -> None:
+        app = FastAPI()
+        app.include_router(build_router(store=store), prefix="/api")
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sync/merge",
+                content=b"{}",
+                headers={"content-length": str(sync_router.MAX_SYNC_BODY_BYTES + 1)},
+            )
+        assert response.status_code == 413
+
+    def test_chunked_body_is_limited_without_content_length(self, store: SyncStore) -> None:
+        """分块请求没有 Content-Length，也要在读取过程中按实际字节数拦截。"""
+        app = FastAPI()
+        app.add_middleware(SyncBodyLimitMiddleware, max_bytes=64)
+        app.include_router(build_router(store=store), prefix="/api")
+
+        def chunks():
+            yield b'{"version": 1, "exported_at": "2026-10-20T12:00:00Z", '
+            yield b'"jobs": [], "applications": [], "profile": null}'
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sync/merge",
+                content=chunks(),
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 413
+        assert "上限" in response.json()["detail"]
+
+    def test_chunked_body_under_limit_still_merges(self, store: SyncStore) -> None:
+        app = FastAPI()
+        app.add_middleware(SyncBodyLimitMiddleware, max_bytes=1024)
+        app.include_router(build_router(store=store), prefix="/api")
+        payload = _snapshot(jobs=[_job()]).model_dump(mode="json")
+
+        def chunks():
+            raw = json.dumps(payload).encode()
+            yield raw[:20]
+            yield raw[20:]
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sync/merge",
+                content=chunks(),
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 200
+        assert response.json()["counts"]["jobs_created"] == 1
 
     def test_empty_profile_is_422_not_500(self, store: SyncStore) -> None:
         app = FastAPI()

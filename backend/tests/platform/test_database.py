@@ -48,6 +48,23 @@ def test_busy_timeout_pragma_is_explicit(tmp_path: Path) -> None:
     db.dispose()
 
 
+def test_write_transaction_takes_the_write_lock_up_front(tmp_path: Path) -> None:
+    """写事务必须一开始就抢写锁，避免两个合并同时读旧快照后再升级冲突。"""
+    from sqlalchemy import text
+
+    db = Database(tmp_path / "write-lock.db")
+    db.initialize()
+    try:
+        with db.transaction() as session:
+            session.execute(text("SELECT 1"))
+            with db.engine.connect() as other:
+                other.exec_driver_sql("PRAGMA busy_timeout=50")
+                with pytest.raises(OperationalError, match="locked"):
+                    other.exec_driver_sql("BEGIN IMMEDIATE")
+    finally:
+        db.dispose()
+
+
 def test_foreign_keys_pragma_is_on(tmp_path: Path) -> None:
     """外键开关必须显式打开（SQLite 默认**不检查**外键）。
 

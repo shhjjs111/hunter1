@@ -17,6 +17,9 @@ hunter1/
 │   │   └── cli.py      serve / crawl / update
 │   └── tests/          镜像 src 结构；tests/slices/<name> = 该切片的独立验证
 ├── frontend/         React SPA（独立工程；业务页面 features/ 与后端 slices/ 同名；sync 入口在手机配置页）
+│   └── src/mobile/   安卓本地后端（IndexedDB + 抓取/LLM 的第二份 TS 实现；
+│                     契约只覆盖 HTTP 形状，不覆盖它；站点选择器与评分 prompt
+│                     改动必须与 Python 侧手工同步，详见 docs/ANDROID.md）
 ├── contracts/        OpenAPI 契约快照（生成物，禁手改）
 ├── scripts/          跨端工程脚本（check.sh / dev.sh / contracts.sh / build.py）
 └── docs/             架构白皮书与开发指引
@@ -123,6 +126,7 @@ hunter1/
 | 架构全貌、设计公理、已知取舍 | `docs/ARCHITECTURE.md` |
 | 环境搭建、命令细节、打包 | `docs/DEVELOPMENT.md` |
 | 某个切片的职责与 API 面 | `backend/src/hunter1/slices/<name>/SLICE.md` |
+| 安卓独立版 / 本地 TS 后端（`frontend/src/mobile/`） | `docs/ANDROID.md` |
 | 契约纪律 | `contracts/README.md` |
 | 什么允许进仓库 | `backend/tests/test_repo_hygiene.py` |
 | 历史规划（v1，已被 v2 取代） | `docs/DEVELOPMENT-PLAN.md` |

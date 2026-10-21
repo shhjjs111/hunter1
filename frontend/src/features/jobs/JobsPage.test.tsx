@@ -181,6 +181,46 @@ describe("JobsPage", () => {
     expect(screen.getByRole("status").textContent).toContain("已评分：88 分");
   });
 
+  it("同一岗位连点评分只发一次请求", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      if (request.method === "POST") {
+        await gate;
+        return jsonResponse({
+          job_id: "j1",
+          score: 88,
+          summary: null,
+          advantages: null,
+          gaps: null,
+          model: "fake",
+          prompt_version: "v3",
+          scored_at: null,
+        });
+      }
+      return jsonResponse(LIST_PAYLOAD);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+
+    const button = await screen.findByRole("button", { name: "评分" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "评分中…" })).toBeTruthy(),
+    );
+    const posts = fetchMock.mock.calls.filter(
+      ([input]) => (input as Request).method === "POST",
+    );
+    expect(posts).toHaveLength(1);
+    release();
+    await act(async () => {});
+  });
+
   it("评分成功后把结果卡滚进当前视口", async () => {
     const scrollIntoView = vi.fn();
     const original = HTMLElement.prototype.scrollIntoView;

@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import sys
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
 from hunter1.domain.models import Job
 from hunter1.platform.db import Database
 from hunter1.slices.scoring.models import CandidateProfile
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 # 画像存在通用键值配置区（与 LLM 配置同表）：它是**用户配置**，不是岗位数据，
 # 落在这里才能被界面改写后立刻生效，而不必改装配代码重启。
@@ -68,6 +72,7 @@ class ScoreStore:
         summary: str | None = None,
         advantages: str | None = None,
         gaps: str | None = None,
+        session: Session | None = None,
     ) -> Job | None:
         """把分数与**结论文本**写回岗位；岗位不存在时返回 None（调用方据此报 404）。
 
@@ -100,20 +105,21 @@ class ScoreStore:
             summary=_clip(summary),
             advantages=_clip(advantages),
             gaps=_clip(gaps),
+            session=session,
         ):
             return None
         return self._db.jobs().get(job_id)
 
     # ---- 候选人画像 ----
 
-    def load_profile(self) -> CandidateProfile | None:
+    def load_profile(self, *, session: Session | None = None) -> CandidateProfile | None:
         """读画像：**没配过返回 None，配过但坏了抛错**。
 
         两者必须能分辨（与 `platform.db` 的 LLM 配置同款取舍）：`None` 是初始
         状态，界面该渲染空表单；抛错是数据损坏，界面该给修复指引 —— 若把损坏
         也当成「还没配」静默返回 None，用户填过的内容会被无声丢弃。
         """
-        raw = self._db.settings().get_raw(PROFILE_KEY)
+        raw = self._db.settings().get_raw(PROFILE_KEY, session=session)
         if raw is None:
             return None
         try:
@@ -124,17 +130,24 @@ class ScoreStore:
     def save_profile(self, profile: CandidateProfile) -> None:
         self.save_profile_at(profile, datetime.now(UTC))
 
-    def save_profile_at(self, profile: CandidateProfile, updated_at: datetime) -> None:
+    def save_profile_at(
+        self,
+        profile: CandidateProfile,
+        updated_at: datetime,
+        *,
+        session: Session | None = None,
+    ) -> None:
         """写入画像与它的更新时间（同步导入用，保留来源设备的时间）。"""
-        self._db.settings().set_raw(PROFILE_KEY, profile.model_dump())
+        self._db.settings().set_raw(PROFILE_KEY, profile.model_dump(), session=session)
         self._db.settings().set_raw(
             PROFILE_UPDATED_AT_KEY,
             {"at": updated_at.astimezone(UTC).isoformat()},
+            session=session,
         )
 
-    def load_profile_updated_at(self) -> datetime | None:
+    def load_profile_updated_at(self, *, session: Session | None = None) -> datetime | None:
         """读画像更新时间；没写过或格式不可信时返回 None（同步按「更旧」处理）。"""
-        raw = self._db.settings().get_raw(PROFILE_UPDATED_AT_KEY)
+        raw = self._db.settings().get_raw(PROFILE_UPDATED_AT_KEY, session=session)
         if raw is None:
             return None
         value = raw.get("at")

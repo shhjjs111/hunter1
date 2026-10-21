@@ -188,7 +188,7 @@ class TestProbeUsesTheSubmittedForm:
                 json={
                     "base_url": "https://typed.example.com/v1",
                     "model": "typed-model",
-                    "api_key": "",
+                    "api_key": "sk-typed",
                 },
             )
             assert response.json()["ok"] is True
@@ -202,9 +202,23 @@ class TestProbeUsesTheSubmittedForm:
             client.put("/api/settings", json=FORM)
             client.post(
                 "/api/settings/test",
-                json={"base_url": "https://typed.example.com/v1", "model": "m", "api_key": ""},
+                json={"base_url": "https://api.example.com/v2", "model": "m", "api_key": ""},
             )
             assert seen[0].api_key == FORM["api_key"]
+
+    def test_changed_origin_with_blank_key_never_sends_the_saved_key(self, db: Database) -> None:
+        """改了 scheme/host/port 还留空 key：拒绝，而不是把旧 Key 发给新地址。"""
+        seen: list[LLMSettings] = []
+        for client in _recording_client(db, seen):
+            client.put("/api/settings", json=FORM)
+            response = client.post(
+                "/api/settings/test",
+                json={"base_url": "https://evil.example.com/v1", "model": "m", "api_key": ""},
+            )
+            body = response.json()
+            assert body["ok"] is False
+            assert "重新输入 API Key" in body["message"]
+            assert seen == [], "旧 Key 不能发到新端点"
 
     def test_typed_key_is_used_when_given(self, db: Database) -> None:
         seen: list[LLMSettings] = []
@@ -501,13 +515,28 @@ class TestPlaintextWarningIsExposed:
     `warning` 字段 —— 前端读 `settings.data.warning` 显示，不再自己判一遍。
     """
 
-    def test_public_http_url_is_flagged(self, db: Database) -> None:
+    def test_public_http_url_is_rejected_on_save(self, db: Database) -> None:
+        """公网明文 http 不再是「提示后照存」：Key 会明文过网，直接 422。"""
         form = {**FORM, "base_url": "http://api.example.com/v1"}
         for client in _client(db):
             response = client.put("/api/settings", json=form)
+            assert response.status_code == 422
+            assert "明文" in response.json()["detail"][0]["msg"]
+            assert db.settings().get_llm() is None
+
+    def test_legacy_public_http_config_is_still_flagged_on_read(self, db: Database) -> None:
+        """旧库里的公网 http 仍能读出来并显示警告（不把用户锁在门外）。"""
+        db.settings().save_llm(
+            LLMSettings(
+                base_url="http://api.example.com/v1",
+                model="m",
+                api_key="sk-secret-1234",
+            )
+        )
+        for client in _client(db):
+            response = client.get("/api/settings")
             assert response.status_code == 200
             assert response.json()["warning"], "明文公网端点必须给出提示"
-            assert "http://" in response.json()["warning"]
 
     def test_https_url_has_no_warning(self, db: Database) -> None:
         for client in _client(db):
