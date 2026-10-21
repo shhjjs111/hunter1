@@ -27,6 +27,8 @@
   `verify_apk.py` 校验版本、debuggable、allowBackup、权限与证书指纹，并把 APK
   纳入 `SHA256SUMS.txt`、SPDX SBOM、provenance 与 SBOM attestation。
 - 同步快照导出改用宽松模型：超长 JD、空详情 URL、损坏画像都不再让整份快照 500。
+- 同步合并限制为 64 MiB / 5 万条；即使请求没有 `Content-Length`、走分块传输，
+  也按实际读取字节数拦截。
 - `scripts/contracts.sh` 优先使用 `backend/.venv`，缺 fastapi 时给出可行动提示。
 - Dependabot 覆盖 `frontend/android` 的 Gradle 依赖；CodeQL 增加 `actions`
   语言分析，工作流本身也进入扫描范围。
@@ -34,7 +36,8 @@
 ### Fixed
 
 - **同步合并改为单事务**：岗位、评分、投递、画像要么一起成功，要么一起回滚；
-  分页读取共用同一快照，避免 `OFFSET` 漏行/重行导致重复岗位。
+  分页读取共用同一快照，避免 `OFFSET` 漏行/重行导致重复岗位；手机本地合并也
+  收进单个 IndexedDB 事务。
 - 手机助手「中止回答」后不再把问题重复提交；Dock 胶囊与模块色在第 2 页之后
   正确跟随当前页。
 - 投递记录与岗位库按行维护 pending / error：前一行保存失败不会被后一行覆盖，
