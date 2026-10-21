@@ -1,7 +1,6 @@
 import type { components } from "../shared/api/schema";
 import {
   getDB,
-  getProfile,
   newId,
   type ApplicationRecord,
   type ApplicationStage,
@@ -198,11 +197,16 @@ function applicationToWire(app: ApplicationRecord, jobDetailUrl: string | null):
 
 export async function buildLocalSnapshot(): Promise<SyncSnapshot> {
   const db = await getDB();
-  const [jobs, applications, profile] = await Promise.all([
-    db.getAll("jobs"),
-    db.getAll("applications"),
-    getProfile(),
+  // 同一份快照里的岗位、投递与画像必须来自同一个一致性视图；分开读会在
+  // 并发删除/写入时出现「投递指向已不在快照里的岗位」。
+  const tx = db.transaction(["jobs", "applications", "settings"], "readonly");
+  const [jobs, applications, storedProfile] = await Promise.all([
+    tx.objectStore("jobs").getAll(),
+    tx.objectStore("applications").getAll(),
+    tx.objectStore("settings").get("profile"),
   ]);
+  await tx.done;
+  const profile = storedProfile as ProfileRecord | undefined;
   const urls = new Map(jobs.map((job) => [job.id, job.detailUrl]));
   return {
     version: 1,
