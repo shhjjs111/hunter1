@@ -76,6 +76,7 @@ class TestPlaintextWarning:
             "http://172.16.3.4:8080/v1",
             "http://ollama:11434/v1",  # 内网单标签名
             "http://llm.local/v1",
+            "http://llm.internal/v1",
             "http://[::1]:8000/v1",
         ],
     )

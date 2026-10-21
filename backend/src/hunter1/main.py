@@ -31,7 +31,7 @@ from starlette.convertors import Convertor, register_url_convertor
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
-from hunter1.domain.settings import LLMSettings
+from hunter1.domain.settings import LLMSettings, plaintext_warning
 from hunter1.platform.access import AccessGateMiddleware
 from hunter1.platform.db import Database
 from hunter1.platform.web_security import SecurityBoundaryMiddleware
@@ -274,6 +274,13 @@ def create_app(context: AppContext) -> FastAPI:
         if settings is None or not settings.is_configured:
             raise ModelNotConfiguredError(
                 "模型未配置：请先在「配置」页填好 base_url / 模型 / API Key"
+            )
+        warning = plaintext_warning(settings.base_url)
+        if warning:
+            # 旧库里可能还留着公网明文配置。保存入口已拒绝新写入，但若这里放行，
+            # 评分 / 助手仍会把 Key 与对话内容明文发出去 —— 读取时也必须拦住。
+            raise ModelNotConfiguredError(
+                f"模型配置不安全，请到「配置」页改用 https:// 或内网地址：{warning}"
             )
         return context.llm_factory(settings)
 

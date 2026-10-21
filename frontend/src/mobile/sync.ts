@@ -11,6 +11,7 @@ import {
   type SyncRecord,
 } from "./db";
 import { requestJson } from "./http";
+import { isPrivateHost } from "./netPolicy";
 
 export type SyncApplication = components["schemas"]["SyncApplication"];
 export type SyncCounts = components["schemas"]["SyncCounts"];
@@ -132,6 +133,9 @@ export function normalizeDesktopUrl(raw: string): string {
   }
   if (!url.hostname) {
     throw new Error("电脑地址缺少主机名");
+  }
+  if (url.protocol === "http:" && !isPrivateHost(url.hostname)) {
+    throw new Error("电脑地址是公网 HTTP：访问码会明文过网，请改用 https:// 或局域网地址");
   }
   return url.origin;
 }

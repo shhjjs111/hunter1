@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { resetDBForTests, saveLLM, saveProfile, type JobRecord } from "./db";
+import { getLLM, resetDBForTests, saveLLM, saveProfile, type JobRecord } from "./db";
 import {
   assistantReply,
   getSettings,
@@ -80,6 +80,41 @@ describe("模型配置视图", () => {
     await expect(
       saveSettings({ base_url: "https://api.example.com/v1", model: "m", api_key: "" }),
     ).rejects.toThrow("API Key 不能为空");
+  });
+
+  it("端点变更后不会把旧 Key 复用并发送到新地址", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "m", apiKey: "secret" });
+
+    await expect(
+      saveSettings({ base_url: "https://evil.example.com/v1", model: "m", api_key: "" }),
+    ).rejects.toThrow("端点地址已改变");
+    expect((await getLLM())?.apiKey).toBe("secret");
+
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return completion("OK");
+    }) as typeof fetch;
+    const probe = await testConnection({
+      base_url: "https://evil.example.com/v1",
+      model: "m",
+      api_key: "",
+    });
+    expect(probe.ok).toBe(false);
+    expect(probe.message).toContain("重新输入 API Key");
+    expect(called).toBe(false);
+  });
+
+  it("同一 origin 内换路径仍可复用旧 Key", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "m", apiKey: "secret" });
+    globalThis.fetch = (async () => completion("OK")) as typeof fetch;
+
+    const probe = await testConnection({
+      base_url: "https://api.example.com/v2",
+      model: "m",
+      api_key: "",
+    });
+    expect(probe.ok).toBe(true);
   });
 });
 

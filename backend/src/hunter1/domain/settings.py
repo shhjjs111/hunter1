@@ -75,12 +75,11 @@ __all__ = ["LLMSettings", "plaintext_warning"]
 
 
 def plaintext_warning(base_url: str) -> str | None:
-    """`base_url` 是明文 `http://` 且指向**公网**时的提示；否则 None。
+    """`base_url` 是明文 `http://` 且指向**公网**时的阻断原因；否则 None。
 
-    本地/内网用 http 是**合理**的（Ollama、vLLM、公司内网网关），所以只提示、
-    不拒绝 —— 拒绝会把最常见的自建场景挡在门外。但公网明文意味着 API Key 与
-    全部对话内容以明文过网，用户至少要知道自己在冒什么险（此前整条链路一个字
-    都不提）。
+    本地/内网用 http 是**合理**的（Ollama、vLLM、公司内网网关），不能拒绝；
+    但公网明文意味着 API Key 与全部对话内容以明文过网。配置页保存与探测据此
+    返回 422 / 失败；读取旧配置时同一文案作为可见警告。
     """
     parts = urlsplit((base_url or "").strip())
     if parts.scheme != "http":
@@ -98,7 +97,7 @@ def _is_internal_host(host: str) -> bool:
     """本机 / 私有网段 / 内网单标签名 —— 这些用 http 不提示。"""
     if host == "localhost" or host.endswith(".localhost"):
         return True
-    if host.endswith(".local"):
+    if host.endswith((".local", ".internal")):
         return True
     if "." not in host and ":" not in host:
         # 单标签名（`ollama`、`gateway`、`llm-host`）：内网名，不是公网域名

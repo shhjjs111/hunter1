@@ -136,6 +136,7 @@ describe("URL 归一化", () => {
     expect(normalizeDesktopUrl("192.168.1.5:8000/api")).toBe("http://192.168.1.5:8000");
     expect(normalizeDesktopUrl("https://hunter.example.com/")).toBe("https://hunter.example.com");
     expect(() => normalizeDesktopUrl("")).toThrow(/请填写电脑地址/);
+    expect(() => normalizeDesktopUrl("http://example.com:8000")).toThrow(/公网 HTTP/);
   });
 });
 

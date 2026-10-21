@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
@@ -49,6 +50,24 @@ def _failure_text(exc: Exception) -> str:
     if isinstance(exc, LLMError):
         return describe_llm_error(exc)
     return f"{type(exc).__name__}: {exc}"
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """URL 的 (scheme, host, port)；端口按协议补默认值，便于比较。"""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    port = parts.port or (443 if scheme == "https" else 80)
+    return scheme, (parts.hostname or "").lower(), port
+
+
+def _same_origin(left: str, right: str) -> bool:
+    """两个 base_url 是否指向同一个服务（scheme + host + port）。
+
+    只比 host 不够：`http://host` 与 `https://host`、`:8080` 与默认端口都是
+    不同的信任边界。旧 Key 只能回填到**同一个 origin**，否则一次改地址就会把
+    密钥发给另一台服务器。
+    """
+    return _origin(left) == _origin(right)
 
 
 def _view(settings: LLMSettings) -> SettingsView:
@@ -116,21 +135,59 @@ def build_router(
         try:
             existing = store.get_llm()
         except ValueError:
-            # 破损数据里没有「原值」可保留 —— 空 key 就只能当空，让用户重填。
-            # 这里若让它抛出去，修复路径同样被堵死（PUT 也 500），与 GET 同一课。
+            # 破损数据里没有「原值」可保留 —— 旧 key 只能当空，让用户重填。
             existing = None
-        # 空 key = 「不改」而不是「清空」（界面只回显掩码，读不到原值）
-        key = form.api_key.strip() or (existing.api_key if existing else "")
+        incoming = form.api_key.strip()
         try:
+            # 先校验地址本身：非法 URL 要给出字段级原因，而不是被「换了端点」
+            # 这条策略提前拦成另一种错误。
             candidate = LLMSettings(
                 base_url=form.base_url,
                 model=form.model,
-                api_key=key,
+                api_key=incoming,
             )
         except ValidationError as exc:
             # 就地回显错误原因 —— 用户要知道哪儿错了，而不是一个 500。
-            # 形状与 FastAPI 的请求校验 422 一致（见 `_validation_detail`）。
             raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+        # 空 key = 「不改」**仅限端点没变**。改了 scheme/host/port 还沿用旧 key，
+        # 等于把密钥悄悄发给另一台服务器。
+        reuse_saved = (
+            existing is not None
+            and existing.api_key != ""
+            and incoming == ""
+            and _same_origin(existing.base_url, form.base_url)
+        )
+        if existing is not None and existing.api_key and incoming == "" and not reuse_saved:
+            raise HTTPException(
+                status_code=422,
+                detail=[
+                    {
+                        "loc": ["body", "api_key"],
+                        "msg": "端点地址已改变：请重新输入 API Key（旧 Key 不会发送到新地址）",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        if reuse_saved and existing is not None:
+            candidate = LLMSettings(
+                base_url=form.base_url,
+                model=form.model,
+                api_key=existing.api_key,
+            )
+        warning = plaintext_warning(candidate.base_url)
+        if warning:
+            # 公网明文 http 不再是「提示后照存」：Key 与对话内容会明文过网。
+            # 本机 / 内网 http 仍在 `plaintext_warning` 的白名单里，不受影响。
+            raise HTTPException(
+                status_code=422,
+                detail=[
+                    {
+                        "loc": ["body", "base_url"],
+                        "msg": warning,
+                        "type": "value_error",
+                    }
+                ],
+            )
         store.save_llm(candidate)
         return _view(candidate)
 
@@ -161,20 +218,37 @@ def build_router(
             settings = None
             broken = str(exc)
         if form is not None:
-            if not form.api_key.strip() and settings is None:
+            incoming = form.api_key.strip()
+            try:
+                candidate = LLMSettings(base_url=form.base_url, model=form.model, api_key=incoming)
+            except ValidationError as exc:
+                # 与 PUT 同一形状：填的这份不合法 → 422 + 字段级原因。
+                raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+            reuse_saved = (
+                settings is not None
+                and settings.api_key != ""
+                and incoming == ""
+                and _same_origin(settings.base_url, form.base_url)
+            )
+            if not incoming and settings is None:
                 # 空 key = 「用已保存的那把钥匙」，可这把钥匙读不出来（配置坏了）。
-                # 这时必须说清是**缺 key**，而不是笼统地怪「已保存的配置」。
+                # 这时必须说清楚**缺 key**，而不是笼统地怪「已保存的配置」。
                 return ConnectionTestResponse(
                     ok=False,
-                    message="已保存的配置不可用，表单里也没填 API Key —— 请填上 Key 再测试。",
+                    message="已保存的配置不可用，表单里也没填 API Key —— 请填好 Key 再测试。",
                 )
-            key = form.api_key.strip() or (settings.api_key if settings else "")
-            try:
-                candidate = LLMSettings(base_url=form.base_url, model=form.model, api_key=key)
-            except ValidationError as exc:
-                # 与 PUT 同一形状：填的这份不合法 → 422 + 字段级原因。前端
-                # `apiErrorMessage` 对 4xx 会把 detail 显示出来，所以用户看得到原因。
-                raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+            if settings is not None and settings.api_key and incoming == "" and not reuse_saved:
+                return ConnectionTestResponse(
+                    ok=False,
+                    message="端点地址已改变：请重新输入 API Key 后再测试",
+                )
+            if reuse_saved and settings is not None:
+                candidate = LLMSettings(
+                    base_url=form.base_url, model=form.model, api_key=settings.api_key
+                )
+            warning = plaintext_warning(candidate.base_url)
+            if warning:
+                return ConnectionTestResponse(ok=False, message=warning)
             settings = candidate
         elif broken is not None:
             return ConnectionTestResponse(
