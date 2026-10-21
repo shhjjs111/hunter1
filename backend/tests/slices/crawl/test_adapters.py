@@ -722,7 +722,8 @@ class TestParseDetailPage:
         html = '<div class="job-desc">' + ("A" * (MAX_JD_CHARS + 500)) + "</div>"
         text = parse_detail_page(html, ".job-desc")
         assert text is not None
-        assert len(text) == MAX_JD_CHARS + len(JD_TRUNCATED_NOTICE)
+        # 截断标记本身也占长度：总长必须仍然 <= MAX_JD_CHARS。
+        assert len(text) == MAX_JD_CHARS
         assert text.endswith(JD_TRUNCATED_NOTICE)
 
 
