@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from hunter1.platform.db import Database
 from hunter1.slices.applications import ApplicationStore
 from hunter1.slices.jobs import JobStore
 from hunter1.slices.scoring import CandidateProfile, ScoreStore
-from hunter1.slices.sync import SyncStore, build_router
+from hunter1.slices.sync import SyncBodyLimitMiddleware, SyncStore, build_router
 from hunter1.slices.sync import router as sync_router
 from hunter1.slices.sync.schemas import (
     MAX_JD_CHARS,
@@ -504,6 +505,45 @@ class TestRouter:
                 headers={"content-length": str(sync_router.MAX_SYNC_BODY_BYTES + 1)},
             )
         assert response.status_code == 413
+
+    def test_chunked_body_is_limited_without_content_length(self, store: SyncStore) -> None:
+        """分块请求没有 Content-Length，也要在读取过程中按实际字节数拦截。"""
+        app = FastAPI()
+        app.add_middleware(SyncBodyLimitMiddleware, max_bytes=64)
+        app.include_router(build_router(store=store), prefix="/api")
+
+        def chunks():
+            yield b'{"version": 1, "exported_at": "2026-10-20T12:00:00Z", '
+            yield b'"jobs": [], "applications": [], "profile": null}'
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sync/merge",
+                content=chunks(),
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 413
+        assert "上限" in response.json()["detail"]
+
+    def test_chunked_body_under_limit_still_merges(self, store: SyncStore) -> None:
+        app = FastAPI()
+        app.add_middleware(SyncBodyLimitMiddleware, max_bytes=1024)
+        app.include_router(build_router(store=store), prefix="/api")
+        payload = _snapshot(jobs=[_job()]).model_dump(mode="json")
+
+        def chunks():
+            raw = json.dumps(payload).encode()
+            yield raw[:20]
+            yield raw[20:]
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/sync/merge",
+                content=chunks(),
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 200
+        assert response.json()["counts"]["jobs_created"] == 1
 
     def test_empty_profile_is_422_not_500(self, store: SyncStore) -> None:
         app = FastAPI()

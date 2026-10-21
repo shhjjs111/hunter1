@@ -6,6 +6,9 @@ OpenAPI 契约生成，字段名一旦漂移会在契约门禁处被发现。
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from hunter1.slices.sync.schemas import SyncMergeResponse, SyncSnapshot, SyncSnapshotImport
@@ -16,6 +19,13 @@ from hunter1.slices.sync.store import SyncStore
 MAX_SYNC_BODY_BYTES = 64 * 1024 * 1024
 MAX_SYNC_JOBS = 50_000
 MAX_SYNC_APPLICATIONS = 50_000
+
+_Receive = Callable[[], Awaitable[dict[str, Any]]]
+_Send = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def _too_large_detail() -> str:
+    return f"同步快照超过 {MAX_SYNC_BODY_BYTES // (1024 * 1024)} MiB 上限"
 
 
 def _reject_oversized_body(request: Request) -> None:
@@ -28,10 +38,53 @@ def _reject_oversized_body(request: Request) -> None:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Content-Length 不合法") from exc
     if length > MAX_SYNC_BODY_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"同步快照超过 {MAX_SYNC_BODY_BYTES // (1024 * 1024)} MiB 上限",
-        )
+        raise HTTPException(status_code=413, detail=_too_large_detail())
+
+
+class SyncBodyLimitMiddleware:
+    """给同步合并请求加**流式**大小上限。
+
+    路由里的依赖只能看 `Content-Length`；分块传输完全不带这个头，解析器会把
+    整个请求体读进内存后才轮到字段校验。这里在 ASGI 层累计实际字节数，超限时
+    立即抛出 413，不再继续读取。
+    """
+
+    def __init__(self, app: Any, *, max_bytes: int = MAX_SYNC_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: dict[str, Any], receive: _Receive, send: _Send) -> None:
+        if scope.get("type") != "http" or scope.get("path") != "/api/sync/merge":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                length = int(raw_length)
+            except ValueError:
+                # 形状错误交给路由依赖给出统一的 400。
+                await self.app(scope, receive, send)
+                return
+            if length > self.max_bytes:
+                # 依赖在读取请求体之前执行；交给它返回统一的 413，避免在
+                # ExceptionMiddleware 之外直接抛异常变成 500。
+                await self.app(scope, receive, send)
+                return
+
+        received = 0
+
+        async def limited_receive() -> dict[str, Any]:
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise HTTPException(status_code=413, detail=_too_large_detail())
+            return message
+
+        await self.app(scope, limited_receive, send)
 
 
 def build_router(*, store: SyncStore) -> APIRouter:

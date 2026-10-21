@@ -48,6 +48,7 @@ from hunter1.slices.scoring.router import build_router as build_scoring_router
 from hunter1.slices.scoring.store import ScoreStore
 from hunter1.slices.settings.router import build_router as build_settings_router
 from hunter1.slices.settings.store import SettingsStore
+from hunter1.slices.sync.router import SyncBodyLimitMiddleware
 from hunter1.slices.sync.router import build_router as build_sync_router
 from hunter1.slices.sync.store import SyncStore
 
@@ -240,6 +241,8 @@ def create_app(context: AppContext) -> FastAPI:
     # 也不能让浏览器把请求的 Host 写成它；而真实攻击的 Host 永远是攻击者域名。
     # 访问码门禁放在最内层：Host 校验与安全响应头仍然先跑，未授权的 401 也带
     # 同一组安全头。默认 `access_token=None` 时完全不挂载，单机行为不变。
+    # 先注册最内层：访问码 / Host / 安全头仍在外层，未授权请求不会先读请求体。
+    app.add_middleware(SyncBodyLimitMiddleware)
     if context.access_token:
         app.add_middleware(AccessGateMiddleware, token=context.access_token)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(context.trusted_hosts))
