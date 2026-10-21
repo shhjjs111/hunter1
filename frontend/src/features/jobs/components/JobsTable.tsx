@@ -24,15 +24,19 @@ function JobTitleLink({ title, url }: { title: string; url: string }) {
 export function JobsTable({
   jobs,
   loading = false,
-  applyingId,
-  scoringId,
+  applyingIds,
+  scoringIds,
+  scoreErrors = {},
+  applyErrors = {},
   onApply,
   onScore,
 }: {
   jobs: JobSummary[];
   loading?: boolean;
-  applyingId?: string;
-  scoringId?: string;
+  applyingIds: ReadonlySet<string>;
+  scoringIds: ReadonlySet<string>;
+  scoreErrors?: Record<string, string>;
+  applyErrors?: Record<string, string>;
   onApply: (jobId: string) => void;
   onScore: (jobId: string) => void;
 }) {
@@ -85,21 +89,33 @@ export function JobsTable({
                   )}
                 </td>
                 <td className="px-4 py-3.5 text-right">
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      disabled={scoringId === job.id}
-                      onClick={() => onScore(job.id)}
-                      describedBy={`job-${job.id}-label job-${job.id}-company`}
-                    >
-                      {scoringId === job.id ? "评分中…" : "评分"}
-                    </Button>
-                    <Button
-                      disabled={applyingId === job.id}
-                      onClick={() => onApply(job.id)}
-                      describedBy={`job-${job.id}-label job-${job.id}-company`}
-                    >
-                      {applyingId === job.id ? "记录中…" : "记录投递"}
-                    </Button>
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        disabled={scoringIds.has(job.id)}
+                        onClick={() => onScore(job.id)}
+                        describedBy={`job-${job.id}-label job-${job.id}-company`}
+                      >
+                        {scoringIds.has(job.id) ? "评分中…" : "评分"}
+                      </Button>
+                      <Button
+                        disabled={applyingIds.has(job.id)}
+                        onClick={() => onApply(job.id)}
+                        describedBy={`job-${job.id}-label job-${job.id}-company`}
+                      >
+                        {applyingIds.has(job.id) ? "记录中…" : "记录投递"}
+                      </Button>
+                    </div>
+                    {scoreErrors[job.id] && (
+                      <span role="alert" className="text-xs text-danger">
+                        {scoreErrors[job.id]}
+                      </span>
+                    )}
+                    {applyErrors[job.id] && (
+                      <span role="alert" className="text-xs text-danger">
+                        {applyErrors[job.id]}
+                      </span>
+                    )}
                   </div>
                 </td>
               </tr>

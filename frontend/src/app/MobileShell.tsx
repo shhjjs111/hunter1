@@ -95,7 +95,7 @@ export function MobileShell() {
     setToast({ id: toastSeq.current, tone, message });
     setToastShown(false);
     toastFrame.current = window.requestAnimationFrame(() => setToastShown(true));
-    toastTimer.current = window.setTimeout(() => setToast(null), 2400);
+    toastTimer.current = window.setTimeout(() => setToast(null), 4000);
   }, []);
 
   useEffect(
@@ -158,6 +158,10 @@ export function MobileShell() {
       if (target instanceof HTMLElement && target.closest("input,textarea,select,[contenteditable='true']")) {
         return;
       }
+      // 详情 Sheet / 抽屉打开时，方向键属于覆盖层，不能让后面的页面跟着翻。
+      if (overlayOpen) {
+        return;
+      }
       if (event.key === "ArrowRight" && active < NAV.length - 1) {
         event.preventDefault();
         animateTo(active + 1);
@@ -168,7 +172,7 @@ export function MobileShell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, animateTo]);
+  }, [active, animateTo, overlayOpen]);
 
   const chrome = useMemo(
     () => ({
@@ -219,7 +223,7 @@ export function MobileShell() {
         <div className="mobile-grain" aria-hidden="true" />
 
         <div className="mobile-scene" ref={sceneRef}>
-          <div className="mobile-viewport" ref={viewportRef} {...bind}>
+          <main className="mobile-viewport" ref={viewportRef} {...bind}>
             <div className="mobile-track" ref={trackRef}>
               {PAGES.map((Page, index) => (
                 <section
@@ -248,7 +252,7 @@ export function MobileShell() {
                 </section>
               ))}
             </div>
-          </div>
+          </main>
 
           <header className={`mobile-topbar ${solid ? "solid" : ""} ${active === 3 ? "assistant" : ""}`}>
             <div className="mobile-topbar-bg" aria-hidden="true" />

@@ -86,7 +86,12 @@ describe("MobileAssistantPage", () => {
     state.chat = makeChat({ streaming: true, input: "回答中" });
     rerender(<MobileAssistantPage />);
     fireEvent.click(screen.getByRole("button", { name: "中止回答" }));
-    expect((state.chat.abort as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    expect((state.chat.abort as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    expect((state.chat.send as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+
+    // 流式期间即使收到表单提交，也不能把问题再发一遍（中止后的原生提交回归）。
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    expect((state.chat.send as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
   });
 
   it("消息、工具状态与流式光标", () => {
