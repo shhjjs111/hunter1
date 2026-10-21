@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -427,6 +428,39 @@ class TestMergeAtomicity:
             store.merge_snapshot(_snapshot(jobs=[first, second]))
 
         assert db.jobs().count() == 0
+
+
+class TestMergeConcurrency:
+    def test_two_merges_are_serialized_without_lock_errors(
+        self, db: Database, store: SyncStore
+    ) -> None:
+        barrier = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def merge(index: int) -> None:
+            try:
+                barrier.wait()
+                store.merge_snapshot(
+                    _snapshot(
+                        jobs=[
+                            _job(
+                                id=f"remote-{index}",
+                                detail_url=f"https://example.com/jobs/{index}",
+                            )
+                        ]
+                    )
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=merge, args=(index,)) for index in (1, 2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert errors == []
+        assert db.jobs().count() == 2
 
 
 class TestImportValidation:
