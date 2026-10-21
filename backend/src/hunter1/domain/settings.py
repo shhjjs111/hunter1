@@ -99,6 +99,15 @@ def _is_internal_host(host: str) -> bool:
         return True
     if host.endswith((".local", ".internal")):
         return True
+    numeric = host.isdigit() or host.lower().startswith("0x")
+    if numeric:
+        # URL 解析器会把 `http://134744072` 这类整数形式当主机名，而部分平台
+        # 的网络栈会把它解释成 8.8.8.8。不能因为「没有点」就认定是内网名。
+        try:
+            address = ipaddress.IPv4Address(int(host, 0))
+        except ValueError:
+            return False
+        return address.is_private or address.is_loopback or address.is_link_local
     if "." not in host and ":" not in host:
         # 单标签名（`ollama`、`gateway`、`llm-host`）：内网名，不是公网域名
         return True
