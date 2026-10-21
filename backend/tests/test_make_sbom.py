@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -74,6 +75,32 @@ def test_spdx_document_has_root_relationships_and_purls() -> None:
         "pkg:npm/%40scope%2Fpkg@1.2.3",
         "pkg:pypi/httpx@0.28.1",
     }
+
+
+def test_build_artifacts_are_contained_with_checksums(tmp_path: Path) -> None:
+    module = _load_script()
+    apk = tmp_path / "hunter1-android.apk"
+    apk.write_bytes(b"apk-bytes")
+
+    document = module.build_document(
+        version="0.4.1",
+        commit="a" * 40,
+        packages=[],
+        created="2026-10-18T00:00:00Z",
+        artifacts=[module.Artifact("hunter1-android", apk)],
+    )
+
+    artifact = next(item for item in document["packages"] if item["name"] == "hunter1-android")
+    assert artifact["checksums"] == [
+        {
+            "algorithm": "SHA256",
+            "checksumValue": hashlib.sha256(b"apk-bytes").hexdigest(),
+        }
+    ]
+    assert any(
+        item["relationshipType"] == "CONTAINS" and item["relatedSpdxElement"] == artifact["SPDXID"]
+        for item in document["relationships"]
+    )
 
 
 def test_spdx_ids_are_stable_and_safe() -> None:

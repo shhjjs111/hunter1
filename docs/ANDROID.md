@@ -83,6 +83,34 @@ Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 正式 APK 随 [GitHub Release](https://github.com/shhjjs111/hunter1/releases) 提供；
 本地构建产物在 `dist/`，不进入 Git 仓库。
 
+**签名证书 SHA-256 指纹**（v0.4.1 起）：
+
+```
+87f08004b20d32403fb6483a8717b6bf75a99e9c173a9324cb52c848c61aa4d1
+```
+
+核对方式（Android SDK build-tools 自带）：
+
+```bash
+apksigner verify --print-certs dist/hunter1-android-0.4.1.apk
+```
+
+### 供应链
+
+从下一个 `v*` tag 起，`release.yml` 会：
+
+1. 用 `-PappVersion=<tag>` 构建 `assembleRelease`；`versionCode` 由
+   `major*1_000_000 + minor*1_000 + patch` 派生（0.4.1 → 4001）；
+2. 用 `ANDROID_KEYSTORE_BASE64` 等 secrets 签名（缺失则发布失败，不会偷偷发
+   未签名包）；
+3. 运行 `scripts/verify_apk.py` 校验包名、版本、`debuggable`、`allowBackup`、
+   权限与证书指纹（`frontend/android/EXPECTED_CERT_SHA256`）；
+4. 把 APK 写进 `SHA256SUMS.txt`、SPDX SBOM、build provenance 与 SBOM
+   attestation。
+
+v0.4.1 的 APK 是这条链之前手工构建的，因此不在该版本的 SHA256SUMS / SBOM
+中；从下一个 tag 起上述覆盖成立。
+
 签名密钥与密码保存在本机 `.tools/android/`（`hunter1-release.jks` 与
 `keystore-password.txt`），**不在仓库里**。请自行备份；丢失后无法覆盖安装升级，
 只能卸载重装（本地数据会丢）。

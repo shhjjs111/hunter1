@@ -59,7 +59,7 @@ def test_every_workflow_declares_least_privilege_defaults() -> None:
     missing = []
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
-        if not re.search(r"^permissions:\s*$", text, re.MULTILINE):
+        if not re.search(r"^permissions:\s*(?:\{\s*\})?\s*$", text, re.MULTILINE):
             missing.append(path.relative_to(ROOT).as_posix())
     assert not missing, f"workflows missing top-level permissions: {missing}"
 
@@ -100,7 +100,23 @@ def test_release_workflow_is_tag_driven_and_attested() -> None:
     assert 'gh release edit "$TAG" --draft=false' not in text, (
         "Release workflow 只创建草稿；安卓 APK 需在人工核对后随草稿一起发布"
     )
-    assert "安卓 APK" in text
+    assert "Android APK" in text
+    assert "assembleRelease" in text
+    assert "hunter1-android-" in text
+    assert "verify_apk.py" in text
+    assert "ANDROID_KEYSTORE_BASE64" in text
+    assert "dist/*.apk" in text
+
+
+def test_dependabot_covers_android_gradle() -> None:
+    text = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    assert "package-ecosystem: gradle" in text
+    assert "directory: /frontend/android" in text
+
+
+def test_codeql_scans_workflow_files() -> None:
+    text = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
+    assert "- actions" in text, "CodeQL 没扫 actions，工作流改动会绕过静态分析"
 
 
 def test_required_quality_status_context_stays_stable() -> None:
