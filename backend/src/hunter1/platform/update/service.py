@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import tempfile
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -109,6 +110,16 @@ def prepare_update(
     """
     if not status.available or status.asset is None or status.latest is None:
         raise ValueError("没有可用的更新")
+    extracted = dest_dir / status.latest
+    # 下载目录也可直接运行便携程序。数据目录、定制数据库或链接出现时，
+    # 无法安全地把它当成纯构建产物替换，让用户换一个空下载目录。
+    if extracted.exists() and any(
+        path.is_symlink()
+        or path.name.lower() in {"data", ".data", "access_token"}
+        or path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}
+        for path in extracted.rglob("*")
+    ):
+        raise ValueError("目标版本目录包含用户数据或链接，已保留；请换一个空下载目录。")
 
     # 目录先建出来：磁盘预检与下载都需要它存在（原先这步在下面的 try 里与下载绑在
     # 一起，拆开是为了让预检能在**发起下载之前**给出结论）。
@@ -135,33 +146,23 @@ def prepare_update(
     except OSError as exc:
         raise DownloadError("write_failed", str(exc)) from exc
 
-    extracted = dest_dir / status.latest
-    # 解压单独一个 try 块：这里的异常形状是**开放集合**（见下面的 catch-all），
-    # 而上面下载/建目录的异常另有语义（写盘失败）—— 混在一起会让一个下载期的
-    # TypeError 被说成「包坏了」。
-    #
-    # `ok` + `finally` 负责**失败后的收拾**：半解压目录会让下一次更新看到一个
-    # 「已存在但残缺」的版本目录（调用方据此以为该版本已经就位），包也会一直占着
-    # 磁盘。放在 `finally` 里而不是每个 handler 里，是为了让**所有**失败路径（含
-    # 上面那串 catch-all，以及将来新加的形状）都必然收拾一遍，且不改变任何错误码。
-    # 记下**本次之前**它是否存在。体积 / 条目数 / 越界路径这几道闸门都在
-    # `extractall` **之前**抛出 —— 那时目录根本没被碰过，而最后一次成功下载的完整
-    # 产物可能就摆在那里（用户等着覆盖过去的那一份）。无差别 `rmtree` 会把它一并
-    # 删掉：那是数据丢失，不是「收拾干净」。失败清理只收拾**本次留下的**东西。
-    #
-    # 已知取舍（报告次要项，**刻意保留行为**）：目标目录**已存在**时不会先清空，
-    # 于是包里没有、而旧目录里有的文件会残留下来 —— 目录内容因此不等于「这一版
-    # 发布包的精确内容」，被篡改过的旧文件也不会在本次校验里被发现。sha256 校验的是
-    # **下载下来的 zip**（`.part` → 改名链），它不覆盖解压后的目录树。
-    # 之所以不改：正常流程是新版本 → **新目录**（版本号不同），残留只可能出现在
-    # 「重复下载同一版本」或「目录被外力污染」这两种情形；而先清空再解压会把
-    # 「发布者上传了坏包」变成「用户既没有新版本、也没了原来那份」——用一次数据丢失
-    # 换一点点目录纯净度，不划算。真要精确比对，应当走「解压到临时目录 + 成功后原子
-    # 替换」，那是另一次改动。
-    existed_before = extracted.exists()
+    # 先在同一卷的独立目录解压；失败不能截断之前已准备好的版本。
+    # 成功后先把旧目录移到备份，再安装完整新目录；安装失败则恢复旧目录。
+    stage: Path | None = None
     ok = False
     try:
-        _extract_within(archive, extracted)
+        stage = Path(tempfile.mkdtemp(prefix=".hunter1-update-", dir=dest_dir))
+        unpacked = stage / "new"
+        _extract_within(archive, unpacked)
+        previous = stage / "previous"
+        if extracted.exists():
+            extracted.rename(previous)
+        try:
+            unpacked.rename(extracted)
+        except OSError:
+            if previous.exists():
+                previous.rename(extracted)
+            raise
         ok = True
     except (DownloadError, ValueError):
         raise
@@ -193,8 +194,15 @@ def prepare_update(
         # 常见形状，保持各自的错误码不变。
         raise DownloadError("archive_corrupt", str(exc)) from exc
     finally:
+        if stage is not None:
+            # 若恢复旧目录本身也失败，保留备份并明确给出位置，不能清掉用户唯一的旧版。
+            previous = stage / "previous"
+            if not ok and previous.exists():
+                print(f"[update] 原版本保留在：{previous}", file=sys.stderr)
+            else:
+                _discard_partial(stage)
         if not ok:
-            _discard_partial(archive, extracted, keep_dir=existed_before)
+            _discard_partial(archive)
     return extracted
 
 
@@ -222,31 +230,15 @@ def _ensure_free_space(dest_dir: Path, needed: int | None) -> None:
         )
 
 
-def _discard_partial(archive: Path, extracted: Path, *, keep_dir: bool) -> None:
-    """解压失败后的收拾：删掉半成品目录与下载下来的包。
-
-    不清理的后果有两层：`dest_dir/<版本>/` 留下一个**残缺但存在**的目录，而
-    「目录已存在」正是调用方判断「这个版本已经就位」的依据（见模块 docstring 的
-    「解压即用」流程）；另外那个 zip 会一直占着磁盘，且用户看不出它已无用。
-
-    `keep_dir=True` 是必需的区分：解压**之前**那个目录就已经在（上一次成功下载的
-    完整产物），而所有闸门都在 `extractall` 之前抛出 —— 本次失败跟它毫无关系，
-    删掉它是数据丢失。此时只清下载包，并**留一句说明**（不静默）。
-
-    **尽力而为**：失败原因本身可能就是磁盘满/权限不足，清理同样可能失败。清理失败
-    只留一句说明到 stderr，绝不抛出 —— 调用方要的是「为什么更新失败」，把一个清理
-    错误盖上去只会让真正的原因消失。
-    """
-    if keep_dir:
-        print(f"[update] 保留此前已下载好的目录：{extracted}", file=sys.stderr)
-    for target in [archive] if keep_dir else [extracted, archive]:
-        try:
-            if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
-            elif target.exists():
-                target.unlink()
-        except OSError as exc:
-            print(f"[update] 清理残留失败：{target}（{exc}）", file=sys.stderr)
+def _discard_partial(target: Path) -> None:
+    """清理本次临时目录或坏包；失败留痕，不覆盖更新的原始错误。"""
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    except OSError as exc:
+        print(f"[update] 清理残留失败：{target}（{exc}）", file=sys.stderr)
 
 
 def _extract_within(archive: Path, dest: Path) -> None:
@@ -261,6 +253,8 @@ def _extract_within(archive: Path, dest: Path) -> None:
     dest_resolved = dest.resolve()
     with zipfile.ZipFile(archive) as bundle:
         infos = bundle.infolist()
+        if not any(not info.is_dir() for info in infos):
+            raise ValueError("更新压缩包为空，已拒绝")
         for info in infos:
             if _escapes(info.filename, dest_resolved):
                 raise ValueError(f"压缩包里存在越界路径，已拒绝：{info.filename}")

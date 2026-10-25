@@ -494,6 +494,83 @@ class TestFailureCleanup:
         assert extracted.is_dir()
         assert (dest / "hunter1-0.2.0.zip").is_file()
 
+    def test_corrupt_retry_does_not_modify_previous_files(self, tmp_path: Path) -> None:
+        dest = tmp_path / "updates"
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        previous = (extracted / "hunter1" / "hunter1.exe").read_bytes()
+        broken = FakeSource(manifest=_manifest("0.2.0"), payload=_corrupt_deflate_bytes())
+
+        with pytest.raises(DownloadError):
+            prepare_update(source=broken, status=self._status(broken), dest_dir=dest)
+
+        assert (extracted / "hunter1" / "hunter1.exe").read_bytes() == previous
+        assert sorted(item.name for item in dest.iterdir()) == ["0.2.0"]
+
+    def test_successful_retry_replaces_stale_files(self, tmp_path: Path) -> None:
+        dest = tmp_path / "updates"
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        (extracted / "obsolete.dll").write_bytes(b"old")
+
+        prepare_update(source=source, status=self._status(source), dest_dir=dest)
+
+        assert not (extracted / "obsolete.dll").exists()
+        assert (extracted / "hunter1" / "hunter1.exe").read_bytes() == b"binary"
+        assert sorted(item.name for item in dest.iterdir()) == ["0.2.0", "hunter1-0.2.0.zip"]
+
+    @pytest.mark.parametrize("entries", [(), ("hunter1/",)])
+    def test_empty_retry_keeps_previous_program(
+        self, tmp_path: Path, entries: tuple[str, ...]
+    ) -> None:
+        dest = tmp_path / "updates"
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        empty = FakeSource(manifest=_manifest("0.2.0"), payload=_zip_bytes(*entries))
+        with pytest.raises(ValueError, match="空"):
+            prepare_update(source=empty, status=self._status(empty), dest_dir=dest)
+        assert (extracted / "hunter1/hunter1.exe").read_bytes() == b"binary"
+
+    def test_retry_refuses_to_replace_portable_user_data(self, tmp_path: Path) -> None:
+        dest = tmp_path / "updates"
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        data = extracted / "hunter1/data"
+        data.mkdir()
+        (data / "hunter1.db").write_bytes(b"user database")
+        (data / "access_token").write_text("local-access")
+        with pytest.raises(ValueError, match="数据"):
+            prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        assert (data / "hunter1.db").read_bytes() == b"user database"
+        assert (data / "access_token").read_text() == "local-access"
+        assert (extracted / "hunter1/hunter1.exe").read_bytes() == b"binary"
+
+    @pytest.mark.parametrize("restore_fails", [False, True])
+    def test_failed_install_preserves_previous_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restore_fails: bool
+    ) -> None:
+        source = FakeSource(manifest=_manifest("0.2.0"))
+        dest = tmp_path / "updates"
+        extracted = prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        rename = Path.rename
+
+        def fail_install(path: Path, target: Path) -> Path:
+            if path.name == "new" or (restore_fails and path.name == "previous"):
+                raise PermissionError("locked")
+            return rename(path, target)
+
+        monkeypatch.setattr(Path, "rename", fail_install)
+        with pytest.raises(DownloadError) as excinfo:
+            prepare_update(source=source, status=self._status(source), dest_dir=dest)
+        assert excinfo.value.code == "write_failed"
+        if restore_fails:
+            backups = list(dest.glob(".hunter1-update-*/previous/hunter1/hunter1.exe"))
+            assert len(backups) == 1
+            assert backups[0].read_bytes() == b"binary"
+        else:
+            assert (extracted / "hunter1" / "hunter1.exe").read_bytes() == b"binary"
+            assert sorted(item.name for item in dest.iterdir()) == ["0.2.0"]
+
 
 def test_status_is_a_plain_dataclass() -> None:
     """状态对象要能直接打印/序列化，方便 CLI 与将来的界面复用。"""
