@@ -10,7 +10,7 @@ vi.mock("@capacitor/core", async (importOriginal) => {
   };
 });
 
-import { readableHttpError, requestJson, requestText } from "./http";
+import { publicResponseValue, readableHttpError, requestJson, requestText } from "./http";
 
 const realFetch = globalThis.fetch;
 
@@ -64,5 +64,25 @@ describe("外部 HTTP 适配", () => {
     expect(readableHttpError(new Error("HTTP 401：bad key"))).toContain("鉴权");
     expect(readableHttpError(new Error("boom"))).toBe("操作失败，请重试");
     expect(readableHttpError("plain")).toBe("操作失败，请重试");
+  });
+
+  it("响应序列化不暴露异常堆栈或文件路径", () => {
+    const error = new Error("private\n    at secret.ts:1:2");
+    const shared = { message: "共享但可展示" };
+    const cleaned = publicResponseValue({
+      message: "可展示",
+      stack: "secret stack",
+      nested: { lineNumber: 9, stack: "nested secret" },
+      error,
+      items: [shared, shared],
+    });
+
+    expect(cleaned).toEqual({
+      message: "可展示",
+      nested: {},
+      error: { detail: "操作失败，请重试" },
+      items: [{ message: "共享但可展示" }, { message: "共享但可展示" }],
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("secret");
   });
 });
