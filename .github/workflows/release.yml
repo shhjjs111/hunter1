@@ -51,9 +51,15 @@ jobs:
           java-version: "21"
 
       - name: 安装 Android SDK
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-        with:
-          packages: "platforms;android-36 build-tools;36.0.0"
+        # windows-latest 自带命令行工具；仓库只允许 GitHub 官方 Actions。
+        shell: pwsh
+        run: |
+          $sdkManager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          if (-not (Test-Path -LiteralPath $sdkManager)) {
+            throw 'Windows runner 缺少 Android SDK 命令行工具'
+          }
+          & $sdkManager 'platforms;android-36' 'build-tools;36.0.0'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 校验 tag、版本与 main 祖先关系
         run: |
@@ -89,6 +95,7 @@ jobs:
           : "${ANDROID_KEY_ALIAS:?缺少 secret ANDROID_KEY_ALIAS}"
           : "${ANDROID_KEY_PASSWORD:?缺少 secret ANDROID_KEY_PASSWORD}"
           VERSION="${GITHUB_REF_NAME#v}"
+          trap 'rm -f "$RUNNER_TEMP/hunter1-release.jks"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/hunter1-release.jks"
           export HUNTER1_ANDROID_KEYSTORE="$RUNNER_TEMP/hunter1-release.jks"
           export HUNTER1_ANDROID_KEYSTORE_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"

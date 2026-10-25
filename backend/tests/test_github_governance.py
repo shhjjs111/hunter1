@@ -46,6 +46,14 @@ def judge_unpinned_actions(text: str) -> list[str]:
     return violations
 
 
+def judge_disallowed_actions(text: str) -> list[str]:
+    return [
+        match.group(1)
+        for match in _USES.finditer(text)
+        if not match.group(1).startswith(("./", "actions/", "github/"))
+    ]
+
+
 def test_all_remote_actions_are_pinned_to_full_commit_sha() -> None:
     violations = {
         path.relative_to(ROOT).as_posix(): judge_unpinned_actions(path.read_text(encoding="utf-8"))
@@ -53,6 +61,18 @@ def test_all_remote_actions_are_pinned_to_full_commit_sha() -> None:
     }
     violations = {path: refs for path, refs in violations.items() if refs}
     assert not violations, f"remote Actions must be SHA-pinned: {violations}"
+
+
+def test_workflows_only_use_actions_allowed_by_repository_policy() -> None:
+    for path in WORKFLOWS.glob("*.y*ml"):
+        blocked = judge_disallowed_actions(path.read_text(encoding="utf-8"))
+        assert not blocked, f"{path.name}: blocked by the GitHub-owned Actions policy: {blocked}"
+
+
+def test_action_allowlist_rejects_other_owners_even_when_pinned() -> None:
+    reference = "example/setup@" + "a" * 40
+    assert judge_disallowed_actions(f"- uses: {reference}") == [reference]
+    assert judge_disallowed_actions("- uses: actions/checkout@v1\n- uses: ./.github/local") == []
 
 
 def test_every_workflow_declares_least_privilege_defaults() -> None:

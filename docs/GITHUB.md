@@ -33,9 +33,13 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
 - Release 必须包含平台产物、`manifest.json`、`sbom.spdx.json`、
   `SHA256SUMS.txt`，以及 release 签名的安卓 APK 与 APK 校验和；说明从
   `CHANGELOG.md` 的对应版本小节提取。
-- `Release` workflow 只创建 draft 并上传自动构建的资产；安卓 APK 由发布者在
-  draft 阶段上传、核对资产后再手动转正式发布。Windows 资产同时生成 GitHub
-  build provenance 与 SBOM attestation。
+- `Release` workflow 自动构建 Windows 包与 release 签名的安卓 APK。APK 必须
+  通过包名、版本、安全属性和证书指纹校验；两端产物都纳入 SHA256 清单、SBOM、
+  build provenance 与 SBOM attestation。工作流只创建 draft，发布者核对后再
+  手动转正式发布。
+- 安卓签名使用仓库 Actions secrets：`ANDROID_KEYSTORE_BASE64`、
+  `ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。
+  缺少任一项即停止发布；runner 的临时 keystore 在签名步骤退出时删除。
 - Windows Authenticode 证书尚未配置，因此 exe 目前不是受操作系统信任的签名
   二进制。证书接入前不得把“已签名”作为对外声明。
 - 已发布版本不移动 tag；修复通过新版本发布。
@@ -45,12 +49,15 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
 - `quality (3.12)` 在 Windows runner 上执行完整门禁，包括打包与冒烟。
 - Python 依赖由提交进仓库的 `backend/uv.lock` 锁定；CI 使用固定 uv 版本和
   `uv sync --frozen`，不会在门禁中隐式升级依赖。
-- CodeQL 对 Python 与 JavaScript/TypeScript 做安全扫描。
+- CodeQL 对 Python、JavaScript/TypeScript 和 GitHub Actions 工作流做安全扫描。
 - Dependency graph 为 Dependency Review 提供依赖差异；Dependency Review 拦截
   高风险依赖变更。
-- Dependabot 每周更新 Python、npm 与 GitHub Actions 依赖。
+- Dependabot 每周更新 Python、前端及契约生成器 npm、Android Gradle 和
+  GitHub Actions 依赖。
 - 第三方 action 必须固定到完整 40 位 commit SHA，由测试门禁检查。
 - Actions 只允许 GitHub 官方 action，并强制 SHA 固定；默认 token 仅有只读权限。
+- Android SDK 通过 Windows runner 自带的 `sdkmanager` 安装，遵守同一 Action
+  白名单，不依赖被仓库策略拒绝的第三方安装 Action。
 - Release workflow 使用 OIDC 生成 build provenance 与 SBOM attestation。
 
 ## 安全
