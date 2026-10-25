@@ -85,12 +85,16 @@ def _origin_is_allowed(origin: str, scope: Scope, dev_origins: frozenset[str]) -
     - 开发态：只额外允许固定的回环 Vite 端口；
     - 非浏览器调用（没有 Origin）由调用方另行放行。
     """
-    parts = urlsplit(origin)
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
-        return False
-    if parts.username or parts.password:
+    # urlsplit 会剥掉空白，并会对畸形 IPv6 authority 抛 ValueError。
+    # Origin 必须是序列化的来源，不能把非法输入修正成可信来源或放大成 500。
+    if any(ord(char) <= 32 or ord(char) == 127 for char in origin):
         return False
     try:
+        parts = urlsplit(origin)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            return False
+        if parts.username or parts.password or parts.path or parts.query or parts.fragment:
+            return False
         _ = parts.port
     except ValueError:
         return False

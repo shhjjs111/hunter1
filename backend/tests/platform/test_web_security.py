@@ -36,12 +36,36 @@ class TestOriginPolicy:
             "file:///tmp/evil.html",
             "https://user:pass@example.com",
             "https://evil.example:not-a-port",
+            "http://[",
+            "http://[not-an-ip]",
+            "http://127.0.0.1:8000/path",
+            "http://127.0.0.1:8000?query",
+            "http://127.0.0.1:8000#fragment",
+            " http://127.0.0.1:8000",
+            "http://127.0.0.1:8000\t",
         ],
     )
     def test_malformed_or_foreign_origins_are_rejected(self, origin: str) -> None:
         from hunter1.platform.web_security import DEFAULT_DEV_ORIGINS
 
         assert not _origin_is_allowed(origin, _scope(), DEFAULT_DEV_ORIGINS)
+
+
+def test_malformed_origin_is_forbidden_without_running_write() -> None:
+    app = FastAPI()
+    app.add_middleware(SecurityBoundaryMiddleware)
+    writes: list[bool] = []
+
+    @app.post("/write")
+    def write() -> dict[str, bool]:
+        writes.append(True)
+        return {"ok": True}
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/write", headers={"Origin": "http://["})
+    assert response.status_code == 403
+    assert response.headers["x-frame-options"] == "DENY"
+    assert not writes
 
 
 def test_cross_site_fetch_metadata_is_rejected_even_without_origin() -> None:

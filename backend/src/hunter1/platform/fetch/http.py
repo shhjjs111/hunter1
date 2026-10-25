@@ -276,8 +276,13 @@ def _resolve_redirect(current: str, location: str) -> str | None:
     只允许 http(s) 是安全边界：一个 3xx 不该把抓取器引导去读 `file://` / `data:`
     之类 —— 那与「抓取网页」的语义无关，也可能成为本地文件读取的入口。
     """
-    target = urljoin(current, location.strip())
-    if urlsplit(target).scheme not in ("http", "https"):
+    try:
+        target = urljoin(current, location.strip())
+        parts = urlsplit(target)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return None
+        _ = parts.port
+    except ValueError:
         return None
     return target
 
@@ -400,6 +405,13 @@ class HttpFetcher:
         # 也堵住「一个 3xx 就绕开全部治理」的缺口（报告 M1）。
         current = url
         for _hop in range(MAX_REDIRECTS + 1):
+            try:
+                parts = urlsplit(current)
+                if parts.scheme not in {"http", "https"} or not parts.hostname:
+                    raise ValueError("missing HTTP host")
+                _ = parts.port
+            except ValueError as exc:
+                raise FetchError("invalid_url", current) from exc
             # UA 也按**当前这一跳的主机**取，而不是沿用起点的那个：否则跨主机
             # 重定向会让目标主机拿到别的站点的 UA，而它自己下次被直接访问时又是
             # 另一个 —— 「同主机固定 UA」就只在单跳场景成立（见 `_user_agent_for`）。
