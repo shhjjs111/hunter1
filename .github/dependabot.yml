@@ -84,6 +84,12 @@ updates:
       - dependencies
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # AGP 8.x uses Gradle internals removed in 9.6. Re-enable major updates
+      # only after the Android plugins declare Gradle 9 support.
+      - dependency-name: gradle
+        update-types:
+          - version-update:semver-major
     groups:
       android-minor-patch:
         patterns:
