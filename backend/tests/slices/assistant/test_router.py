@@ -14,10 +14,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from hunter1.domain.assistant import Message, Role, ToolCall
 from hunter1.domain.llm import LLMError, LLMResponse, StreamComplete, TextDelta
@@ -483,9 +486,8 @@ class TestStreamFactoryFailureMatchesTurn:
 class TestLlmClientIsReleased:
     """两个端点都每请求新建客户端（改配置要立刻生效），必须用完即关。
 
-    流式那条尤其要紧：真正的消费发生在响应体被读取时，端点函数早已返回 ——
-    释放只能挂在 generator 的 finally 上（客户端中断连接时 Starlette 会 close
-    这个 generator，同样会走到）。
+    流式那条尤其要紧：真正的消费发生在响应体被读取时，端点函数早已返回。
+    直接测试 ASGI 发送失败；TestClient 会缓冲完整响应，不能用它验证中途断连。
     """
 
     def test_turn_releases_client(self, db: Database) -> None:
@@ -508,20 +510,82 @@ class TestLlmClientIsReleased:
         for client in _client(db, llm):
             response = client.post("/api/assistant/stream", json={"message": "有哪些产品岗？"})
             assert response.status_code == 200
-            # 读完响应体才算真正消费完（释放挂在 generator 的 finally 上）
+            # 读完响应体才算真正消费完。
             assert response.text
         assert llm.closed is True, "流式端点必须释放客户端"
 
-    def test_stream_releases_client_when_generator_closed_early(self, db: Database) -> None:
-        """客户端中途断开 → Starlette close 这个 generator → finally 仍要释放。"""
+    @pytest.mark.parametrize("fail_on", ["http.response.start", "http.response.body"])
+    def test_transport_disconnect_closes_client_without_waiting_for_gc(
+        self, db: Database, fail_on: str
+    ) -> None:
+        llm = ScriptedLLM()
+        store = ConversationStore(db)
+        router = build_router(
+            store=store, llm_factory=lambda: llm, tools=build_tools(jobs=db.jobs())
+        )
+        route = next(
+            route
+            for route in router.routes
+            if isinstance(route, APIRoute) and route.path == "/assistant/stream"
+        )
+        response = route.endpoint(StreamRequest(message="你好"))
+
+        async def run() -> None:
+            async def receive() -> dict[str, object]:
+                return {"type": "http.disconnect"}
+
+            async def send(message: dict[str, object]) -> None:
+                if message["type"] == fail_on:
+                    raise OSError("client disconnected")
+
+            with pytest.raises(ClientDisconnect):
+                await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+            assert llm.closed, "响应对象仍存活时也必须释放客户端"
+            assert store.count() == 0
+
+        anyio.run(run)
+
+    def test_legacy_asgi_disconnect_cancellation_releases_client(self, db: Database) -> None:
+        llm = ScriptedLLM()
+        store = ConversationStore(db)
+        router = build_router(
+            store=store, llm_factory=lambda: llm, tools=build_tools(jobs=db.jobs())
+        )
+        route = next(
+            route
+            for route in router.routes
+            if isinstance(route, APIRoute) and route.path == "/assistant/stream"
+        )
+        response = route.endpoint(StreamRequest(message="你好"))
+
+        async def run() -> None:
+            started = anyio.Event()
+
+            async def receive() -> dict[str, object]:
+                await started.wait()
+                return {"type": "http.disconnect"}
+
+            async def send(message: dict[str, object]) -> None:
+                if message["type"] == "http.response.start":
+                    started.set()
+                    await anyio.sleep_forever()
+
+            await response({"type": "http", "asgi": {"spec_version": "2.0"}}, receive, send)
+            assert llm.closed
+            assert store.count() == 0
+
+        anyio.run(run)
+
+    def test_stream_context_releases_client(self, db: Database) -> None:
+        """TestClient 的流式上下文接口同样可以消费响应并释放客户端。"""
         llm = ScriptedLLM()
         for client in _client(db, llm):
             with client.stream(
                 "POST", "/api/assistant/stream", json={"message": "有哪些产品岗？"}
             ) as r:
                 assert r.status_code == 200
-                next(r.iter_text())  # 只读第一块就撒手
-        assert llm.closed is True, "客户端提前断开也必须释放"
+                next(r.iter_text())
+        assert llm.closed is True
 
 
 class TestMultiTurnHistory:

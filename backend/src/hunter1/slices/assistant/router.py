@@ -35,10 +35,13 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 
+import anyio
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
+from starlette.types import Receive, Scope, Send
 
 from hunter1.application.ports import LLMProvider, ModelNotConfiguredError
 from hunter1.domain.assistant import Message, Role
@@ -102,6 +105,29 @@ DEFAULT_MESSAGE_LIMIT = MAX_MESSAGE_LIMIT
 MAX_MESSAGE_OFFSET = 2**63 - 1
 
 FALLBACK_REPLY = "（模型没有返回内容，请重试或换一个模型。）"
+
+
+class _AssistantStreamResponse(StreamingResponse):
+    """响应拥有模型客户端，断连时也明确释放，不依赖生成器垃圾回收。"""
+
+    def __init__(self, content: Generator[str, None, None], llm: LLMProvider) -> None:
+        super().__init__(content, media_type="text/event-stream", headers=SSE_HEADERS)
+        self._content = content
+        self._llm = llm
+
+    def _close(self) -> None:
+        try:
+            self._content.close()
+        finally:
+            self._llm.close()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # ASGI 2.0 的 disconnect 会取消响应任务；清理需要免于同一取消作用域。
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(self._close)
 
 
 def _sse(event: dict[str, object]) -> str:
@@ -356,10 +382,9 @@ def build_router(
             # 同 `/turn`：走 `describe_llm_error` 给可行动中文，不吐裸机器码
             # （`str(exc)` 会是 `"transport_failed"` 这种东西）。
             raise HTTPException(status_code=422, detail=describe_llm_error(exc)) from exc
-        # 所有权交给 generator：真正的消费发生在响应体被读取时（端点这时早已返回），
-        # 所以释放只能由 `_stream_turn` 的 finally 负责 —— 客户端中途断开时 Starlette
-        # 会 close 这个 generator，finally 同样会跑到。
-        return StreamingResponse(
+        # 响应负责资源生命周期：Starlette 的线程池迭代器不保证关闭同步生成器，
+        # 而且发送响应头就断连时，生成器还没开始，内部 finally 也不会执行。
+        return _AssistantStreamResponse(
             _stream_turn(
                 store=store,
                 llm=llm,
@@ -368,8 +393,7 @@ def build_router(
                 conversation_id=body.conversation_id,
                 history=history,
             ),
-            media_type="text/event-stream",
-            headers=SSE_HEADERS,
+            llm,
         )
 
     return router
@@ -383,7 +407,7 @@ def _stream_turn(
     text: str,
     conversation_id: str,
     history: list[Message],
-) -> Iterator[str]:
+) -> Generator[str, None, None]:
     """跑一轮流式对话并把每个事件翻成 SSE。
 
     落库时机与一次性端点一致：**整轮跑完才写**。
@@ -448,10 +472,6 @@ def _stream_turn(
         # 这样异常类名、库内部状态和参数不会进入 SSE，也不会把 traceback 交给用户。
         _log_stream_failure(exc)
         yield _sse({"type": "error", "message": _STREAM_FAILURE_MESSAGE})
-    finally:
-        # 本 generator 拥有这个客户端（见 `stream` 端点的注释）：正常结束、出错、
-        # 或客户端断开（GeneratorExit）—— 三条路径都要把连接池释放掉。
-        llm.close()
 
 
 def _log_stream_failure(exc: Exception) -> None:
