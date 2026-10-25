@@ -35,6 +35,25 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("保存响应到达时保留请求发出后输入的新密钥草稿", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if ((input as Request).method === "PUT") await pending;
+      return jsonResponse(SETTINGS);
+    }));
+    renderPage();
+    await screen.findByText("模型已配置");
+    const key = screen.getByLabelText(/API Key/);
+    fireEvent.change(key, { target: { value: "saved-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByRole("button", { name: "保存中…" });
+    fireEvent.change(key, { target: { value: "unsaved-next-key" } });
+    finish();
+    await screen.findByText("已保存。");
+    expect(key).toHaveProperty("value", "unsaved-next-key");
+  });
+
   it("探测的**请求层**失败（fetch reject）也给出可读原因", async () => {
     // 报告指出的缺口：探测失败原先只有「后端答了错误」的用例，没有「请求根本发不出去」
     // 的用例。这条路径不经过 `if (error || !data)`（`api.POST` 直接抛），是

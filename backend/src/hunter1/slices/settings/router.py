@@ -203,10 +203,10 @@ def build_router(
         `api_key` 留空 = 「不改」：界面只回显掩码、读不到原值，所以用它探测时得拿
         已保存的那把钥匙 —— 与 PUT 的同名字段同一约定。
         """
-        broken: str | None = None
+        broken = False
         try:
             settings = store.get_llm()
-        except ValueError as exc:
+        except ValueError:
             # 保存的配置不合法（数据损坏 / 旧版本遗留）。**不能 500** —— 与 GET/PUT 同一课：
             # 配置页是用户唯一的自救入口，探测也不例外（此前这里裸调 `get_llm()`，
             # 损坏时 `ValueError` 穿透成 500，而前端只显示一句「探测失败」，把原因吞掉）。
@@ -216,7 +216,7 @@ def build_router(
             # 于是他会以为**自己新填的**那份有问题（正是这条注释下面那个 docstring
             # 要避免的事）。所以记下原因、继续往下走，由下面按「有没有表单」分派。
             settings = None
-            broken = str(exc)
+            broken = True
         if form is not None:
             incoming = form.api_key.strip()
             try:
@@ -250,10 +250,11 @@ def build_router(
             if warning:
                 return ConnectionTestResponse(ok=False, message=warning)
             settings = candidate
-        elif broken is not None:
+        elif broken:
             return ConnectionTestResponse(
                 ok=False,
-                message=f"已保存的配置不可用，请重新填写并保存后再测试：{broken}",
+                # 校验异常可能包含损坏字段的原始值，不能把保存的凭据带回响应。
+                message="已保存的配置不可用，请重新填写并保存后再测试。",
             )
         if settings is None or not settings.is_configured:
             return ConnectionTestResponse(

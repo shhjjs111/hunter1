@@ -429,6 +429,14 @@ class TestCorruptedConfigIsRepairable:
             assert response.json()["ok"] is False
             assert "已保存的配置不可用" in response.json()["message"]
 
+    def test_broken_config_probe_does_not_echo_stored_credentials(self, db: Database) -> None:
+        secret = "synthetic-credential"
+        db.settings().set_raw(LLM_KEY, {**FORM, "api_key": {"value": secret}})
+        for client in _client(db):
+            response = client.post("/api/settings/test")
+        assert response.json()["ok"] is False
+        assert secret not in response.text
+
     def test_get_returns_200_not_500(self, db: Database) -> None:
         self._corrupt(db)
         for client in _client(db):

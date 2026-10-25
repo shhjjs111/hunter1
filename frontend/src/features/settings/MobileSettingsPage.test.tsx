@@ -58,6 +58,49 @@ afterEach(() => {
 });
 
 describe("MobileSettingsPage", () => {
+  it("保存响应到达时保留请求发出后输入的新密钥草稿", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    stubApi();
+    const normalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (input instanceof Request && input.method === "PUT" && new URL(input.url).pathname === "/api/settings") {
+        await pending;
+      }
+      return normalFetch(input, init);
+    }));
+    const { chrome } = renderWithChrome(<MobileSettingsPage />);
+    await screen.findByText("模型已配置");
+    const key = screen.getByLabelText("API Key");
+    fireEvent.change(key, { target: { value: "saved-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByRole("button", { name: "保存中…" });
+    fireEvent.change(key, { target: { value: "unsaved-next-key" } });
+    finish();
+    await waitFor(() => expect(chrome.showToast).toHaveBeenCalledWith("success", "已保存。"));
+    expect(key).toHaveProperty("value", "unsaved-next-key");
+  });
+
+  it("同步配置加载失败时显示错误而不产生未处理拒绝", async () => {
+    vi.mocked(loadSyncConfig).mockRejectedValue(new Error("本地存储不可用"));
+    stubApi();
+    renderWithChrome(<MobileSettingsPage />);
+    expect(await screen.findByText(/同步配置读取失败/)).toBeTruthy();
+  });
+
+  it("同步配置慢加载不会覆盖用户主动清空的地址", async () => {
+    let resolveConfig!: (config: Awaited<ReturnType<typeof loadSyncConfig>>) => void;
+    vi.mocked(loadSyncConfig).mockReturnValue(new Promise((resolve) => { resolveConfig = resolve; }));
+    stubApi();
+    renderWithChrome(<MobileSettingsPage />);
+    const address = screen.getByLabelText("电脑地址");
+    fireEvent.change(address, { target: { value: "http://desktop.local:8000" } });
+    fireEvent.change(address, { target: { value: "" } });
+    resolveConfig({ desktopUrl: "http://192.168.1.5:8000", accessCode: "old-code", lastSyncAt: null, lastResult: null });
+    await waitFor(() => expect(screen.getByLabelText("访问码")).toHaveProperty("value", "old-code"));
+    expect(address).toHaveProperty("value", "");
+  });
+
   it("回显配置与画像，长 URL 完整呈现在输入框里", async () => {
     stubApi();
     renderWithChrome(<MobileSettingsPage />);

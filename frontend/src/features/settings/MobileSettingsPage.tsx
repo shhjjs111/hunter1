@@ -40,8 +40,8 @@ export function MobileSettingsPage() {
   const [summaryEdit, setSummaryEdit] = useState<string | null>(null);
   const nativeApp = isMobileApp();
   const [syncConfig, setSyncConfig] = useState<SyncConfig | null>(null);
-  const [desktopUrl, setDesktopUrl] = useState("");
-  const [accessCode, setAccessCode] = useState("");
+  const [desktopUrlEdit, setDesktopUrlEdit] = useState<string | null>(null);
+  const [accessCodeEdit, setAccessCodeEdit] = useState<string | null>(null);
   const [syncMode, setSyncMode] = useState<SyncMode | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
@@ -55,9 +55,10 @@ export function MobileSettingsPage() {
         return;
       }
       setSyncConfig(config);
-      // 用户可能已经开始输入：只在空值时回填，避免异步结果覆盖草稿。
-      setDesktopUrl((current) => current || config.desktopUrl);
-      setAccessCode((current) => current || config.accessCode);
+    }).catch(() => {
+      if (alive) {
+        setSyncError("同步配置读取失败，请检查本地存储后重试。");
+      }
     });
     return () => {
       alive = false;
@@ -66,6 +67,8 @@ export function MobileSettingsPage() {
 
   const baseUrl = baseUrlEdit ?? settings.data?.base_url ?? "";
   const model = modelEdit ?? settings.data?.model ?? "";
+  const desktopUrl = desktopUrlEdit ?? syncConfig?.desktopUrl ?? "";
+  const accessCode = accessCodeEdit ?? syncConfig?.accessCode ?? "";
   const currentProfile = profile.data?.profile ?? null;
   const keywords = keywordsEdit ?? (currentProfile?.keywords ?? []).join("\n");
   const directions = directionsEdit ?? (currentProfile?.directions ?? []).join("\n");
@@ -83,7 +86,7 @@ export function MobileSettingsPage() {
       { base_url: baseUrl, model, api_key: apiKey },
       {
         onSuccess: () => {
-          setApiKey("");
+          setApiKey((current) => current === apiKey ? "" : current);
           showToast("success", "已保存。");
         },
         onError: (error) => showToast("error", error.message),
@@ -244,7 +247,7 @@ export function MobileSettingsPage() {
               <input
                 id="mobile-sync-url"
                 value={desktopUrl}
-                onChange={(event) => setDesktopUrl(event.target.value)}
+                onChange={(event) => setDesktopUrlEdit(event.target.value)}
                 placeholder="http://192.168.1.5:8000"
                 autoComplete="url"
                 inputMode="url"
@@ -256,7 +259,7 @@ export function MobileSettingsPage() {
                 id="mobile-sync-code"
                 type="password"
                 value={accessCode}
-                onChange={(event) => setAccessCode(event.target.value)}
+                onChange={(event) => setAccessCodeEdit(event.target.value)}
                 placeholder="电脑端终端里显示的访问码"
                 autoComplete="off"
               />
