@@ -88,8 +88,10 @@ describe("模型配置视图", () => {
     ).rejects.toThrow("合法的 http");
 
     const probe = await testConnection({ base_url: "not-a-url", model: "m", api_key: "k" });
-    expect(probe).toMatchObject({ ok: false });
-    expect(probe.message).toContain("合法的 http");
+    expect(probe).toEqual({
+      ok: false,
+      message: "模型端点地址不合法：请填写合法的 http(s) URL 或内网地址",
+    });
   });
 
   it("端点变更后不会把旧 Key 复用并发送到新地址", async () => {

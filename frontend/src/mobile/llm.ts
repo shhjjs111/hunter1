@@ -169,8 +169,11 @@ export async function testConnection(form: {
   try {
     const rawBase = form.base_url.trim() || existing?.baseUrl || "";
     baseUrl = rawBase ? normalizeHttpBaseUrl(rawBase) : "";
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } catch {
+    return {
+      ok: false,
+      message: "模型端点地址不合法：请填写合法的 http(s) URL 或内网地址",
+    };
   }
   const typedKey = form.api_key.trim();
   if (typedKey === "" && existing?.apiKey && baseUrl && !sameOrigin(existing.baseUrl, baseUrl)) {

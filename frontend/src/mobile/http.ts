@@ -110,6 +110,38 @@ export function safeErrorText(error: unknown): string {
   return "操作失败，请重试";
 }
 
+const PRIVATE_ERROR_FIELDS = new Set(["stack", "fileName", "lineNumber", "columnNumber"]);
+
+/**
+ * 本地 API 返回值在进入响应前统一清洗。业务字段里的 `message` 可以正常显示，
+ * 但异常实现字段和任何层级的 `stack` 永远不应跨进程边界。
+ */
+export function publicResponseValue(value: unknown, ancestors = new WeakSet<object>()): unknown {
+  if (value instanceof Error) {
+    return { detail: safeErrorText(value) };
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (ancestors.has(value)) {
+    return null;
+  }
+  ancestors.add(value);
+  if (Array.isArray(value)) {
+    const cleaned = value.map((item) => publicResponseValue(item, ancestors));
+    ancestors.delete(value);
+    return cleaned;
+  }
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!PRIVATE_ERROR_FIELDS.has(key)) {
+      cleaned[key] = publicResponseValue(item, ancestors);
+    }
+  }
+  ancestors.delete(value);
+  return cleaned;
+}
+
 export function readableHttpError(error: unknown): string {
   return safeErrorText(error);
 }

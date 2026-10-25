@@ -20,7 +20,7 @@ import {
   scoreJob,
   testConnection,
 } from "./llm";
-import { safeErrorText } from "./http";
+import { publicResponseValue, safeErrorText } from "./http";
 
 const APPLICATIONS_PAGE_SIZE = 50;
 const CONVERSATIONS_PAGE_SIZE = 50;
@@ -32,7 +32,7 @@ const APPLICATION_STAGES: readonly ApplicationStage[] = [
 function json(data: unknown, status = 200): Response {
   // 本地 App 的用户就是数据所有者；`safeErrorMessage` 只回显首行并截断，
   // 不会返回 `error.stack`。
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(publicResponseValue(data)), {
     status,
     headers: { "Content-Type": "application/json" },
   });
