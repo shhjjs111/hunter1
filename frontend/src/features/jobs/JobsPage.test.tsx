@@ -102,6 +102,29 @@ describe("JobsPage", () => {
     expect((postCalls[0][0] as Request).url).toContain("/api/applications");
   });
 
+  it("不同岗位并行投递结束后都解除忙碌状态", async () => {
+    const pending: Array<() => void> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if ((input as Request).method === "POST") {
+        await new Promise<void>((resolve) => pending.push(resolve));
+        return jsonResponse({ application_id: "a1" }, 201);
+      }
+      return jsonResponse({
+        ...LIST_PAYLOAD, total: 2,
+        items: [LIST_PAYLOAD.items[0], { ...LIST_PAYLOAD.items[0], id: "j2", title: "工程师" }],
+      });
+    }));
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: "记录投递" });
+    buttons.forEach((button) => fireEvent.click(button));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => { pending.forEach((resolve) => resolve()); });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "记录投递" })).toHaveLength(2);
+      buttons.forEach((button) => expect(button).toHaveProperty("disabled", false));
+    });
+  });
+
   it("连续两次相同提示：第二条重新计时，不会沿用第一条的截止时间", async () => {
     // 第一条在 t=0 出现、4 秒后收起；第二条在 t=2.5s 出现。没有 per-toast key 时
     // Toast 的 effect 依赖里文案没变，第二条既不会重新计时也不会重新播报 ——

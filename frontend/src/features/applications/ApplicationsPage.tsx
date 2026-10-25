@@ -67,7 +67,7 @@ export function ApplicationsPage() {
   // 每行「最近一次提交的阶段」。并发改同一行时由它裁定谁能撤销草稿：
   // 没有它的话，先失败的那次 onError 会删掉后一次刚写入的乐观值（下拉框回弹到
   // 旧值，而用户刚选的新值看起来被系统吞了）。
-  const latestRequest = useRef<Record<string, string>>({});
+  const latestRequest = useRef<Record<string, symbol>>({});
 
   function clearDraft(applicationId: string) {
     delete latestRequest.current[applicationId];
@@ -111,7 +111,7 @@ export function ApplicationsPage() {
       return; // 这一行上一次保存还在飞：不并发发第二次
     }
     latestNote.current[item.id] = note;
-    saveNote.mutate(
+    void saveNote.mutateAsync(
       // 带上**最新**阶段草稿：用户可能刚在下拉里改了阶段（请求还在飞），此时
       // `item.stage` 仍是查询缓存里的旧值 —— 拿它提交会把刚选的阶段打回旧值。
       {
@@ -119,18 +119,13 @@ export function ApplicationsPage() {
         stage: stageDraft[item.id] ?? item.stage,
         note,
       },
-      {
-        onSuccess: () => {
-          if (latestNote.current[item.id] === note) {
-            clearNoteDraft(item.id);
-          }
-        },
-        // 失败：**留着草稿**。用户刚敲的字不能因为一次网络失败就消失；
-        // 错误挂在这一行上，后续其他行的操作不会把它顶掉。
-        onError: (error) => noteTask.setError(item.id, error.message),
-        onSettled: () => noteTask.settle(item.id),
-      },
-    );
+    ).then(() => {
+      if (latestNote.current[item.id] === note) {
+        clearNoteDraft(item.id);
+      }
+    }).catch((error: Error) => {
+      noteTask.setError(item.id, error.message);
+    }).finally(() => noteTask.settle(item.id));
   }
 
   return (
@@ -189,34 +184,22 @@ export function ApplicationsPage() {
                           if (!stageTask.begin(item.id)) {
                             return; // 同一行已有阶段请求在飞
                           }
-                          latestRequest.current[item.id] = stage;
+                          const request = Symbol();
+                          latestRequest.current[item.id] = request;
                           setStageDraft((prev) => ({
                             ...prev,
                             [item.id]: stage,
                           }));
-                          changeStage.mutate(
-                            {
-                              applicationId: item.id,
-                              stage,
-                            },
-                            {
-                              // 成功：这条草稿已经等于服务端真值 → 交还给查询数据。
-                              onSuccess: () => {
-                                if (latestRequest.current[item.id] === stage) {
-                                  clearDraft(item.id);
-                                }
-                              },
-                              // 失败：撤销乐观值，选择回到服务端真值；错误挂在这一行，
-                              // 不会被后续其他行的操作覆盖。
-                              onError: (error) => {
-                                stageTask.setError(item.id, error.message);
-                                if (latestRequest.current[item.id] === stage) {
-                                  clearDraft(item.id);
-                                }
-                              },
-                              onSettled: () => stageTask.settle(item.id),
-                            },
-                          );
+                          // 每次调用都清理自己的草稿；mutate 的 per-call 回调
+                          // 只跟随最后一次请求，会把其他行的草稿永久留下。
+                          void changeStage.mutateAsync({ applicationId: item.id, stage })
+                            .catch((error: Error) => stageTask.setError(item.id, error.message))
+                            .finally(() => {
+                              stageTask.settle(item.id);
+                              if (latestRequest.current[item.id] === request) {
+                                clearDraft(item.id);
+                              }
+                            });
                         }}
                       >
                         {STAGE_ORDER.map((stage) => (
@@ -246,12 +229,14 @@ export function ApplicationsPage() {
                         maxLength={MAX_NOTE_CHARS}
                         placeholder="加一条备注…"
                         value={noteDraft[item.id] ?? item.note ?? ""}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          // 保存期间继续输入的是另一份草稿，旧请求不得清除它。
+                          delete latestNote.current[item.id];
                           setNoteDraft((prev) => ({
                             ...prev,
                             [item.id]: event.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         // 失焦即保存（回车也走这里：blur 只有一个提交入口，避免两处各写一遍）
                         onBlur={() => commitNote(item)}
                         onKeyDown={(event) => {
@@ -283,17 +268,16 @@ export function ApplicationsPage() {
                           ) {
                             return;
                           }
-                          remove.mutate(item.id, {
-                            onSuccess: () => {
+                          void remove.mutateAsync(item.id)
+                            .then(() => {
                               // 删掉当前页唯一一条后回退一页，避免把“空页”显示成
                               // “一条投递都没有”。
                               if (items.length === 1 && page > 1) {
                                 setPage(page - 1);
                               }
-                            },
-                            onError: (error) => removeTask.setError(item.id, error.message),
-                            onSettled: () => removeTask.settle(item.id),
-                          });
+                            })
+                            .catch((error: Error) => removeTask.setError(item.id, error.message))
+                            .finally(() => removeTask.settle(item.id));
                         }}
                       >
                         {removeTask.has(item.id) ? "删除中…" : "删除"}

@@ -29,6 +29,7 @@ export function JobCard({
 }) {
   const stop = (event: MouseEvent<HTMLButtonElement>) => event.stopPropagation();
   const keyOpen = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onOpen();

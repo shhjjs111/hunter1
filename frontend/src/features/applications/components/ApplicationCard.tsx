@@ -16,9 +16,10 @@ export function ApplicationCard({
   stage: ApplicationStage;
   deleting: boolean;
   onOpenStage: () => void;
-  onSaveNote: (note: string) => void;
+  onSaveNote: (note: string) => void | Promise<void>;
 }) {
-  const [note, setNote] = useState(application.note ?? "");
+  const [draft, setDraft] = useState<string | undefined>();
+  const note = draft ?? application.note ?? "";
   const inactive = stage === "rejected" || stage === "withdrawn";
   const stageIndex = STEP_STAGES.indexOf(stage);
 
@@ -51,10 +52,16 @@ export function ApplicationCard({
         maxLength={MAX_NOTE_CHARS}
         placeholder="加一条备注…"
         aria-label={`${application.company}的备注`}
-        onChange={(event) => setNote(event.target.value)}
+        onChange={(event) => setDraft(event.target.value)}
         onBlur={() => {
           if (note.trim() !== (application.note ?? "")) {
-            onSaveNote(note);
+            void Promise.resolve(onSaveNote(note)).then(() => {
+              setDraft((current) => current === note ? undefined : current);
+            }).catch(() => {
+              // 父组件显示保存错误，草稿保留以便重试。
+            });
+          } else {
+            setDraft(undefined);
           }
         }}
         onKeyDown={(event) => {

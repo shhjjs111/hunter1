@@ -100,21 +100,19 @@ export function JobsPage() {
             if (!applyTask.begin(jobId)) {
               return;
             }
-            apply.mutate(jobId, {
-              onSuccess: () => showToast("success", "已记录投递。"),
-              onError: (error) => applyTask.setError(jobId, error.message),
-              onSettled: () => applyTask.settle(jobId),
-            });
+            void apply.mutateAsync(jobId)
+              .then(() => showToast("success", "已记录投递。"))
+              .catch((error: Error) => applyTask.setError(jobId, error.message))
+              .finally(() => applyTask.settle(jobId));
           }}
           onScore={(jobId) => {
             if (!scoreTask.begin(jobId)) {
               return;
             }
-            score.mutate(jobId, {
-              onSuccess: (data) => showToast("success", `已评分：${data.score} 分`),
-              onError: (error) => scoreTask.setError(jobId, error.message),
-              onSettled: () => scoreTask.settle(jobId),
-            });
+            void score.mutateAsync(jobId)
+              .then((data) => showToast("success", `已评分：${data.score} 分`))
+              .catch((error: Error) => scoreTask.setError(jobId, error.message))
+              .finally(() => scoreTask.settle(jobId));
           }}
         />
       )}

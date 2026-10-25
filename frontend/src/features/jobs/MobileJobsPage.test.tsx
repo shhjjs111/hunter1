@@ -1,7 +1,7 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { jsonResponse, renderWithChrome, stubApi, stubMedia } from "../../test-utils";
+import { APPLICATION_LIST, APPLICATIONS, jsonResponse, renderWithChrome, SCORE, stubApi, stubMedia } from "../../test-utils";
 import { MobileJobsPage } from "./MobileJobsPage";
 
 beforeEach(() => {
@@ -14,6 +14,41 @@ afterEach(() => {
 });
 
 describe("MobileJobsPage", () => {
+  it("第一页以外的投递也显示已投递", async () => {
+    stubApi((_request, url) => {
+      if (url.pathname !== "/api/applications") return undefined;
+      const page = Number(url.searchParams.get("page") ?? 1);
+      return jsonResponse({
+        ...APPLICATION_LIST, page, has_next: page === 1, has_more: page === 1,
+        items: page === 1 ? [APPLICATIONS[0]] : [{ ...APPLICATIONS[1], job_id: "j2" }],
+      });
+    });
+    renderWithChrome(<MobileJobsPage />);
+    expect(await screen.findByRole("button", { name: "已投递：大模型应用工程师" }))
+      .toHaveProperty("disabled", true);
+  });
+
+  it("投递记录被删除并刷新后可以再次投递", async () => {
+    stubApi();
+    const { client, chrome } = renderWithChrome(<MobileJobsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "记录投递：大模型应用工程师" }));
+    await waitFor(() => expect(chrome.showToast).toHaveBeenCalledWith("success", "已记录投递。"));
+    await screen.findByRole("button", { name: "已投递：大模型应用工程师" });
+    await act(async () => { await client.invalidateQueries(); });
+    expect(await screen.findByRole("button", { name: "记录投递：大模型应用工程师" }))
+      .toHaveProperty("disabled", false);
+  });
+
+  it("详情采用最新评分端点的分数而不是打开时的列表快照", async () => {
+    stubApi((_request, url) => url.pathname === "/api/scoring/j1"
+      ? jsonResponse({ ...SCORE, job_id: "j1" }) : undefined);
+    renderWithChrome(<MobileJobsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /AI产品经理，字节跳动，查看详情/ }));
+    const dialog = await screen.findByRole("dialog", { name: "AI产品经理 详情" });
+    expect(await within(dialog).findByText("匹配度高")).toBeTruthy();
+    expect(within(dialog).getByRole("img", { name: "匹配分 91" })).toBeTruthy();
+  });
+
   it("加载岗位列表并展示统计副标题", async () => {
     stubApi();
     renderWithChrome(<MobileJobsPage />);

@@ -3,8 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMobileChrome } from "../../app/mobileChrome";
 import { MobileIcon, Sheet } from "../../shared/ui/mobile";
 import { useRowTasks } from "../../shared/useRowTasks";
-import { useApplyToJob, useApplications } from "../applications/api";
-import { useScoreJob, useJobScore, type ScoreView } from "../scoring/api";
+import { useApplyToJob, useAppliedJobIds } from "../applications/api";
+import { useScoreJob, useJobScore } from "../scoring/api";
 import { ScoreRing } from "../scoring/components/ScoreRing";
 import { useCrawlStatus } from "../crawl/api";
 import { useInfiniteJobs, useJobDetail, type JobSummary } from "./api";
@@ -19,15 +19,13 @@ export function MobileJobsPage() {
   const [debounced, setDebounced] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const jobs = useInfiniteJobs(debounced);
-  const applications = useApplications(1);
+  const applications = useAppliedJobIds();
   const apply = useApplyToJob();
   const score = useScoreJob();
   const applyTask = useRowTasks();
   const scoreTask = useRowTasks();
   const crawl = useCrawlStatus();
-  const [appliedLocal, setAppliedLocal] = useState<Set<string>>(() => new Set());
   const [detailJob, setDetailJob] = useState<JobSummary | null>(null);
-  const [scorePreview, setScorePreview] = useState<{ jobId: string; data: ScoreView } | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -44,13 +42,7 @@ export function MobileJobsPage() {
     () => jobs.data?.pages.flatMap((page) => page.items) ?? [],
     [jobs.data],
   );
-  const appliedIds = useMemo(() => {
-    const ids = new Set(appliedLocal);
-    for (const application of applications.data?.items ?? []) {
-      ids.add(application.job_id);
-    }
-    return ids;
-  }, [applications.data, appliedLocal]);
+  const appliedIds = useMemo(() => new Set(applications.data ?? []), [applications.data]);
   const filtered = items.filter((job) => {
     if (filter === "unscored") {
       return job.match_score == null;
@@ -96,37 +88,28 @@ export function MobileJobsPage() {
 
   const jobDetail = useJobDetail(detailJob?.id ?? null);
   const storedScore = useJobScore(detailJob?.id ?? null);
-  const detailScore =
-    (scorePreview && scorePreview.jobId === detailJob?.id ? scorePreview.data : null) ?? storedScore.data ?? null;
-  const matched = detailJob?.match_score ?? detailScore?.score ?? null;
+  const detailScore = storedScore.data ?? null;
+  const matched = detailScore?.score ?? jobDetail.data?.match_score ?? detailJob?.match_score ?? null;
   const href = detailJob ? safeHref(detailJob.detail_url) : null;
 
   function runScore(job: JobSummary) {
     if (!scoreTask.begin(job.id)) {
       return; // 同一岗位已在评分：连点不会再发一次
     }
-    score.mutate(job.id, {
-      onSuccess: (data) => {
-        setScorePreview({ jobId: job.id, data });
-        showToast("success", `已评分：${data.score} 分`);
-      },
-      onError: (error) => showToast("error", error.message),
-      onSettled: () => scoreTask.settle(job.id),
-    });
+    void score.mutateAsync(job.id)
+      .then((data) => showToast("success", `已评分：${data.score} 分`))
+      .catch((error: Error) => showToast("error", error.message))
+      .finally(() => scoreTask.settle(job.id));
   }
 
   function runApply(job: JobSummary) {
     if (!applyTask.begin(job.id)) {
       return;
     }
-    apply.mutate(job.id, {
-      onSuccess: () => {
-        setAppliedLocal((prev) => new Set(prev).add(job.id));
-        showToast("success", "已记录投递。");
-      },
-      onError: (error) => showToast("error", error.message),
-      onSettled: () => applyTask.settle(job.id),
-    });
+    void apply.mutateAsync(job.id)
+      .then(() => showToast("success", "已记录投递。"))
+      .catch((error: Error) => showToast("error", error.message))
+      .finally(() => applyTask.settle(job.id));
   }
 
   return (
