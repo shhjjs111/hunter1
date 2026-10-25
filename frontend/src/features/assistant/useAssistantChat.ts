@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { apiUrl } from "../../shared/api/client";
 import { streamSse } from "../../shared/streaming/sse";
 import { useConversationMessages, useConversations, useRefreshConversations } from "./api";
 import type { ChatItem } from "./components/MessageBubble";
-
-/** 历史里内容等于 `text` 的用户消息条数。 */
-export function countUserMessages(items: ChatItem[], text: string): number {
-  return items.filter((item) => item.role === "user" && item.content.trim() === text).length;
-}
 
 /**
  * 求职助手的会话状态机：历史 + 本轮流式消息 + 落库判定。
@@ -17,6 +13,7 @@ export function countUserMessages(items: ChatItem[], text: string): number {
  * 截断提示这些行为必须完全一致。
  */
 export function useAssistantChat() {
+  const queryClient = useQueryClient();
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const conversations = useConversations(page);
@@ -29,8 +26,7 @@ export function useAssistantChat() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const [turn, setTurn] = useState<{ text: string; seen: number } | null>(null);
-  const [turnSettled, setTurnSettled] = useState(false);
+  const [settledTurn, setSettledTurn] = useState<{ id: string; afterUpdate: number } | null>(null);
   const sawAssistantText = useRef(false);
   const assistantChunks = useRef<string[]>([]);
   const alive = useRef(true);
@@ -47,11 +43,11 @@ export function useAssistantChat() {
     role: item.role,
     content: item.content,
   }));
-  const turnPersisted =
-    turn !== null &&
-    turnSettled &&
-    !messages.isFetching &&
-    countUserMessages(history, turn.text) > turn.seen;
+  // 历史接口有窗口上限，同一句提问的数量不一定增加。done 之后成功重取的历史
+  // 才能替代 live；按缓存更新序号判定，也不会把同一毫秒内的刷新漏掉。
+  const historyUpdates = queryClient.getQueryState(["assistant", "messages", currentId])?.dataUpdateCount ?? 0;
+  const turnPersisted = settledTurn?.id === currentId &&
+    historyUpdates > settledTurn.afterUpdate;
   const items = currentId === null ? live : [...history, ...(turnPersisted ? [] : live)];
   const historyLoading = currentId !== null && messages.isLoading;
   const historyError = currentId !== null && messages.isError;
@@ -72,8 +68,7 @@ export function useAssistantChat() {
   }
 
   function resetTurn(): void {
-    setTurn(null);
-    setTurnSettled(false);
+    setSettledTurn(null);
   }
 
   function clearConversationState(): void {
@@ -110,8 +105,7 @@ export function useAssistantChat() {
     setLive([{ role: "user", content: text }]);
     sawAssistantText.current = false;
     assistantChunks.current = [];
-    setTurn({ text, seen: countUserMessages(history, text) });
-    setTurnSettled(false);
+    setSettledTurn(null);
     setStreaming(true);
 
     const controller = new AbortController();
@@ -151,11 +145,18 @@ export function useAssistantChat() {
             ]);
           } else if (event.type === "done") {
             finished = true;
-            setTurnSettled(true);
             const id = String(event.conversation_id ?? "");
             if (id) {
+              setSettledTurn({
+                id,
+                afterUpdate: queryClient.getQueryState(["assistant", "messages", id])?.dataUpdateCount ?? 0,
+              });
               setCurrentId(id);
               setPage(1);
+            }
+            if (typeof event.reply === "string" && event.reply.trim() !== "") {
+              assistantChunks.current = [];
+              appendAssistantText(event.reply);
             }
             const truncated = event.truncated === true;
             const degraded = event.degraded === true;
@@ -167,7 +168,7 @@ export function useAssistantChat() {
                   ? "本次回答由模型降级返回（可能不完整）。"
                   : null,
             );
-            refresh();
+            void refresh(id);
           } else if (event.type === "error") {
             failed = true;
             setError(String(event.message ?? "未知错误"));

@@ -102,6 +102,29 @@ describe("JobsPage", () => {
     expect((postCalls[0][0] as Request).url).toContain("/api/applications");
   });
 
+  it("不同岗位并行投递结束后都解除忙碌状态", async () => {
+    const pending: Array<() => void> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if ((input as Request).method === "POST") {
+        await new Promise<void>((resolve) => pending.push(resolve));
+        return jsonResponse({ application_id: "a1" }, 201);
+      }
+      return jsonResponse({
+        ...LIST_PAYLOAD, total: 2,
+        items: [LIST_PAYLOAD.items[0], { ...LIST_PAYLOAD.items[0], id: "j2", title: "工程师" }],
+      });
+    }));
+    renderPage();
+    const buttons = await screen.findAllByRole("button", { name: "记录投递" });
+    buttons.forEach((button) => fireEvent.click(button));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => { pending.forEach((resolve) => resolve()); });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "记录投递" })).toHaveLength(2);
+      buttons.forEach((button) => expect(button).toHaveProperty("disabled", false));
+    });
+  });
+
   it("连续两次相同提示：第二条重新计时，不会沿用第一条的截止时间", async () => {
     // 第一条在 t=0 出现、4 秒后收起；第二条在 t=2.5s 出现。没有 per-toast key 时
     // Toast 的 effect 依赖里文案没变，第二条既不会重新计时也不会重新播报 ——
@@ -179,6 +202,46 @@ describe("JobsPage", () => {
     expect(screen.getByText("匹配分 88")).toBeTruthy();
     expect(await screen.findByText("已评分：88 分")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("已评分：88 分");
+  });
+
+  it("同一岗位连点评分只发一次请求", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      if (request.method === "POST") {
+        await gate;
+        return jsonResponse({
+          job_id: "j1",
+          score: 88,
+          summary: null,
+          advantages: null,
+          gaps: null,
+          model: "fake",
+          prompt_version: "v3",
+          scored_at: null,
+        });
+      }
+      return jsonResponse(LIST_PAYLOAD);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+
+    const button = await screen.findByRole("button", { name: "评分" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "评分中…" })).toBeTruthy(),
+    );
+    const posts = fetchMock.mock.calls.filter(
+      ([input]) => (input as Request).method === "POST",
+    );
+    expect(posts).toHaveLength(1);
+    release();
+    await act(async () => {});
   });
 
   it("评分成功后把结果卡滚进当前视口", async () => {

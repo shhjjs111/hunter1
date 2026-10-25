@@ -367,6 +367,32 @@ class Database:
         finally:
             session.close()
 
+    @contextmanager
+    def transaction(self) -> Iterator[Session]:
+        """一个**要么全成、要么全不成**的写事务。
+
+        同步合并会同时写岗位、评分、投递与画像 —— 这些分属不同切片，但落在同一个
+        SQLite 库。逐条 `commit` 的旧写法一旦中途失败（非法分数、唯一约束、磁盘
+        错误），调用方看到失败、库里却已经写了一半。这里把整段写入收进单一
+        Session：正常退出提交，任何异常回滚并原样抛出。
+
+        读路径也要用同一个 Session 才能看到一致的快照 —— 因此仓储方法都接受
+        可选的 `session` 参数（见 `platform/db/repository.py` 等）。
+        """
+        session = Session(self.engine, future=True)
+        try:
+            # 延迟事务会先拿读锁，真正写入时才升级写锁；两个并发同步可能同时
+            # 读到旧快照，随后在升级时互相卡住。BEGIN IMMEDIATE 在入口就拿写锁，
+            # 让第二个写入者按 busy_timeout 排队，而不是做一次无效的读-改-写。
+            session.execute(text("BEGIN IMMEDIATE"))
+            yield session
+            session.commit()
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def companies(self) -> SqliteCompanyRepository:
         return SqliteCompanyRepository(self)
 

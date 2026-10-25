@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ErrorNotice, PageHeader, Pager, Toast } from "../../shared/ui";
+import { useRowTasks } from "../../shared/useRowTasks";
 import { useScoreJob } from "../scoring/api";
 import { ScoreCard } from "../scoring/components/ScoreCard";
 import { useApplyToJob } from "../applications/api";
@@ -21,6 +22,10 @@ export function JobsPage() {
   const jobs = useJobs(keyword, page);
   const apply = useApplyToJob();
   const score = useScoreJob();
+  // 按行维护 pending / error：共用一个 mutation 时，两个岗位的请求会互相顶掉
+  // 状态，同一行连点还会发出两次评分请求。
+  const applyTask = useRowTasks();
+  const scoreTask = useRowTasks();
   const showToast = useCallback((tone: "success" | "error", message: string) => {
     toastSeq.current += 1;
     setToast({ id: toastSeq.current, tone, message });
@@ -87,20 +92,28 @@ export function JobsPage() {
         <JobsTable
           jobs={jobs.data?.items ?? []}
           loading={jobs.isLoading}
-          applyingId={apply.isPending ? apply.variables : undefined}
-          scoringId={score.isPending ? score.variables : undefined}
-          onApply={(jobId) =>
-            apply.mutate(jobId, {
-              onSuccess: () => showToast("success", "已记录投递。"),
-              onError: (error) => showToast("error", error.message),
-            })
-          }
-          onScore={(jobId) =>
-            score.mutate(jobId, {
-              onSuccess: (data) => showToast("success", `已评分：${data.score} 分`),
-              onError: (error) => showToast("error", error.message),
-            })
-          }
+          applyingIds={applyTask.pending}
+          scoringIds={scoreTask.pending}
+          applyErrors={applyTask.errors}
+          scoreErrors={scoreTask.errors}
+          onApply={(jobId) => {
+            if (!applyTask.begin(jobId)) {
+              return;
+            }
+            void apply.mutateAsync(jobId)
+              .then(() => showToast("success", "已记录投递。"))
+              .catch((error: Error) => applyTask.setError(jobId, error.message))
+              .finally(() => applyTask.settle(jobId));
+          }}
+          onScore={(jobId) => {
+            if (!scoreTask.begin(jobId)) {
+              return;
+            }
+            void score.mutateAsync(jobId)
+              .then((data) => showToast("success", `已评分：${data.score} 分`))
+              .catch((error: Error) => scoreTask.setError(jobId, error.message))
+              .finally(() => scoreTask.settle(jobId));
+          }}
         />
       )}
 

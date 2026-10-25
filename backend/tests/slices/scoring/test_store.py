@@ -5,14 +5,16 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from hunter1.domain.models import Job
 from hunter1.platform.db import Database
+from hunter1.platform.db.settings import SqliteSettingsRepository
 from hunter1.slices.scoring.models import CandidateProfile
-from hunter1.slices.scoring.store import PROFILE_KEY, ScoreStore
+from hunter1.slices.scoring.store import PROFILE_KEY, PROFILE_UPDATED_AT_KEY, ScoreStore
 
 JOB_ID = "b" * 32
 
@@ -138,6 +140,27 @@ class TestProfileLoadDistinguishesStates:
         with pytest.raises(ValueError) as excinfo:
             store.load_profile()
         assert "画像" in str(excinfo.value)
+
+    def test_profile_and_version_roll_back_together(
+        self, store: ScoreStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        previous = CandidateProfile(summary="original profile")
+        instant = datetime(2026, 10, 25, tzinfo=UTC)
+        store.save_profile_at(previous, instant)
+        original = SqliteSettingsRepository.set_raw
+
+        def fail_version(self, key, value, *, session=None):
+            if key == PROFILE_UPDATED_AT_KEY:
+                raise OSError("simulated write failure")
+            original(self, key, value, session=session)
+
+        monkeypatch.setattr(SqliteSettingsRepository, "set_raw", fail_version)
+        with pytest.raises(OSError, match="simulated write failure"):
+            store.save_profile_at(
+                CandidateProfile(summary="new profile"), instant + timedelta(seconds=1)
+            )
+        assert store.load_profile() == previous
+        assert store.load_profile_updated_at() == instant
 
 
 def test_overlong_conclusion_text_is_clipped_with_a_trace(

@@ -207,6 +207,8 @@ class ReleaseClient:
                 body = _read_capped(response, MAX_MANIFEST_BYTES, url)
         except DownloadError:
             raise
+        except httpx.InvalidURL as exc:
+            raise DownloadError("invalid_url", str(exc)) from exc
         except httpx.TimeoutException as exc:
             raise DownloadError("timeout", str(exc)) from exc
         except httpx.ConnectError as exc:

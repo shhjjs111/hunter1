@@ -76,7 +76,7 @@ export function SettingsPage() {
                 // 空 key = 不改（后端语义）；这里原样传，别自作主张塞占位符
                 api_key: apiKey,
               },
-              { onSuccess: () => setApiKey("") },
+              { onSuccess: () => setApiKey((current) => current === apiKey ? "" : current) },
             );
           }}
         >

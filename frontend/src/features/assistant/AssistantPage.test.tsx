@@ -95,7 +95,7 @@ function renderPage({ strict = false }: { strict?: boolean } = {}) {
   // 严格模式（开发态默认）会对 effect 做 setup → cleanup → setup。这正是此前逃逸
   // 的那条通路：任何「只在 cleanup 里置位、setup 不复位」的标记，第二次 setup 之后
   // 就永久失效 —— 而下面的用例全部不包 StrictMode，于是全绿。
-  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+  return { ...render(strict ? <StrictMode>{tree}</StrictMode> : tree), client };
 }
 
 afterEach(() => {
@@ -103,6 +103,78 @@ afterEach(() => {
 });
 
 describe("AssistantPage", () => {
+  it("历史窗口移除旧的同文本提问后，本轮问答仍只显示一次", async () => {
+    let completed = false;
+    const prompt = "再推荐一些";
+    const middle = Array.from({ length: 198 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `历史消息 ${index}`,
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const { url } = reqInfo(input, init);
+      if (url.includes("/api/assistant/stream")) {
+        completed = true;
+        return new Response(sseStream(), { headers: { "Content-Type": "text/event-stream" } });
+      }
+      if (url.includes("/api/assistant/conversations/c1")) {
+        return jsonResponse(completed
+          ? [...middle, { role: "user", content: prompt }, { role: "assistant", content: REPLY }]
+          : [{ role: "user", content: prompt }, { role: "assistant", content: "旧推荐" }, ...middle]);
+      }
+      return jsonResponse({ items: [{ id: "c1", title: "长会话" }], total: 1, page: 1, page_size: 50, has_next: false });
+    }));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "长会话" }));
+    await screen.findByText("旧推荐");
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: prompt } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await waitFor(() => expect(screen.queryByText("旧推荐")).toBeNull());
+    expect(screen.getAllByText(REPLY)).toHaveLength(1);
+    expect(screen.getAllByText(prompt)).toHaveLength(1);
+  });
+
+  it("没有正文分片且历史刷新失败时仍显示 done 中的最终答复", async () => {
+    const reply = "（模型没有返回内容，请重试或换一个模型。）";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const { url } = reqInfo(input, init);
+      if (url.includes("/api/assistant/stream")) {
+        return new Response(`data: ${JSON.stringify({ type: "done", conversation_id: "c1", reply })}\n\n`, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      if (url.includes("/api/assistant/conversations/c1")) {
+        return jsonResponse({ detail: "unavailable" }, 500);
+      }
+      return jsonResponse({ items: [], total: 0, page: 1, page_size: 50, has_next: false });
+    }));
+    renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "你好" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await screen.findByText(/加载会话历史失败/);
+    expect(screen.getByText(reply)).toBeDefined();
+  });
+
+  it("已确认落库后再次刷新失败，不会重新追加本轮消息", async () => {
+    stubApi();
+    const { client } = renderPage();
+    fireEvent.change(screen.getByPlaceholderText(/有什么想问的/), { target: { value: "你好" } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送" }).closest("form")!);
+    await screen.findByText(EARLIER);
+    expect(screen.getAllByText(REPLY)).toHaveLength(1);
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (reqInfo(input, init).url.includes("/api/assistant/conversations/c1")) {
+        return jsonResponse({ detail: "unavailable" }, 500);
+      }
+      return originalFetch(input, init);
+    }));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["assistant", "messages", "c1"] });
+    });
+    await screen.findByText(/加载会话历史失败/);
+    expect(screen.getAllByText(REPLY)).toHaveLength(1);
+  });
+
   it("严格模式下流式回答照常渲染，且「回复中…」会解除", async () => {
     // 回归护栏：`alive` 标记只在卸载 cleanup 里置 false，effect 体内不复位 ——
     // 严格模式的第二次 setup 之后它恒为 false，所有流式回调与续点被自己的闸门挡掉：

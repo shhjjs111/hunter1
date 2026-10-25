@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import io
 import json
@@ -41,6 +42,14 @@ class Package:
     version: str
     license: str = "NOASSERTION"
     download_location: str = "NOASSERTION"
+
+
+@dataclass(frozen=True)
+class Artifact:
+    """A shipped build artifact (APK / zip), identified by its real bytes."""
+
+    name: str
+    path: Path
 
 
 def _python_name(name: str) -> str:
@@ -113,6 +122,34 @@ def python_packages() -> list[Package]:
     return sorted(found.values())
 
 
+def parse_artifact_spec(spec: str) -> Artifact:
+    """`name=path` → Artifact；路径必须存在，否则发布清单会指向一个假文件。"""
+    name, separator, raw_path = spec.partition("=")
+    if not separator or not name.strip() or not raw_path.strip():
+        raise ValueError(f"artifact 必须是 name=path，收到 {spec!r}")
+    path = Path(raw_path)
+    if not path.is_file():
+        raise ValueError(f"artifact 不存在：{path}")
+    return Artifact(name.strip(), path)
+
+
+def _artifact_package(artifact: Artifact, version: str) -> dict[str, object]:
+    with artifact.path.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    return {
+        "SPDXID": _spdx_id("artifact", artifact.name, version),
+        "name": artifact.name,
+        "versionInfo": version,
+        "downloadLocation": "NOASSERTION",
+        "filesAnalyzed": False,
+        "checksums": [{"algorithm": "SHA256", "checksumValue": digest}],
+        "licenseConcluded": "NOASSERTION",
+        "licenseDeclared": "NOASSERTION",
+        "copyrightText": "NOASSERTION",
+        "primaryPackagePurpose": "APPLICATION",
+    }
+
+
 def _external_ref(package: Package) -> dict[str, str]:
     if package.ecosystem == "npm":
         locator = f"pkg:npm/{quote(package.name, safe='')}@{quote(package.version, safe='')}"
@@ -147,6 +184,7 @@ def build_document(
     commit: str,
     packages: list[Package],
     created: str,
+    artifacts: list[Artifact] | None = None,
 ) -> dict[str, object]:
     """Build a deterministic SPDX document for the supplied package inventory."""
     root_id = "SPDXRef-Package-hunter1"
@@ -167,6 +205,15 @@ def build_document(
             "relatedSpdxElement": str(package["SPDXID"]),
         }
         for package in dependency_packages
+    )
+    artifact_packages = [_artifact_package(item, version) for item in artifacts or []]
+    relationships.extend(
+        {
+            "spdxElementId": root_id,
+            "relationshipType": "CONTAINS",
+            "relatedSpdxElement": str(package["SPDXID"]),
+        }
+        for package in artifact_packages
     )
     return {
         "SPDXID": "SPDXRef-DOCUMENT",
@@ -192,6 +239,7 @@ def build_document(
                 "primaryPackagePurpose": "APPLICATION",
             },
             *dependency_packages,
+            *artifact_packages,
         ],
         "relationships": relationships,
     }
@@ -215,6 +263,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=str(DEFAULT_NPM_LOCK),
         help="frontend package-lock.json 路径",
     )
+    parser.add_argument(
+        "--artifact",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="随版本发布的产物（可重复）；会写入 SPDX 包与其 SHA256",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -225,6 +280,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"读取 npm lock 失败：{exc}", file=sys.stderr)
         return 2
 
+    try:
+        artifacts = [parse_artifact_spec(spec) for spec in args.artifact]
+    except ValueError as exc:
+        print(f"artifact 参数不合法：{exc}", file=sys.stderr)
+        return 2
+
     packages = python_packages() + parse_npm_lock(npm_lock)
     created = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     document = build_document(
@@ -232,6 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         commit=_git_commit(),
         packages=packages,
         created=created,
+        artifacts=artifacts,
     )
 
     output = Path(args.output)

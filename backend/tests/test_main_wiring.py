@@ -161,3 +161,14 @@ class TestAccessGateWiring:
                 assert pulled.status_code == 200
         finally:
             context.db.dispose()
+
+    def test_sync_body_limit_middleware_is_mounted_in_production(self, tmp_path: Path) -> None:
+        """流式体积上限必须真的挂进生产 app，而不只是切片里的一个类。"""
+        from hunter1.slices.sync import SyncBodyLimitMiddleware
+
+        context = main_module.AppContext.default(db_path=tmp_path / "h.db")
+        app = main_module.create_app(context)
+        try:
+            assert any(item.cls is SyncBodyLimitMiddleware for item in app.user_middleware)
+        finally:
+            context.db.dispose()

@@ -69,6 +69,7 @@ export function MobileAssistantPage() {
 
   return (
     <div className="mobile-assistant-page">
+      <h1 className="sr-only">求职助手</h1>
       <p className="mobile-readonly">只读：它查岗位与投递、给建议；写操作由你确认</p>
 
       <div className="mobile-chat" ref={scrollRef} role="log" aria-live="polite" aria-busy={chat.streaming}>
@@ -121,9 +122,10 @@ export function MobileAssistantPage() {
             className="mobile-composer glass mobile-no-swipe"
             onSubmit={(event) => {
               event.preventDefault();
-              if (chat.streaming) {
-                chat.abort();
-              } else {
+              // 中止只走独立的 type="button"：提交事件在流式期间一律忽略。
+              // 旧写法让同一个按钮在 submit / button 之间切换，快速点击时中止后
+              // 又触发了原生提交，等于把问题再发一遍。
+              if (!chat.streaming) {
                 void chat.send();
               }
             }}
@@ -139,15 +141,25 @@ export function MobileAssistantPage() {
               aria-label="输入要问助手的问题"
               autoComplete="off"
             />
-            <button
-              type={chat.streaming ? "button" : "submit"}
-              className="mobile-send"
-              disabled={!chat.streaming && chat.input.trim() === ""}
-              aria-label={chat.streaming ? "中止回答" : "发送"}
-              onClick={chat.streaming ? chat.abort : undefined}
-            >
-              <MobileIcon name={chat.streaming ? "stop" : "send"} className="size-[18px]" />
-            </button>
+            {chat.streaming ? (
+              <button
+                type="button"
+                className="mobile-send"
+                aria-label="中止回答"
+                onClick={() => chat.abort()}
+              >
+                <MobileIcon name="stop" className="size-[18px]" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="mobile-send"
+                disabled={chat.input.trim() === ""}
+                aria-label="发送"
+              >
+                <MobileIcon name="send" className="size-[18px]" />
+              </button>
+            )}
           </form>
         </div>
       </div>

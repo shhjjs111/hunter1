@@ -31,7 +31,7 @@ from starlette.convertors import Convertor, register_url_convertor
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from hunter1.application.ports import Crawler, LLMProvider, ModelNotConfiguredError, TextFetcher
-from hunter1.domain.settings import LLMSettings
+from hunter1.domain.settings import LLMSettings, plaintext_warning
 from hunter1.platform.access import AccessGateMiddleware
 from hunter1.platform.db import Database
 from hunter1.platform.web_security import SecurityBoundaryMiddleware
@@ -48,6 +48,7 @@ from hunter1.slices.scoring.router import build_router as build_scoring_router
 from hunter1.slices.scoring.store import ScoreStore
 from hunter1.slices.settings.router import build_router as build_settings_router
 from hunter1.slices.settings.store import SettingsStore
+from hunter1.slices.sync.router import SyncBodyLimitMiddleware
 from hunter1.slices.sync.router import build_router as build_sync_router
 from hunter1.slices.sync.store import SyncStore
 
@@ -240,6 +241,8 @@ def create_app(context: AppContext) -> FastAPI:
     # 也不能让浏览器把请求的 Host 写成它；而真实攻击的 Host 永远是攻击者域名。
     # 访问码门禁放在最内层：Host 校验与安全响应头仍然先跑，未授权的 401 也带
     # 同一组安全头。默认 `access_token=None` 时完全不挂载，单机行为不变。
+    # 先注册最内层：访问码 / Host / 安全头仍在外层，未授权请求不会先读请求体。
+    app.add_middleware(SyncBodyLimitMiddleware)
     if context.access_token:
         app.add_middleware(AccessGateMiddleware, token=context.access_token)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(context.trusted_hosts))
@@ -274,6 +277,13 @@ def create_app(context: AppContext) -> FastAPI:
         if settings is None or not settings.is_configured:
             raise ModelNotConfiguredError(
                 "模型未配置：请先在「配置」页填好 base_url / 模型 / API Key"
+            )
+        warning = plaintext_warning(settings.base_url)
+        if warning:
+            # 旧库里可能还留着公网明文配置。保存入口已拒绝新写入，但若这里放行，
+            # 评分 / 助手仍会把 Key 与对话内容明文发出去 —— 读取时也必须拦住。
+            raise ModelNotConfiguredError(
+                f"模型配置不安全，请到「配置」页改用 https:// 或内网地址：{warning}"
             )
         return context.llm_factory(settings)
 
@@ -335,6 +345,7 @@ def create_app(context: AppContext) -> FastAPI:
     _mount(
         build_sync_router(
             store=SyncStore(
+                db=context.db,
                 jobs=job_store,
                 applications=application_store,
                 scores=scoring_store,

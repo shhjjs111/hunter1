@@ -33,9 +33,10 @@ export function useConversations(page: number) {
   });
 }
 
-export async function fetchMessages(conversationId: string): Promise<ConversationMessageView[]> {
+export async function fetchMessages(conversationId: string, signal?: AbortSignal): Promise<ConversationMessageView[]> {
   const { data, error, response } = await api.GET("/api/assistant/conversations/{conversation_id}", {
     params: { path: { conversation_id: conversationId } },
+    signal,
   });
   if (error || !data) {
     throw new Error(apiErrorMessage(error, "加载会话消息失败", response));
@@ -46,7 +47,7 @@ export async function fetchMessages(conversationId: string): Promise<Conversatio
 export function useConversationMessages(conversationId: string | null) {
   return useQuery({
     queryKey: ["assistant", "messages", conversationId],
-    queryFn: () => fetchMessages(conversationId as string),
+    queryFn: ({ signal }) => fetchMessages(conversationId as string, signal),
     enabled: conversationId !== null,
   });
 }
@@ -54,7 +55,10 @@ export function useConversationMessages(conversationId: string | null) {
 /** 发送后让会话列表与消息失效（新一轮已落库）。 */
 export function useRefreshConversations() {
   const queryClient = useQueryClient();
-  return () => {
-    void queryClient.invalidateQueries({ queryKey: ["assistant"] });
+  return async (conversationId: string) => {
+    // 首次历史请求可能在 done 前已开始且还没返回；先取消，避免它的旧快照
+    // 被当成本轮完成后的刷新。新会话的请求会在选中 id 后自然启动。
+    await queryClient.cancelQueries({ queryKey: ["assistant", "messages", conversationId] });
+    await queryClient.invalidateQueries({ queryKey: ["assistant"] });
   };
 }

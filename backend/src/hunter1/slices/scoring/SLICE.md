@@ -109,3 +109,4 @@ cd backend && <python> -m pytest tests/slices/scoring -q
 - `CandidateProfile` 目前由**用户经「配置」页写入**，存在通用键值配置区
   （与 LLM 配置同表，`ScoreStore.load_profile/save_profile`）；组装处每请求
   经 `profile_provider` 读取，改画像**立刻生效、不必重启**（与 `llm_factory` 同理）。
+  画像与同步版本时间在同一事务写入；任一写入失败整组回滚。

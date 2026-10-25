@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useMobileChrome } from "../../app/mobileChrome";
+import { useRowTasks } from "../../shared/useRowTasks";
 import { ActionSheet, ConfirmDialog } from "../../shared/ui/mobile";
 import {
   STAGE_LABELS,
@@ -22,8 +23,12 @@ export function MobileApplicationsPage() {
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
   const saveNote = useSaveNote();
+  const stageTask = useRowTasks();
+  const noteTask = useRowTasks();
+  const removeTask = useRowTasks();
   const [filter, setFilter] = useState<Filter>("all");
   const [stageOverrides, setStageOverrides] = useState<Record<string, ApplicationStage>>({});
+  const stageRequests = useRef<Record<string, symbol>>({});
   const [stageTargetId, setStageTargetId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ApplicationSummary | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -88,31 +93,25 @@ export function MobileApplicationsPage() {
       return;
     }
     const stage = value as ApplicationStage;
-    if (stage === target.stage) {
+    if (stage === stageOf(target) || !stageTask.begin(target.id)) {
       return;
     }
+    const request = Symbol();
+    stageRequests.current[target.id] = request;
     setStageOverrides((prev) => ({ ...prev, [target.id]: stage }));
-    changeStage.mutate(
-      { applicationId: target.id, stage },
-      {
-        onSuccess: () => {
-          setStageOverrides((prev) => {
-            const next = { ...prev };
-            delete next[target.id];
-            return next;
-          });
-          showToast("success", `已改为「${STAGE_LABELS[stage]}」`);
-        },
-        onError: (error) => {
-          setStageOverrides((prev) => {
-            const next = { ...prev };
-            delete next[target.id];
-            return next;
-          });
-          showToast("error", error.message);
-        },
-      },
-    );
+    void changeStage.mutateAsync({ applicationId: target.id, stage })
+      .then(() => showToast("success", `已改为「${STAGE_LABELS[stage]}」`))
+      .catch((error: Error) => showToast("error", error.message))
+      .finally(() => {
+        stageTask.settle(target.id);
+        if (stageRequests.current[target.id] !== request) return;
+        delete stageRequests.current[target.id];
+        setStageOverrides((prev) => {
+          const next = { ...prev };
+          delete next[target.id];
+          return next;
+        });
+      });
   }
 
   function confirmDelete() {
@@ -121,16 +120,17 @@ export function MobileApplicationsPage() {
     if (!target) {
       return;
     }
+    if (!removeTask.begin(target.id)) {
+      return;
+    }
     setDeletingId(target.id);
-    remove.mutate(target.id, {
-      onSuccess: () => {
-        showToast("success", "已删除");
-      },
-      onError: (error) => {
+    void remove.mutateAsync(target.id)
+      .then(() => showToast("success", "已删除"))
+      .catch((error: Error) => {
         setDeletingId(null);
         showToast("error", error.message);
-      },
-    });
+      })
+      .finally(() => removeTask.settle(target.id));
   }
 
   return (
@@ -174,15 +174,18 @@ export function MobileApplicationsPage() {
               stage={stageOf(application)}
               deleting={deletingId === application.id}
               onOpenStage={() => setStageTargetId(application.id)}
-              onSaveNote={(note) =>
-                saveNote.mutate(
+              onSaveNote={(note) => {
+                if (!noteTask.begin(application.id)) {
+                  return Promise.reject(new Error("备注仍在保存中"));
+                }
+                return saveNote.mutateAsync(
                   { applicationId: application.id, stage: stageOf(application), note },
-                  {
-                    onSuccess: () => showToast("success", "备注已保存。"),
-                    onError: (error) => showToast("error", error.message),
-                  },
-                )
-              }
+                ).then(() => showToast("success", "备注已保存。")).catch((error: Error) => {
+                  noteTask.setError(application.id, error.message);
+                  showToast("error", error.message);
+                  throw error;
+                }).finally(() => noteTask.settle(application.id));
+              }}
             />
           ))}
           {!applications.isLoading && visible.length === 0 && (

@@ -286,7 +286,11 @@ class TestEncodingFallback:
 
 
 class TestMalformedUrl:
-    def test_malformed_url_fails_fast_with_stable_code(self, clock: FakeClock) -> None:
+    @pytest.mark.parametrize("url", ["not a url", "http://[", "http://[not-an-ip]"])
+    @pytest.mark.parametrize("private_guard", [False, True])
+    def test_malformed_url_fails_fast_with_stable_code(
+        self, clock: FakeClock, url: str, private_guard: bool
+    ) -> None:
         """畸形 URL 必须变成 FetchError，且不碰网络、不共享主机桶。
 
         限流器对解析不出主机的 URL fail-closed（抛 ValueError）；HttpFetcher
@@ -297,10 +301,18 @@ class TestMalformedUrl:
         def handler(request: httpx.Request) -> httpx.Response:
             raise AssertionError("畸形 URL 不该到达传输层")
 
-        fetcher = _fetcher(clock, handler, retries=1)
+        fetcher = _fetcher(clock, handler, retries=1, block_private_hosts=private_guard)
         with pytest.raises(FetchError) as excinfo:
-            fetcher.get_text("not a url")
+            fetcher.get_text(url)
         assert excinfo.value.code == "invalid_url"
+
+    def test_malformed_redirect_has_stable_code(self, clock: FakeClock) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"Location": "http://["})
+
+        with _fetcher(clock, handler, retries=1) as fetcher, pytest.raises(FetchError) as excinfo:
+            fetcher.get_text("https://example.com/jobs")
+        assert excinfo.value.code == "invalid_redirect"
 
 
 class TestResponseSizeCap:

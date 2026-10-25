@@ -58,8 +58,12 @@ export function useScoreJob() {
       }
       return data;
     },
-    onSuccess: () => {
-      // 分数写回了岗位 —— 刷新岗位列表让「匹配分」列更新
+    onSuccess: async (data, jobId) => {
+      // 评分查询与岗位列表是不同缓存。先停掉旧读取，再写入本轮结果，
+      // 避免重新打开详情时仍显示上次评分，或在途 GET 覆盖刚写入的结果。
+      const queryKey = ["scoring", "score", jobId];
+      await queryClient.cancelQueries({ queryKey, exact: true });
+      queryClient.setQueryData(queryKey, data);
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });

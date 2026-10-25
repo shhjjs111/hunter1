@@ -80,6 +80,7 @@ const SAFE_ERROR_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     /画像未配置|画像至少/i,
     "候选人画像未配置或不合法：请先在「配置」页填写关键词 / 方向 / 背景摘要",
   ],
+  [/画像超出|画像条目/i, "画像超出限制：关键词最多 50 个、方向最多 20 个、每项 100 字符、摘要 2000 字符"],
   [/base_url 与模型名不能为空|API Key 不能为空/i, "请先填完 base_url、模型名与 API Key"],
   [/模型没有返回内容|模型没有给出/i, "模型没有返回有效结果，请重试"],
   [/401|unauthorized/i, "鉴权失败：请检查 API Key"],

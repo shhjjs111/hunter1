@@ -108,11 +108,7 @@ describe("ApplicationsPage 删除确认", () => {
 });
 
 describe("ApplicationsPage 阶段乐观值", () => {
-  // 这里刻意**不**测「第一次请求失败会不会把第二次的乐观值抹掉」：@tanstack/react-query
-  // v5 的 `MutationObserver.mutate()` 会先 `#currentMutation?.removeObserver(this)`，
-  // 同一行连改两次时**前一次的回调根本不会被调用**（实测：在 onError 里打断点不命中）。
-  // 也就是说那条路径在当前版本不可达 —— 写一条「无论修没修都通过」的用例只会给出假信心。
-  // 真正可达、也真正在页面上的问题是下面这条：成功后的草稿必须交还给查询数据。
+  // 成功后的草稿交还给查询数据；并行修改不同记录时也必须逐条完成清理。
   it("成功后草稿交还给服务端（后续 refetch 的结果不被永久压住）", async () => {
     // 乐观草稿若不在成功时清掉，就会**永久**压住查询数据：别处（另一个窗口、
     // 或后端归一化后的值）改出来的新阶段永远显示不出来 —— 用户看到的是自己那次
@@ -494,6 +490,58 @@ describe("ApplicationsPage 备注 / 阶段的写入互不踩踏", () => {
 });
 
 describe("ApplicationsPage 备注保存后不回弹（M2 回归）", () => {
+  it("保存期间继续输入的新草稿不会被先前请求成功清掉", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let posted = false;
+    let serverNote: string | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (methodOf(input, init) === "POST") {
+        posted = true;
+        await gate;
+        serverNote = "已提交的备注";
+        return jsonResponse({ application_id: "app1", stage: "applied" });
+      }
+      return jsonResponse({ ...LIST, items: [{ ...LIST.items[0], note: serverNote }] });
+    }));
+    renderPage();
+    const input = await screen.findByLabelText(/的备注/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "已提交的备注" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(posted).toBe(true));
+    fireEvent.change(input, { target: { value: "尚未提交的新备注" } });
+    await act(async () => { release(); });
+    await waitFor(() => expect(serverNote).toBe("已提交的备注"));
+    expect(input.value).toBe("尚未提交的新备注");
+  });
+
+  it("并行修改不同记录后每条阶段草稿都交还给服务端", async () => {
+    const server = [LIST.items[0], { ...LIST.items[0], id: "app2", title: "工程师" }];
+    const pending: Array<() => void> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (methodOf(input, init) === "POST") {
+        const request = input as Request;
+        const index = request.url.includes("app1") ? 0 : 1;
+        await new Promise<void>((resolve) => pending.push(resolve));
+        server[index] = { ...server[index], stage: "interview" };
+        return jsonResponse({ application_id: server[index].id, stage: "interview" });
+      }
+      return jsonResponse({ ...LIST, items: server, total: 2 });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><ApplicationsPage /></QueryClientProvider>);
+    const selects = await screen.findAllByLabelText(/投递阶段/) as HTMLSelectElement[];
+    fireEvent.change(selects[0], { target: { value: "interview" } });
+    fireEvent.change(selects[1], { target: { value: "interview" } });
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => { pending.forEach((resolve) => resolve()); });
+    await waitFor(() => expect(client.isMutating()).toBe(0));
+    server[0] = { ...server[0], stage: "offer" };
+    server[1] = { ...server[1], stage: "offer" };
+    await act(async () => { await client.refetchQueries({ queryKey: ["applications"] }); });
+    await waitFor(() => expect(selects.map((select) => select.value)).toEqual(["offer", "offer"]));
+  });
+
   // `useSaveNote` 原先只 invalidate、不收敛缓存：组件在 onSuccess 里立刻撤掉草稿，
   // 那一刻输入框 value 回落到 `item.note`（查询缓存里的**旧**值 —— refetch 还没落地），
   // 用户看到「保存成功后输入框弹回旧内容」。这正是 `useChangeStage` 注释里描述并修掉的

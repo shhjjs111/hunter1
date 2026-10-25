@@ -17,6 +17,16 @@ function renderCard(overrides: Partial<Parameters<typeof ApplicationCard>[0]> = 
 }
 
 describe("ApplicationCard", () => {
+  it("未编辑时备注跟随刷新，未保存的草稿在刷新时保留", () => {
+    const { props, rerender } = renderCard();
+    const input = screen.getByRole("textbox", { name: "字节跳动的备注" }) as HTMLInputElement;
+    rerender(<ApplicationCard {...props} application={{ ...props.application, note: "同步的新备注" }} />);
+    expect(input.value).toBe("同步的新备注");
+    fireEvent.change(input, { target: { value: "正在编辑" } });
+    rerender(<ApplicationCard {...props} application={{ ...props.application, note: "另一个窗口的备注" }} />);
+    expect(input.value).toBe("正在编辑");
+  });
+
   it("展示公司与岗位，阶段按钮可打开 Action Sheet", () => {
     const { props } = renderCard();
     expect(screen.getByText("字节跳动")).toBeTruthy();

@@ -118,6 +118,18 @@ beforeEach(async () => {
   await resetDBForTests();
 });
 
+it.each([false, true])("同 URL 副本分别保留最新事实与最新评分（倒序=%s）", async (reverse) => {
+  const items = [
+    syncJob({ title: "新事实", last_seen_at: LATER, match_score: 20, scored_at: NOW }),
+    syncJob({ title: "旧事实", last_seen_at: NOW, match_score: 91, scored_at: LATER, score_summary: "新结论" }),
+  ];
+  if (reverse) items.reverse();
+  const result = await mergeLocalSnapshot(snapshot({ jobs: items }));
+  const db = await getDB();
+  expect(result.jobs_created).toBe(1);
+  expect((await db.getAll("jobs"))[0]).toMatchObject({ title: "新事实", matchScore: 91, scoreSummary: "新结论" });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -136,6 +148,7 @@ describe("URL 归一化", () => {
     expect(normalizeDesktopUrl("192.168.1.5:8000/api")).toBe("http://192.168.1.5:8000");
     expect(normalizeDesktopUrl("https://hunter.example.com/")).toBe("https://hunter.example.com");
     expect(() => normalizeDesktopUrl("")).toThrow(/请填写电脑地址/);
+    expect(() => normalizeDesktopUrl("http://example.com:8000")).toThrow(/公网 HTTP/);
   });
 });
 
@@ -228,6 +241,24 @@ describe("合并快照", () => {
 
     expect(result.profile_updated).toBe(true);
     expect((await getProfile())?.keywords).toEqual(["新"]);
+  });
+
+  it("中途写入失败时整份回滚", async () => {
+    const badProfile = {
+      keywords: [() => "not-cloneable"],
+      directions: [],
+      summary: "",
+      updated_at: LATER,
+    } as unknown as SyncSnapshot["profile"];
+
+    await expect(
+      mergeLocalSnapshot(snapshot({ jobs: [syncJob()], profile: badProfile })),
+    ).rejects.toBeDefined();
+
+    const db = await getDB();
+    expect(await db.getAll("jobs")).toEqual([]);
+    expect(await db.getAll("applications")).toEqual([]);
+    expect(await getProfile()).toBeNull();
   });
 });
 

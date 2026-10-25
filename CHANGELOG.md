@@ -7,6 +7,59 @@
 
 ## [Unreleased]
 
+### Added
+
+- 安卓独立版的**每日补抓**：首次打开与回到前台时检查，距上次成功满 24 小时
+  才启动一轮；失败后 1 小时冷却。
+- 跨设备同步 API：`GET /api/sync/snapshot` 与 `POST /api/sync/merge`，搬岗位、
+  投递与候选人画像（按详情页 URL 对齐，不搬 API Key 与会话）。
+- `docs/ANDROID.md` 记录本地 TS 后端、APK 构建步骤与签名证书 SHA-256 指纹。
+
+### Changed
+
+- **发布 workflow 最小权限**：拆成只读 `build`、`attest`、仅发布写权限的
+  `publish` 三个 job，顶层 `permissions: {}`；构建产物经固定到 commit SHA 的
+  upload/download-artifact 传递。
+- 公网明文 `http://` 的 LLM 端点改为拒绝保存/探测（本机与内网 http 不受影响）；
+  手机端桌面地址与模型地址也只允许 https 或内网 http，并在保存/探测前校验地址格式。
+- 安卓 `allowBackup=false`，避免本地 Key 跟着云备份离开设备。
+- **APK 进入发布供应链**：`release.yml` 用固定证书构建/签名 APK，
+  `verify_apk.py` 校验版本、debuggable、allowBackup、权限与证书指纹，并把 APK
+  纳入 `SHA256SUMS.txt`、SPDX SBOM、provenance 与 SBOM attestation。
+- 同步快照导出改用宽松模型：超长 JD、空详情 URL、损坏画像都不再让整份快照 500。
+- 同步合并限制为 64 MiB / 5 万条；即使请求没有 `Content-Length`、走分块传输，
+  也按实际读取字节数拦截。
+- `scripts/contracts.sh` 优先使用 `backend/.venv`，缺 fastapi 时给出可行动提示。
+- Dependabot 覆盖 `frontend/android` 的 Gradle 依赖；CodeQL 增加 `actions`
+  语言分析，工作流本身也进入扫描范围。
+
+### Fixed
+
+- 修复投递与评分的并发 UI 状态、备注草稿丢失、历史投递状态遗漏和评分详情缓存过期。
+- 助手最终答复与历史刷新保持一致，取消和 SSE 断连及时释放资源；手机端完整轮次
+  原子保存，取消后不保存迟到回复。
+- 画像与版本时间同事务写入；投递版本在系统时钟回拨时仍递增；同步分别保留同
+  URL 岗位的最新事实和最新评分。
+- 手机本地接口补齐画像、投递、评分文本及 JD 长度约束，只拦截本源 API 请求。
+- 抓取优先处理尚未尝试的详情，快速完成后及时刷新岗位；配置错误不回显凭据，
+  保存与异步加载不覆盖用户的新草稿。
+- 畸形来源和 URL 返回稳定错误；更新包先独立解压再替换，失败保留旧版本，
+  拒绝空包及覆盖便携用户数据。
+- 更新 certifi、setuptools、zod 安全修复版本；Android SDK 安装遵守仓库 Action
+  白名单，签名步骤退出时清理临时 keystore。
+- **同步合并改为单事务**：岗位、评分、投递、画像要么一起成功，要么一起回滚；
+  分页读取共用同一快照，避免 `OFFSET` 漏行/重行导致重复岗位；手机本地合并与
+  快照导出也分别收进单个 IndexedDB 事务。写事务入口即取得 SQLite 写锁，并发
+  合并按 `busy_timeout` 排队而不是同时读旧快照。
+- 手机助手「中止回答」后不再把问题重复提交；Dock 胶囊与模块色在第 2 页之后
+  正确跟随当前页。
+- 投递记录与岗位库按行维护 pending / error：前一行保存失败不会被后一行覆盖，
+  同一岗位连点只发一次评分请求。
+- 改 LLM 端点时留空 Key 不再把旧 Key 发到新地址（仅同 origin 才回填）。
+- 修复抓取截断标记让 JD 刚好超过 20 万字上限的边界。
+- #30–#34：CodeQL 告警收敛、`uuid` 依赖覆盖、端口预检固定回环绑定、仓库卫生
+  与供应链校验。
+
 ## [0.4.1] - 2026-10-20
 
 ### Added
@@ -189,7 +242,8 @@ AI 求职助手 → 投递管理」全流程。
 - **打包分发**：PyInstaller 单目录产物，前端产物嵌入；`check.sh --with-pack`
   真打包 + 冒烟纳入 CI 门禁。
 
-[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/shhjjs111/hunter1/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/shhjjs111/hunter1/compare/v0.4.0...v0.4.1
 [0.3.0]: https://github.com/shhjjs111/hunter1/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/shhjjs111/hunter1/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/shhjjs111/hunter1/compare/v0.2.0...v0.2.1

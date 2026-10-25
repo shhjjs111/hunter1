@@ -39,9 +39,14 @@ docs/ARCHITECTURE.md，要点：
 - **只绑本机**：默认监听 `127.0.0.1`，并校验 `Host` 头（只允许回环），
   防 DNS rebinding 把已保存的 API Key 外送。写入端点还校验 `Origin` /
   `Sec-Fetch-Site`，所有响应带 `CSP`、`X-Frame-Options` 等浏览器安全头。
-- **无鉴权**：单机单用户工具，没有账号体系。`--host 0.0.0.0` 会把无鉴权界面
-  暴露到局域网/公网 —— 这是**已知的部署风险**，需同时设
-  `HUNTER1_TRUSTED_HOSTS`，否则请求一律被拒。把它暴露到公网**不是**受支持的用法。
+- **局域网访问码，不是账号体系**：默认只绑 `127.0.0.1`，无需口令；使用
+  `--lan` / `--host` 暴露到局域网时强制访问码（浏览器 Cookie 或
+  `X-Hunter1-Access-Code`），未授权请求返回 401。它是**同一 Wi-Fi 信任模型**：
+  访问码在 HTTP 上传输，同一网络里的观察者可以截获。把服务暴露到公网
+  **不是**受支持的用法。
+- **公网明文被拒绝**：桌面配置页与安卓 App 都拒绝把 API Key 发往公网
+  `http://` 端点（本机 / 内网 http 仍允许，给 Ollama 等自建端点用）。局域网
+  同步仍走 HTTP，这是上面「同一 Wi-Fi」模型的已知边界。
 - **API Key 明文存在本地 SQLite**：单机单用户场景下的显式取舍（见 README）。
   界面只回显掩码，日志不输出完整密钥。**能读该数据库文件 = 能读密钥**，
   这是设计选择，不算漏洞。
@@ -50,9 +55,12 @@ docs/ARCHITECTURE.md，要点：
 - **抓取的是公开列表页**：不登录、不绕验证码、不做自动投递。
 - **抓取器拒绝私网目标**：详情链接和重定向都会解析并拒绝回环、内网、链路本地及
   云元数据地址。发布 workflow 会从干净目录重新构建并验证包内不含 `data/`。
-- **发布完整性**：release 由受保护 tag 触发，带 SHA-256 清单、SPDX SBOM、GitHub
-  build provenance 与 SBOM attestation。Windows exe 尚未配置 Authenticode 证书，
-  SmartScreen 可能显示未知发布者。
+- **发布完整性**：Windows 包与 Android APK 都由受保护 tag 触发，在 CI 中重新
+  构建；APK 用固定证书签名并先过 `scripts/verify_apk.py`（包名、版本、
+  debuggable、allowBackup、权限、证书指纹）。两者都进入 `SHA256SUMS.txt`、
+  SPDX SBOM、build provenance 与 SBOM attestation。v0.4.1 的 APK 是这条链
+  之前手工构建的例外；Windows exe 尚未配置 Authenticode 证书，SmartScreen
+  可能显示未知发布者。
 
 ### 尤其欢迎的报告
 

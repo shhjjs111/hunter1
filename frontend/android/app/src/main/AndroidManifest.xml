@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        明文 HTTP 仅用于同一 Wi-Fi 下访问电脑端（http://192.168.x.x:8000）。
+        公网地址的明文请求在应用层被拒绝（frontend/src/mobile/netPolicy.ts）：
+        桌面地址与 LLM base_url 都只允许「https 或内网地址」，避免访问码 / API Key
+        以明文离开局域网。allowBackup 关闭，避免 Key 跟着云备份离开设备。
+    -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

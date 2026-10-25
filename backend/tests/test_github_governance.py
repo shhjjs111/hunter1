@@ -46,6 +46,14 @@ def judge_unpinned_actions(text: str) -> list[str]:
     return violations
 
 
+def judge_disallowed_actions(text: str) -> list[str]:
+    return [
+        match.group(1)
+        for match in _USES.finditer(text)
+        if not match.group(1).startswith(("./", "actions/", "github/"))
+    ]
+
+
 def test_all_remote_actions_are_pinned_to_full_commit_sha() -> None:
     violations = {
         path.relative_to(ROOT).as_posix(): judge_unpinned_actions(path.read_text(encoding="utf-8"))
@@ -55,11 +63,23 @@ def test_all_remote_actions_are_pinned_to_full_commit_sha() -> None:
     assert not violations, f"remote Actions must be SHA-pinned: {violations}"
 
 
+def test_workflows_only_use_actions_allowed_by_repository_policy() -> None:
+    for path in WORKFLOWS.glob("*.y*ml"):
+        blocked = judge_disallowed_actions(path.read_text(encoding="utf-8"))
+        assert not blocked, f"{path.name}: blocked by the GitHub-owned Actions policy: {blocked}"
+
+
+def test_action_allowlist_rejects_other_owners_even_when_pinned() -> None:
+    reference = "example/setup@" + "a" * 40
+    assert judge_disallowed_actions(f"- uses: {reference}") == [reference]
+    assert judge_disallowed_actions("- uses: actions/checkout@v1\n- uses: ./.github/local") == []
+
+
 def test_every_workflow_declares_least_privilege_defaults() -> None:
     missing = []
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
         text = path.read_text(encoding="utf-8")
-        if not re.search(r"^permissions:\s*$", text, re.MULTILINE):
+        if not re.search(r"^permissions:\s*(?:\{\s*\})?\s*$", text, re.MULTILINE):
             missing.append(path.relative_to(ROOT).as_posix())
     assert not missing, f"workflows missing top-level permissions: {missing}"
 
@@ -100,7 +120,23 @@ def test_release_workflow_is_tag_driven_and_attested() -> None:
     assert 'gh release edit "$TAG" --draft=false' not in text, (
         "Release workflow 只创建草稿；安卓 APK 需在人工核对后随草稿一起发布"
     )
-    assert "安卓 APK" in text
+    assert "Android APK" in text
+    assert "assembleRelease" in text
+    assert "hunter1-android-" in text
+    assert "verify_apk.py" in text
+    assert "ANDROID_KEYSTORE_BASE64" in text
+    assert "dist/*.apk" in text
+
+
+def test_dependabot_covers_android_gradle() -> None:
+    text = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    assert "package-ecosystem: gradle" in text
+    assert "directory: /frontend/android" in text
+
+
+def test_codeql_scans_workflow_files() -> None:
+    text = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
+    assert "- actions" in text, "CodeQL 没扫 actions，工作流改动会绕过静态分析"
 
 
 def test_required_quality_status_context_stays_stable() -> None:

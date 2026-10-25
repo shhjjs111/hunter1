@@ -127,14 +127,18 @@ def _backfill_jd(
     # 只处理需要 JD 的：新增的，或已有但 `jd_raw` 为空的。
     # 已有 JD 的不重复抓 —— 省请求量，也保住「已有 JD 不被覆盖」的语义。
     pending: list[tuple[RawJob, str]] = []
+    retries: list[tuple[RawJob, str]] = []
     for raw, job_id in zip(raw_jobs, job_ids, strict=True):
         existing = existing_by_id.get(job_id)
         if existing is None or not existing.jd_raw:
-            pending.append((raw, job_id))
-        if len(pending) >= DETAIL_LIMIT:
-            break
+            if existing is not None and existing.capture_status == CaptureStatus.FAILED:
+                retries.append((raw, job_id))
+            else:
+                pending.append((raw, job_id))
 
-    for raw, job_id in pending:
+    # 先给还没轮到的岗位一次机会，避免列表前部的永久失败项耗尽每轮额度。
+    # 没有待抓项时仍照常重试失败项，保留偶发错误的自愈能力。
+    for raw, job_id in (pending + retries)[:DETAIL_LIMIT]:
         try:
             text = fetch_detail(raw.detail_url)
         except Exception:

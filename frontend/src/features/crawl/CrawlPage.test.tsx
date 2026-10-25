@@ -32,6 +32,23 @@ afterEach(() => {
 });
 
 describe("CrawlPage", () => {
+  it("抓取在两次轮询之间完成时也失效岗位库", async () => {
+    let posted = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if ((input as Request).method === "POST") {
+        posted = true;
+        return jsonResponse({ started: true });
+      }
+      return jsonResponse({ ...IDLE, finished_at: posted ? "2026-10-25T00:01:00Z" : null });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: false } } });
+    client.setQueryData(["jobs"], { items: [] });
+    render(<QueryClientProvider client={client}><CrawlPage /></QueryClientProvider>);
+    await screen.findByText(/还没有跑过抓取/);
+    fireEvent.click(screen.getByRole("button", { name: "开始抓取" }));
+    await waitFor(() => expect(client.getQueryState(["jobs"])?.isInvalidated).toBe(true));
+  });
+
   it("点击「开始抓取」后立即重取状态 —— 否则界面最长 30 秒纹丝不动", async () => {
     const calls: string[] = [];
     vi.stubGlobal(

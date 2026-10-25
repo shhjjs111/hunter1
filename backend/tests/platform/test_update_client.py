@@ -356,6 +356,11 @@ class TestFetchManifest:
 
 
 class TestDownloadAsset:
+    def test_invalid_manifest_url_has_stable_error(self) -> None:
+        with _client(_blob()) as client, pytest.raises(DownloadError) as excinfo:
+            client.fetch_manifest("https://example.com:invalid/manifest.json")
+        assert excinfo.value.code == "invalid_url"
+
     def test_uses_asset_url_and_checksum(self, tmp_path: Path) -> None:
         seen: dict[str, str] = {}
 

@@ -744,9 +744,35 @@ export interface components {
         };
         /**
          * SyncApplication
-         * @description 一条投递记录（按 `job_detail_url` 跨设备对齐）。
+         * @description 一条投递记录（按 `job_detail_url` 跨设备对齐；导出形状）。
          */
         SyncApplication: {
+            /**
+             * Applied At
+             * Format: date-time
+             */
+            applied_at: string;
+            /** Company */
+            company: string;
+            /** Job Detail Url */
+            job_detail_url?: string | null;
+            /** Note */
+            note?: string | null;
+            /** @default applied */
+            stage: components["schemas"]["ApplicationStage"];
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * SyncApplicationImport
+         * @description 合并请求里的投递：在导出形状上重新加回长度与时间先后校验。
+         */
+        SyncApplicationImport: {
             /**
              * Applied At
              * Format: date-time
@@ -816,9 +842,63 @@ export interface components {
         };
         /**
          * SyncJob
-         * @description 一台设备上的岗位事实 + 评分结论。
+         * @description 一台设备上的岗位事实 + 评分结论（**导出形状**）。
+         *
+         *     这一层的字段刻意不设长度上限、也不校验 `detail_url` 非空：库里可能存着
+         *     「截断提示让正文刚好超过上限」的 JD、历史遗留的超长结论，或者详情 URL 为空
+         *     的岗位。导出是「把本机事实搬出去」，任何一条坏数据都不该让整份快照 500。
+         *     需要写库的校验留给导入模型（`SyncJobImport`），在事务里动任何一行之前完成。
          */
         SyncJob: {
+            /** @default unknown */
+            capture_status: components["schemas"]["CaptureStatus"];
+            /** City */
+            city?: string | null;
+            /** Company */
+            company: string;
+            /**
+             * Detail Url
+             * @default
+             */
+            detail_url: string;
+            /** First Seen At */
+            first_seen_at?: string | null;
+            /** Id */
+            id: string;
+            /** Jd Raw */
+            jd_raw?: string | null;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Match Score */
+            match_score?: number | null;
+            /** Score Advantages */
+            score_advantages?: string | null;
+            /** Score Gaps */
+            score_gaps?: string | null;
+            /** Score Model */
+            score_model?: string | null;
+            /** Score Prompt Version */
+            score_prompt_version?: string | null;
+            /** Score Summary */
+            score_summary?: string | null;
+            /** Scored At */
+            scored_at?: string | null;
+            /**
+             * Source
+             * @default
+             */
+            source: string;
+            /** Title */
+            title: string;
+        };
+        /**
+         * SyncJobImport
+         * @description 合并请求里的岗位：在导出形状上重新加回写库前的全部校验。
+         *
+         *     导出要容忍历史坏数据，但**导入**会写进本机库，不能把超长正文、空标题或
+         *     越界字段带进来。上限与各切片自己的表单 / 落库约束保持一致。
+         */
+        SyncJobImport: {
             /** @default unknown */
             capture_status: components["schemas"]["CaptureStatus"];
             /** City */
@@ -887,7 +967,7 @@ export interface components {
         };
         /**
          * SyncSnapshot
-         * @description 一台设备的完整可同步数据。
+         * @description 一台设备的完整可同步数据（**导出形状**）。
          */
         SyncSnapshot: {
             /** Applications */
@@ -899,6 +979,28 @@ export interface components {
             exported_at: string;
             /** Jobs */
             jobs?: components["schemas"]["SyncJob"][];
+            profile?: components["schemas"]["SyncProfile"] | null;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /**
+         * SyncSnapshotImport
+         * @description 合并请求体：字段与导出形状一致，但保留时间先后校验。
+         */
+        SyncSnapshotImport: {
+            /** Applications */
+            applications?: components["schemas"]["SyncApplicationImport"][];
+            /**
+             * Exported At
+             * Format: date-time
+             */
+            exported_at: string;
+            /** Jobs */
+            jobs?: components["schemas"]["SyncJobImport"][];
             profile?: components["schemas"]["SyncProfile"] | null;
             /**
              * Version
@@ -1580,7 +1682,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SyncSnapshot"];
+                "application/json": components["schemas"]["SyncSnapshotImport"];
             };
         };
         responses: {
@@ -1593,7 +1695,14 @@ export interface operations {
                     "application/json": components["schemas"]["SyncMergeResponse"];
                 };
             };
-            /** @description 快照里的画像不合法（例如三项全空或条目超长） */
+            /** @description 请求体超过大小上限 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 快照条目过多，或画像不合法（例如三项全空或条目超长） */
             422: {
                 headers: {
                     [name: string]: unknown;

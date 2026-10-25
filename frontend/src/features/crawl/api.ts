@@ -101,7 +101,10 @@ export function useCrawlStatus() {
       try {
         const snapshot = await fetchStatus();
         failures.current = 0;
-        if (previous?.running === true && snapshot.running === false) {
+        if (!snapshot.running && (previous?.running === true ||
+            (snapshot.finished_at != null && snapshot.finished_at !== previous?.finished_at))) {
+          // 后台线程可能在启动请求返回前完成，客户端未必观察得到 running=true。
+          // 完成时间变化同样代表有一轮新结果，岗位缓存必须随之更新。
           void queryClient.invalidateQueries({ queryKey: ["jobs"] });
         }
         return snapshot;
@@ -133,8 +136,7 @@ export function useStartCrawl() {
       // 界面最长 staleTime（30 秒）内毫无反应，按钮还恢复可点，
       // 用户再点只会看到「上一轮还在跑」。
       //
-      // 立刻重取就能拿到 `running: true`：后端 `CrawlRunner.start()` 是**同步**
-      // 置位后再返回的（见 slices/crawl/runner.py），所以这里没有竞态窗口。
+      // 快速完成的轮次可能直接读到 running:false，由 finished_at 变化触发岗位刷新。
       void queryClient.invalidateQueries({ queryKey: ["crawl", "status"] });
     },
   });

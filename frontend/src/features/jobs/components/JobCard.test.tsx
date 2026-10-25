@@ -55,6 +55,14 @@ describe("JobCard", () => {
     expect(props.onOpen).toHaveBeenCalledTimes(2);
   });
 
+  it("子按钮的键盘事件不会被卡片截获去打开详情", () => {
+    const { props } = renderCard();
+    const button = screen.getByRole("button", { name: "记录投递：AI产品经理" });
+    expect(fireEvent.keyDown(button, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(button, { key: " " })).toBe(true);
+    expect(props.onOpen).not.toHaveBeenCalled();
+  });
+
   it("评分中、记录中、已投递分别禁用对应按钮", () => {
     const { rerender } = renderCard({ scoring: true });
     expect(screen.getByRole("button", { name: "重新评分：AI产品经理" })).toHaveProperty("disabled", true);

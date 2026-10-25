@@ -57,6 +57,8 @@ class TestPlaintextWarning:
         [
             "http://api.example.com/v1",
             "http://8.8.8.8/v1",
+            "http://134744072/v1",  # 8.8.8.8 的整数形式
+            "http://0x08080808/v1",  # 8.8.8.8 的十六进制形式
             "http://llm.example.cn:8000/v1",
         ],
     )
@@ -76,6 +78,8 @@ class TestPlaintextWarning:
             "http://172.16.3.4:8080/v1",
             "http://ollama:11434/v1",  # 内网单标签名
             "http://llm.local/v1",
+            "http://llm.internal/v1",
+            "http://2130706433/v1",  # 127.0.0.1 的整数形式
             "http://[::1]:8000/v1",
         ],
     )

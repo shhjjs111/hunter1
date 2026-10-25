@@ -44,6 +44,22 @@ export const STAGE_ORDER: ApplicationStage[] = [
 export const MAX_NOTE_CHARS = 2000;
 
 export const APPLICATIONS_PAGE_SIZE = 50;
+const APPLIED_JOB_IDS_KEY = ["applied-job-ids"] as const;
+
+/** 岗位按钮需要完整投递状态；列表第一页不能代表所有历史记录。 */
+export function useAppliedJobIds() {
+  return useQuery({
+    queryKey: APPLIED_JOB_IDS_KEY,
+    queryFn: async () => {
+      const ids = new Set<string>();
+      for (let page = 1; ; page += 1) {
+        const result = await fetchApplications(page);
+        for (const application of result.items) ids.add(application.job_id);
+        if (!result.has_next) return [...ids];
+      }
+    },
+  });
+}
 
 type ApplicationCache = ApplicationList | InfiniteData<ApplicationList>;
 
@@ -210,6 +226,7 @@ export function useDeleteApplication() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
+      void queryClient.invalidateQueries({ queryKey: APPLIED_JOB_IDS_KEY });
     },
   });
 }
@@ -232,7 +249,16 @@ export function useApplyToJob() {
       }
       return data;
     },
-    onSuccess: () => {
+    onSuccess: async (_data, jobId) => {
+      // 成功后先更新可失效的查询缓存；删除/同步/重新读取都能撤掉这个状态。
+      if (queryClient.getQueryData(APPLIED_JOB_IDS_KEY)) {
+        await queryClient.cancelQueries({ queryKey: APPLIED_JOB_IDS_KEY });
+        queryClient.setQueryData<string[]>(APPLIED_JOB_IDS_KEY, (previous) =>
+          [...new Set([...(previous ?? []), jobId])],
+        );
+      } else {
+        void queryClient.invalidateQueries({ queryKey: APPLIED_JOB_IDS_KEY });
+      }
       // 新投递落在 applications；岗位页的投递按钮状态也要跟着刷新
       void queryClient.invalidateQueries({ queryKey: ["applications"] });
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });

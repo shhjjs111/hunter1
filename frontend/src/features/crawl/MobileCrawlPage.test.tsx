@@ -14,6 +14,14 @@ afterEach(() => {
 });
 
 describe("MobileCrawlPage", () => {
+  it("抓取装配失败时显示整轮错误，不误报为从未抓取", async () => {
+    stubApi((_request, url) => url.pathname === "/api/crawl/status"
+      ? jsonResponse({ ...CRAWL_IDLE, sites: [], error: "抓取站点配置不可用" }) : undefined);
+    renderWithChrome(<MobileCrawlPage />);
+    expect(await screen.findByText("抓取站点配置不可用")).toBeTruthy();
+    expect(screen.queryByText("本次启动后还没有抓取")).toBeNull();
+  });
+
   it("展示统计、站点状态与失败原因", async () => {
     stubApi();
     renderWithChrome(<MobileCrawlPage />);

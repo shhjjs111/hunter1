@@ -35,14 +35,14 @@ let externalHandler: ExternalHandler = () => new Response("not found", { status:
 
 function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(input.toString());
-  if (url.pathname.startsWith("/api/")) {
+  if (url.origin === location.origin && url.pathname.startsWith("/api/")) {
     throw new Error(`API 请求不应走外部 mock：${url.pathname}`);
   }
   return Promise.resolve(externalHandler(url.toString(), init));
 }
 
 async function api(path: string, init?: RequestInit) {
-  const response = await fetch(`http://localhost${path}`, init);
+  const response = await fetch(`${location.origin}${path}`, init);
   const text = await response.text();
   return {
     status: response.status,
@@ -57,6 +57,12 @@ function jsonBody(body: unknown): RequestInit {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
 }
 
 function job(overrides: Partial<JobRecord> = {}): JobRecord {
@@ -98,6 +104,29 @@ afterAll(() => {
 });
 
 describe("本地设置与画像", () => {
+  it("外部网站的同名 API 路径不会读写手机数据库", async () => {
+    externalHandler = () => new Response("external", { status: 202 });
+    const response = await fetch("https://example.com/api/scoring/profile", {
+      ...jsonBody({ keywords: ["外部请求"] }), method: "PUT",
+    });
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("external");
+    expect((await api("/api/scoring/profile")).json?.profile).toBeNull();
+  });
+  it("拒绝空白与超限画像，避免保存后同步被电脑端拒绝", async () => {
+    for (const body of [
+      { keywords: ["  "], directions: [], summary: "" },
+      { keywords: Array.from({ length: 51 }, () => "AI") },
+      { keywords: ["x".repeat(101)] },
+      { directions: Array.from({ length: 21 }, () => "AI") },
+      { summary: "x".repeat(2001) },
+    ]) {
+      const result = await api("/api/scoring/profile", { ...jsonBody(body), method: "PUT" });
+      expect(result.status).toBe(422);
+    }
+    expect((await api("/api/scoring/profile")).json?.profile).toBeNull();
+  });
+
   it("保存配置后只回显掩码，测试连接成功", async () => {
     expect((await api("/api/settings")).json).toBeNull();
 
@@ -151,6 +180,33 @@ describe("本地设置与画像", () => {
 });
 
 describe("本地岗位与投递", () => {
+  it("拒绝非法阶段与超长备注，并保留原投递", async () => {
+    const db = await getDB();
+    const target = job();
+    await db.put("jobs", target);
+    const created = await api("/api/applications", jsonBody({ job_id: target.id }));
+    const id = created.json?.application_id as string;
+    for (const body of [{ stage: "invalid" }, { stage: "interview", note: "x".repeat(2001) }]) {
+      expect((await api(`/api/applications/${id}/stage`, jsonBody(body))).status).toBe(422);
+    }
+    expect(await db.get("applications", id)).toMatchObject({ stage: "applied", note: null });
+  });
+
+  it("并发记录同一岗位只创建一条投递", async () => {
+    const db = await getDB();
+    const target = job();
+    await db.put("jobs", target);
+
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        api("/api/applications", jsonBody({ job_id: target.id })),
+      ),
+    );
+
+    expect(new Set(responses.map((response) => response.json?.application_id)).size).toBe(1);
+    expect(await db.getAllFromIndex("applications", "by-job", target.id)).toHaveLength(1);
+  });
+
   it("列表、搜索、分页、详情与前缀歧义", async () => {
     const db = await getDB();
     const first = job({ id: "abc111", title: "后端实习生", lastSeenAt: "2026-10-19T11:00:00.000Z" });
@@ -208,6 +264,58 @@ describe("本地岗位与投递", () => {
 });
 
 describe("本地评分与助手", () => {
+  it("中止助手立即结束请求，模型晚到的回复不会保存", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "demo", apiKey: "key" });
+    const started = deferred<void>();
+    const model = deferred<Response>();
+    externalHandler = () => { started.resolve(); return model.promise; };
+    const controller = new AbortController();
+    const pending = fetch(`${location.origin}/api/assistant/stream`, {
+      ...jsonBody({ message: "问题", conversation_id: "" }),
+      signal: controller.signal,
+    });
+    await started.promise;
+    controller.abort();
+    model.resolve(new Response(JSON.stringify({ choices: [{ message: { content: "晚到回答" } }] })));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    const db = await getDB();
+    expect(await db.getAll("messages")).toHaveLength(0);
+    expect(await db.getAll("conversations")).toHaveLength(0);
+  });
+
+  it("模型失败不会留下半轮用户消息", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "demo", apiKey: "key" });
+    externalHandler = () => new Response("failed", { status: 503 });
+    const response = await fetch(`${location.origin}/api/assistant/stream`, jsonBody({ message: "问题" }));
+    expect(await response.text()).toContain('"type":"error"');
+    const db = await getDB();
+    expect(await db.getAll("messages")).toHaveLength(0);
+    expect(await db.getAll("conversations")).toHaveLength(0);
+  });
+
+  it("等待模型期间更新的岗位事实不会被评分写回覆盖", async () => {
+    const db = await getDB();
+    const target = job();
+    await db.put("jobs", target);
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "demo", apiKey: "key" });
+    await saveProfile({ keywords: ["后端"], directions: [], summary: "" });
+    externalHandler = async () => {
+      await db.put("jobs", { ...target, title: "最新岗位标题", jdRaw: "最新岗位要求" });
+      return new Response(JSON.stringify({
+        model: "demo",
+        choices: [{ message: { content: '{"score":88}' } }],
+      }));
+    };
+
+    const result = await api(`/api/scoring/${target.id}`, { method: "POST" });
+
+    expect(result.status).toBe(200);
+    expect(await db.get("jobs", target.id)).toMatchObject({
+      title: "最新岗位标题", jdRaw: "最新岗位要求", matchScore: 88,
+    });
+  });
+
   it("评分写回岗位，未配置画像时给出可读原因", async () => {
     const db = await getDB();
     const target = job();
@@ -257,7 +365,7 @@ describe("本地评分与助手", () => {
         { status: 200 },
       );
 
-    const response = await fetch("http://localhost/api/assistant/stream", jsonBody({
+    const response = await fetch(`${location.origin}/api/assistant/stream`, jsonBody({
       message: "我该怎么开始？",
       conversation_id: "",
     }));
@@ -317,6 +425,12 @@ describe("自动补抓", () => {
 });
 
 describe("抓取解析与本地抓取", () => {
+  it("长 JD 连同截断提示不超过同步契约上限", () => {
+    const jd = parseDetailPage(`<div class="jd">${"长".repeat(200_001)}</div>`, ".jd");
+    expect(jd).toHaveLength(200_000);
+    expect(jd?.endsWith("（岗位描述过长，已截断）")).toBe(true);
+  });
+
   it("解析列表与详情选择器", () => {
     const spec = SITES[0];
     const html = `

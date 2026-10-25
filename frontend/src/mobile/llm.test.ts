@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { resetDBForTests, saveLLM, saveProfile, type JobRecord } from "./db";
+import { getLLM, resetDBForTests, saveLLM, saveProfile, type JobRecord } from "./db";
 import {
   assistantReply,
   getSettings,
@@ -81,9 +81,69 @@ describe("模型配置视图", () => {
       saveSettings({ base_url: "https://api.example.com/v1", model: "m", api_key: "" }),
     ).rejects.toThrow("API Key 不能为空");
   });
+
+  it("保存与探测都拒绝非法端点", async () => {
+    await expect(
+      saveSettings({ base_url: "not-a-url", model: "m", api_key: "k" }),
+    ).rejects.toThrow("合法的 http");
+
+    const probe = await testConnection({ base_url: "not-a-url", model: "m", api_key: "k" });
+    expect(probe).toMatchObject({ ok: false });
+    expect(probe.message).toContain("合法的 http");
+  });
+
+  it("端点变更后不会把旧 Key 复用并发送到新地址", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "m", apiKey: "secret" });
+
+    await expect(
+      saveSettings({ base_url: "https://evil.example.com/v1", model: "m", api_key: "" }),
+    ).rejects.toThrow("端点地址已改变");
+    expect((await getLLM())?.apiKey).toBe("secret");
+
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return completion("OK");
+    }) as typeof fetch;
+    const probe = await testConnection({
+      base_url: "https://evil.example.com/v1",
+      model: "m",
+      api_key: "",
+    });
+    expect(probe.ok).toBe(false);
+    expect(probe.message).toContain("重新输入 API Key");
+    expect(called).toBe(false);
+  });
+
+  it("同一 origin 内换路径仍可复用旧 Key", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "m", apiKey: "secret" });
+    globalThis.fetch = (async () => completion("OK")) as typeof fetch;
+
+    const probe = await testConnection({
+      base_url: "https://api.example.com/v2",
+      model: "m",
+      api_key: "",
+    });
+    expect(probe.ok).toBe(true);
+  });
 });
 
 describe("模型探测与评分", () => {
+  it("评分结论与模型名限长，结果可通过同步导入约束", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "demo", apiKey: "key" });
+    await saveProfile({ keywords: ["AI"], directions: [], summary: "" });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      model: "m".repeat(129),
+      choices: [{ message: { content: JSON.stringify({
+        score: 88, advantages: "优".repeat(2001), gaps: "差".repeat(2001), summary: "结".repeat(2001),
+      }) } }],
+    }))) as typeof fetch;
+    const result = await scoreJob(job());
+    expect(result.advantages).toHaveLength(2000);
+    expect(result.gaps).toHaveLength(2000);
+    expect(result.summary).toHaveLength(2000);
+    expect(result.model).toHaveLength(128);
+  });
   it("未配置时探测与评分都给出行动指引", async () => {
     expect(await testConnection({ base_url: "", model: "", api_key: "" })).toMatchObject({
       ok: false,

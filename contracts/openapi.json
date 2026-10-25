@@ -891,7 +891,65 @@
       },
       "SyncApplication": {
         "additionalProperties": false,
-        "description": "一条投递记录（按 `job_detail_url` 跨设备对齐）。",
+        "description": "一条投递记录（按 `job_detail_url` 跨设备对齐；导出形状）。",
+        "properties": {
+          "applied_at": {
+            "format": "date-time",
+            "title": "Applied At",
+            "type": "string"
+          },
+          "company": {
+            "title": "Company",
+            "type": "string"
+          },
+          "job_detail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Detail Url"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ApplicationStage",
+            "default": "applied"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "company",
+          "applied_at",
+          "updated_at"
+        ],
+        "title": "SyncApplication",
+        "type": "object"
+      },
+      "SyncApplicationImport": {
+        "additionalProperties": false,
+        "description": "合并请求里的投递：在导出形状上重新加回长度与时间先后校验。",
         "properties": {
           "applied_at": {
             "format": "date-time",
@@ -950,7 +1008,7 @@
           "applied_at",
           "updated_at"
         ],
-        "title": "SyncApplication",
+        "title": "SyncApplicationImport",
         "type": "object"
       },
       "SyncCounts": {
@@ -1003,7 +1061,172 @@
       },
       "SyncJob": {
         "additionalProperties": false,
-        "description": "一台设备上的岗位事实 + 评分结论。",
+        "description": "一台设备上的岗位事实 + 评分结论（**导出形状**）。\n\n这一层的字段刻意不设长度上限、也不校验 `detail_url` 非空：库里可能存着\n「截断提示让正文刚好超过上限」的 JD、历史遗留的超长结论，或者详情 URL 为空\n的岗位。导出是「把本机事实搬出去」，任何一条坏数据都不该让整份快照 500。\n需要写库的校验留给导入模型（`SyncJobImport`），在事务里动任何一行之前完成。",
+        "properties": {
+          "capture_status": {
+            "$ref": "#/components/schemas/CaptureStatus",
+            "default": "unknown"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "company": {
+            "title": "Company",
+            "type": "string"
+          },
+          "detail_url": {
+            "default": "",
+            "title": "Detail Url",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jd_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jd Raw"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "match_score": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match Score"
+          },
+          "score_advantages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Advantages"
+          },
+          "score_gaps": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Gaps"
+          },
+          "score_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Model"
+          },
+          "score_prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Prompt Version"
+          },
+          "score_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Summary"
+          },
+          "scored_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scored At"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "company"
+        ],
+        "title": "SyncJob",
+        "type": "object"
+      },
+      "SyncJobImport": {
+        "additionalProperties": false,
+        "description": "合并请求里的岗位：在导出形状上重新加回写库前的全部校验。\n\n导出要容忍历史坏数据，但**导入**会写进本机库，不能把超长正文、空标题或\n越界字段带进来。上限与各切片自己的表单 / 落库约束保持一致。",
         "properties": {
           "capture_status": {
             "$ref": "#/components/schemas/CaptureStatus",
@@ -1179,7 +1402,7 @@
           "company",
           "detail_url"
         ],
-        "title": "SyncJob",
+        "title": "SyncJobImport",
         "type": "object"
       },
       "SyncMergeResponse": {
@@ -1240,7 +1463,7 @@
       },
       "SyncSnapshot": {
         "additionalProperties": false,
-        "description": "一台设备的完整可同步数据。",
+        "description": "一台设备的完整可同步数据（**导出形状**）。",
         "properties": {
           "applications": {
             "items": {
@@ -1282,6 +1505,52 @@
           "exported_at"
         ],
         "title": "SyncSnapshot",
+        "type": "object"
+      },
+      "SyncSnapshotImport": {
+        "additionalProperties": false,
+        "description": "合并请求体：字段与导出形状一致，但保留时间先后校验。",
+        "properties": {
+          "applications": {
+            "items": {
+              "$ref": "#/components/schemas/SyncApplicationImport"
+            },
+            "title": "Applications",
+            "type": "array"
+          },
+          "exported_at": {
+            "format": "date-time",
+            "title": "Exported At",
+            "type": "string"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/SyncJobImport"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SyncProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exported_at"
+        ],
+        "title": "SyncSnapshotImport",
         "type": "object"
       },
       "TurnResponse": {
@@ -2152,7 +2421,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SyncSnapshot"
+                "$ref": "#/components/schemas/SyncSnapshotImport"
               }
             }
           },
@@ -2169,8 +2438,11 @@
             },
             "description": "Successful Response"
           },
+          "413": {
+            "description": "请求体超过大小上限"
+          },
           "422": {
-            "description": "快照里的画像不合法（例如三项全空或条目超长）"
+            "description": "快照条目过多，或画像不合法（例如三项全空或条目超长）"
           }
         },
         "summary": "合并另一台设备的快照，并返回合并后的规范快照"

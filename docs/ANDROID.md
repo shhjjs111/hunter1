@@ -28,7 +28,8 @@ frontend/
 
 ## 构建
 
-前置：Node 20+、JDK 21、Android SDK 36（platform + build-tools）。
+前置：Node 22.12+、JDK 21、Android SDK 36（platform + build-tools）。CI 使用
+Node 24；Capacitor 8 的 CLI 不支持 Node 20。
 把下面两处替换成你本机的实际安装位置：
 
 ```powershell
@@ -49,8 +50,12 @@ cd android
 产物：`frontend/android/app/build/outputs/apk/debug/app-debug.apk`。
 
 - Debug APK 使用调试签名，可直接侧载；适合先给亲友试用。
-- 正式分发建议生成自己的 release keystore，并用 `assembleRelease` + `apksigner`
-  签名。**keystore 与密码不要提交到仓库**；丢失后无法覆盖安装升级。
+- 本项目正式分发沿用已登记证书的 release keystore。`assembleRelease` 从
+  `HUNTER1_ANDROID_KEYSTORE`、`HUNTER1_ANDROID_KEYSTORE_PASSWORD`、
+  `HUNTER1_ANDROID_KEY_ALIAS`、`HUNTER1_ANDROID_KEY_PASSWORD` 环境变量读取签名
+  材料，构建后用 `scripts/verify_apk.py` 校验。**keystore 与密码不要提交到仓库**；
+  丢失后无法覆盖安装升级。未配置签名变量时生成的 release APK 未签名，不能发布；
+  调试请使用 `assembleDebug`。
 
 ### 国内网络
 
@@ -67,14 +72,14 @@ https://mirrors.cloud.tencent.com/gradle/gradle-8.14.3-all.zip
 
 Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 
-## 已产出的 APK
+## 历史发布 APK（v0.4.1）
 
 | 用途 | 路径 |
 |---|---|
 | 调试 / 快速试用 | `frontend/android/app/build/outputs/apk/debug/app-debug.apk` |
 | 正式分发（release 签名） | `dist/hunter1-android-0.4.1.apk` |
 
-本次 release 包：
+已发布的 v0.4.1 手工构建包（以下信息不代表当前重新构建的产物）：
 
 - `versionName=0.4.1`、`versionCode=2`
 - `minSdk=24`、`targetSdk=36`
@@ -83,9 +88,39 @@ Android SDK 包也可通过 `sdkmanager` 的代理/Mirror 配置下载。
 正式 APK 随 [GitHub Release](https://github.com/shhjjs111/hunter1/releases) 提供；
 本地构建产物在 `dist/`，不进入 Git 仓库。
 
-签名密钥与密码保存在本机 `.tools/android/`（`hunter1-release.jks` 与
-`keystore-password.txt`），**不在仓库里**。请自行备份；丢失后无法覆盖安装升级，
-只能卸载重装（本地数据会丢）。
+**签名证书 SHA-256 指纹**（v0.4.1 起）：
+
+```
+87f08004b20d32403fb6483a8717b6bf75a99e9c173a9324cb52c848c61aa4d1
+```
+
+核对方式（Android SDK build-tools 自带）：
+
+```bash
+apksigner verify --print-certs dist/hunter1-android-0.4.1.apk
+```
+
+### 供应链
+
+当前 `release.yml` 在推送新的 `v*` tag 时会：
+
+1. 用 `-PappVersion=<tag>` 构建 `assembleRelease`；`versionCode` 由
+   `major*1_000_000 + minor*1_000 + patch` 派生（0.4.1 → 4001）；
+2. 用 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`
+   和 `ANDROID_KEY_PASSWORD` Actions secrets 签名；缺失则发布失败。临时 keystore
+   在签名步骤退出时删除；
+3. 运行 `scripts/verify_apk.py` 校验包名、版本、`debuggable`、`allowBackup`、
+   权限与证书指纹（`frontend/android/EXPECTED_CERT_SHA256`）；
+4. 把 APK 写进 `SHA256SUMS.txt`、SPDX SBOM、build provenance 与 SBOM
+   attestation，并与 Windows 包一起上传到 Release 草稿；发布者核对后手动发布。
+
+v0.4.1 的 APK 是这条链之前手工构建的，因此不在该版本的 SHA256SUMS / SBOM
+中；历史资产保持不变，新 tag 使用上述流程。
+
+本机签名密钥与密码保存在 `.tools/android/`（`hunter1-release.jks` 与
+`keystore-password.txt`），自动发布所需副本以 GitHub Actions secrets 加密保存，
+**不进入 Git 文件或历史**。本机原件仍需独立备份，GitHub secrets 不能读回作为
+备份；丢失签名密钥后无法覆盖安装升级，只能卸载重装（本地数据会丢）。
 
 ## 使用
 

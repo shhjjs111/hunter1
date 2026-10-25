@@ -10,6 +10,7 @@ import {
   Tag,
   fieldClass,
 } from "../../shared/ui";
+import { useRowTasks } from "../../shared/useRowTasks";
 import {
   MAX_NOTE_CHARS,
   STAGE_LABELS,
@@ -42,6 +43,11 @@ export function ApplicationsPage() {
   const changeStage = useChangeStage();
   const remove = useDeleteApplication();
   const saveNote = useSaveNote();
+  // 每个操作**按行**记录 pending / error：页面共用一个 mutation 时，
+  // `isError` 只代表最后一次调用，前一行的失败会被后一行成功覆盖。
+  const stageTask = useRowTasks();
+  const noteTask = useRowTasks();
+  const removeTask = useRowTasks();
 
   // 真分页：总数来自后端，旧记录不会再被固定上限永久截掉。
   const items = applications.data?.items ?? [];
@@ -61,7 +67,7 @@ export function ApplicationsPage() {
   // 每行「最近一次提交的阶段」。并发改同一行时由它裁定谁能撤销草稿：
   // 没有它的话，先失败的那次 onError 会删掉后一次刚写入的乐观值（下拉框回弹到
   // 旧值，而用户刚选的新值看起来被系统吞了）。
-  const latestRequest = useRef<Record<string, string>>({});
+  const latestRequest = useRef<Record<string, symbol>>({});
 
   function clearDraft(applicationId: string) {
     delete latestRequest.current[applicationId];
@@ -101,8 +107,11 @@ export function ApplicationsPage() {
       clearNoteDraft(item.id); // 又改回原样 → 不发请求，草稿交还给服务端值
       return;
     }
+    if (!noteTask.begin(item.id)) {
+      return; // 这一行上一次保存还在飞：不并发发第二次
+    }
     latestNote.current[item.id] = note;
-    saveNote.mutate(
+    void saveNote.mutateAsync(
       // 带上**最新**阶段草稿：用户可能刚在下拉里改了阶段（请求还在飞），此时
       // `item.stage` 仍是查询缓存里的旧值 —— 拿它提交会把刚选的阶段打回旧值。
       {
@@ -110,17 +119,13 @@ export function ApplicationsPage() {
         stage: stageDraft[item.id] ?? item.stage,
         note,
       },
-      {
-        onSuccess: () => {
-          if (latestNote.current[item.id] === note) {
-            clearNoteDraft(item.id);
-          }
-        },
-        // 失败：**留着草稿**。用户刚敲的字不能因为一次网络失败就消失（与「保存失败时
-        // 密钥输入框不清空」同一个取舍）；库里那份没被改动，错误另有 ErrorNotice，
-        // 用户再触发一次提交即可重试。
-      },
-    );
+    ).then(() => {
+      if (latestNote.current[item.id] === note) {
+        clearNoteDraft(item.id);
+      }
+    }).catch((error: Error) => {
+      noteTask.setError(item.id, error.message);
+    }).finally(() => noteTask.settle(item.id));
   }
 
   return (
@@ -172,45 +177,29 @@ export function ApplicationsPage() {
                         className="recessed rounded-full px-3 py-1 text-sm text-ink focus:outline-none"
                         aria-label={`「${item.title}」（${item.company}）的投递阶段`}
                         value={stageDraft[item.id] ?? item.stage}
+                        disabled={stageTask.has(item.id)}
+                        aria-busy={stageTask.has(item.id)}
                         onChange={(event) => {
                           const stage = event.target.value;
-                          latestRequest.current[item.id] = stage;
+                          if (!stageTask.begin(item.id)) {
+                            return; // 同一行已有阶段请求在飞
+                          }
+                          const request = Symbol();
+                          latestRequest.current[item.id] = request;
                           setStageDraft((prev) => ({
                             ...prev,
                             [item.id]: stage,
                           }));
-                          changeStage.mutate(
-                            {
-                              applicationId: item.id,
-                              stage,
-                            },
-                            {
-                              // 成功：这条草稿已经等于服务端真值 → 交还给查询数据。
-                              // 不清理的话它会**永久**压住后续 refetch 的结果
-                              // （包括在别处改出来的新阶段）。
-                              onSuccess: () => {
-                                if (latestRequest.current[item.id] === stage) {
-                                  clearDraft(item.id);
-                                }
-                              },
-                              // 失败：撤销乐观值，选择回到服务端真值（错误另有
-                              // ErrorNotice）。只在这仍是**最新意图**时撤销 ——
-                              // 否则会把用户后来那次的选择一起抹掉。
-                              //
-                              // 实测说明：@tanstack/react-query v5 的
-                              // `MutationObserver.mutate()` 会在发起新调用前
-                              // `removeObserver`，所以同一行连改两次时**前一次的回调
-                              // 根本不会被调用**、这条守卫在今天不可达。留着它是因为
-                              // 「最新意图」的判断本身是这段逻辑的正确性条件：
-                              // 一旦换用 mutationCache / 换回 v4 语义，缺了它就真会
-                              // 把用户后一次的选择抹掉。
-                              onError: () => {
-                                if (latestRequest.current[item.id] === stage) {
-                                  clearDraft(item.id);
-                                }
-                              },
-                            },
-                          );
+                          // 每次调用都清理自己的草稿；mutate 的 per-call 回调
+                          // 只跟随最后一次请求，会把其他行的草稿永久留下。
+                          void changeStage.mutateAsync({ applicationId: item.id, stage })
+                            .catch((error: Error) => stageTask.setError(item.id, error.message))
+                            .finally(() => {
+                              stageTask.settle(item.id);
+                              if (latestRequest.current[item.id] === request) {
+                                clearDraft(item.id);
+                              }
+                            });
                         }}
                       >
                         {STAGE_ORDER.map((stage) => (
@@ -219,6 +208,14 @@ export function ApplicationsPage() {
                           </option>
                         ))}
                       </select>
+                      {stageTask.has(item.id) && (
+                        <span className="mt-1 block text-xs text-muted">保存中…</span>
+                      )}
+                      {stageTask.errorOf(item.id) && (
+                        <span role="alert" className="mt-1 block text-xs text-danger">
+                          {stageTask.errorOf(item.id)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-muted">
                       {formatDate(item.updated_at)}
@@ -227,15 +224,19 @@ export function ApplicationsPage() {
                       <input
                         className={`w-full min-w-40 ${fieldClass}`}
                         aria-label={`「${item.title}」（${item.company}）的备注`}
+                        disabled={noteTask.has(item.id)}
+                        aria-busy={noteTask.has(item.id)}
                         maxLength={MAX_NOTE_CHARS}
                         placeholder="加一条备注…"
                         value={noteDraft[item.id] ?? item.note ?? ""}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          // 保存期间继续输入的是另一份草稿，旧请求不得清除它。
+                          delete latestNote.current[item.id];
                           setNoteDraft((prev) => ({
                             ...prev,
                             [item.id]: event.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         // 失焦即保存（回车也走这里：blur 只有一个提交入口，避免两处各写一遍）
                         onBlur={() => commitNote(item)}
                         onKeyDown={(event) => {
@@ -245,30 +246,47 @@ export function ApplicationsPage() {
                           }
                         }}
                       />
+                      {noteTask.has(item.id) && (
+                        <span className="mt-1 block text-xs text-muted">保存中…</span>
+                      )}
+                      {noteTask.errorOf(item.id) && (
+                        <span role="alert" className="mt-1 block text-xs text-danger">
+                          {noteTask.errorOf(item.id)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-right">
                       <Button
+                        disabled={removeTask.has(item.id)}
                         onClick={() => {
                           // 删除不可撤销（后端无软删）—— 先确认，避免误点丢记录
                           if (
-                            window.confirm(
+                            !window.confirm(
                               `删除「${item.company}」的投递记录？此操作不可撤销。`,
-                            )
+                            ) ||
+                            !removeTask.begin(item.id)
                           ) {
-                            remove.mutate(item.id, {
-                              onSuccess: () => {
-                                // 删掉当前页唯一一条后回退一页，避免把“空页”显示成
-                                // “一条投递都没有”。
-                                if (items.length === 1 && page > 1) {
-                                  setPage(page - 1);
-                                }
-                              },
-                            });
+                            return;
                           }
+                          void remove.mutateAsync(item.id)
+                            .then(() => {
+                              // 删掉当前页唯一一条后回退一页，避免把“空页”显示成
+                              // “一条投递都没有”。
+                              if (items.length === 1 && page > 1) {
+                                setPage(page - 1);
+                              }
+                            })
+                            .catch((error: Error) => removeTask.setError(item.id, error.message))
+                            .finally(() => removeTask.settle(item.id));
                         }}
                       >
-                        删除
+                        {removeTask.has(item.id) ? "删除中…" : "删除"}
                       </Button>
+                      {removeTask.errorOf(item.id) && (
+                        <span role="alert" className="mt-1 block text-xs text-danger">
+                          {removeTask.errorOf(item.id)}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -286,17 +304,8 @@ export function ApplicationsPage() {
         onPageChange={setPage}
       />
 
-      {/* 阶段变更 / 删除 / 备注保存的失败是**另一次操作**的错误，与列表状态无关，单独列在这里。
-          三者的提示分开渲染：合成一条会让「改备注失败」看起来像「改阶段失败」。 */}
-      {changeStage.isError && (
-        <ErrorNotice message={(changeStage.error as Error).message} />
-      )}
-      {saveNote.isError && (
-        <ErrorNotice message={(saveNote.error as Error).message} />
-      )}
-      {remove.isError && (
-        <ErrorNotice message={(remove.error as Error).message} />
-      )}
+      {/* 阶段 / 备注 / 删除的错误直接挂在各自行上（见上方 useRowTasks）：
+          页面级 `isError` 只反映最后一次调用，会把前一行的失败吞掉。 */}
 
       <p className="mt-4 text-xs text-muted">
         投递记录里的公司名与岗位名是<b>下单时刻的快照</b> ——
