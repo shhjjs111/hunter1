@@ -141,6 +141,29 @@ def _snapshot(
     )
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_urls_keep_independent_fact_and_score_versions(
+    store: SyncStore, reverse: bool
+) -> None:
+    items = [
+        _job(title="新事实", last_seen_at=LATER, match_score=20, scored_at=NOW),
+        _job(
+            title="旧事实",
+            last_seen_at=NOW,
+            match_score=91,
+            scored_at=LATER,
+            score_summary="新结论",
+        ),
+    ]
+    if reverse:
+        items.reverse()
+    counts, snapshot = store.merge_snapshot(_snapshot(jobs=items))
+    assert counts.jobs_created == 1
+    assert snapshot.jobs[0].title == "新事实"
+    assert snapshot.jobs[0].match_score == 91
+    assert snapshot.jobs[0].score_summary == "新结论"
+
+
 class TestExport:
     def test_exports_jobs_applications_and_profile(
         self, db: Database, store: SyncStore, scores: ScoreStore

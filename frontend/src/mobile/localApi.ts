@@ -25,6 +25,9 @@ import { safeErrorText } from "./http";
 const APPLICATIONS_PAGE_SIZE = 50;
 const CONVERSATIONS_PAGE_SIZE = 50;
 const JOBS_PAGE_SIZE = 20;
+const APPLICATION_STAGES: readonly ApplicationStage[] = [
+  "applied", "written_test", "interview", "offer", "rejected", "withdrawn",
+];
 
 function json(data: unknown, status = 200): Response {
   // 本地 App 的用户就是数据所有者；`safeErrorMessage` 只回显首行并截断，
@@ -117,8 +120,8 @@ async function findJob(ref: string): Promise<{ job: JobRecord | null; ambiguous:
 
 async function saveJobs(raw: RawJob[]): Promise<{ created: number; updated: number }> {
   const db = await getDB();
-  const known = new Map((await db.getAll("jobs")).map((job) => [job.detailUrl, job]));
   const tx = db.transaction("jobs", "readwrite");
+  const known = new Map((await tx.store.getAll()).map((job) => [job.detailUrl, job]));
   let created = 0;
   let updated = 0;
   const seen = new Set<string>();
@@ -364,9 +367,22 @@ async function saveProfileView(body: {
   directions?: string[];
   summary?: string;
 }) {
-  const keywords = body.keywords ?? [];
-  const directions = body.directions ?? [];
+  const normalizeItems = (value: unknown, limit: number): string[] => {
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+      throw new Error("画像条目必须是文本列表");
+    }
+    const items = value.map((item: string) => item.trim()).filter(Boolean);
+    if (items.length > limit || items.some((item) => item.length > 100)) {
+      throw new Error("画像超出长度上限");
+    }
+    return items;
+  };
+  const keywords = normalizeItems(body.keywords ?? [], 50);
+  const directions = normalizeItems(body.directions ?? [], 20);
   const summary = (body.summary ?? "").trim();
+  if (summary.length > 2000) {
+    throw new Error("画像超出长度上限");
+  }
   if (!keywords.length && !directions.length && !summary) {
     throw new Error("画像至少要有一项信号（关键词 / 方向 / 背景摘要）");
   }
@@ -393,23 +409,43 @@ async function conversationsPage(page: number, pageSize: number) {
 async function messagesFor(conversationId: string) {
   const db = await getDB();
   const messages = await db.getAllFromIndex("messages", "by-conversation", conversationId);
-  messages.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  messages.sort((a, b) =>
+    (a.sequence ?? 0) - (b.sequence ?? 0) || a.createdAt.localeCompare(b.createdAt),
+  );
   return messages.map((message) => ({ role: message.role, content: message.content }));
 }
 
-async function addMessage(conversationId: string, role: string, content: string): Promise<void> {
+async function saveTurn(
+  conversation: ConversationRecord,
+  message: string,
+  reply: string,
+  signal: AbortSignal,
+): Promise<void> {
   const db = await getDB();
-  const message: MessageRecord = {
-    id: newId(),
-    conversationId,
-    role,
-    content,
-    createdAt: now(),
-  };
-  await db.put("messages", message);
-  const conversation = await db.get("conversations", conversationId);
-  if (conversation) {
-    await db.put("conversations", { ...conversation, updatedAt: now() });
+  signal.throwIfAborted();
+  const tx = db.transaction(["messages", "conversations"], "readwrite");
+  const abort = () => tx.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const store = tx.objectStore("messages");
+    const existing = await store.index("by-conversation").getAll(conversation.id);
+    let sequence = existing.reduce((maximum, item) => Math.max(maximum, item.sequence ?? 0), 0);
+    const createdAt = now();
+    for (const [role, content] of [["user", message], ["assistant", reply]]) {
+      const record: MessageRecord = {
+        id: newId(), conversationId: conversation.id, role, content,
+        createdAt, sequence: ++sequence,
+      };
+      await store.put(record);
+    }
+    await tx.objectStore("conversations").put({ ...conversation, updatedAt: createdAt });
+    await tx.done;
+  } catch (error) {
+    try { tx.abort(); } catch { /* 已结束的事务无需再中止。 */ }
+    await tx.done.catch(() => {});
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", abort);
   }
 }
 
@@ -426,8 +462,21 @@ async function ensureConversation(id: string, title: string): Promise<Conversati
     title: title.slice(0, 40) || "新对话",
     updatedAt: now(),
   };
-  await db.put("conversations", conversation);
   return conversation;
+}
+
+/** 原生 HTTP 没有取消接口；中止后立即交还 UI，并丢弃请求后来返回的结果。 */
+function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    if (signal.aborted) {
+      operation.catch(() => {});
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 function sse(event: unknown): string {
@@ -441,11 +490,13 @@ async function handleAssistantStream(request: Request): Promise<Response> {
     return failure(422, "消息不能为空");
   }
   try {
+    request.signal.throwIfAborted();
     const conversation = await ensureConversation(body.conversation_id ?? "", message);
     const history = await messagesFor(conversation.id);
-    await addMessage(conversation.id, "user", message);
-    const reply = await assistantReply(message, history);
-    await addMessage(conversation.id, "assistant", reply);
+    request.signal.throwIfAborted();
+    const reply = await abortable(assistantReply(message, history), request.signal);
+    request.signal.throwIfAborted();
+    await saveTurn(conversation, message, reply, request.signal);
     const payload =
       sse({ type: "text", text: reply }) +
       sse({ type: "done", conversation_id: conversation.id, truncated: false, degraded: false });
@@ -454,6 +505,9 @@ async function handleAssistantStream(request: Request): Promise<Response> {
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store" },
     });
   } catch (error) {
+    if (request.signal.aborted) {
+      throw request.signal.reason;
+    }
     const detail = safeErrorMessage(error);
     return new Response(sse({ type: "error", message: detail }), {
       status: 200,
@@ -552,8 +606,11 @@ async function route(request: Request, url: URL): Promise<Response | null> {
       return failure(404, `岗位不存在：${ref}`);
     }
     const db = await getDB();
-    const existing = await db.getAllFromIndex("applications", "by-job", job.id);
+    // 查重和写入必须共用写事务，否则快速连点/多个窗口会各建一条。
+    const tx = db.transaction("applications", "readwrite");
+    const existing = await tx.store.index("by-job").getAll(job.id);
     if (existing.length > 0) {
+      await tx.done;
       return json({ application_id: existing[0].id });
     }
     const record: ApplicationRecord = {
@@ -566,21 +623,27 @@ async function route(request: Request, url: URL): Promise<Response | null> {
       appliedAt: now(),
       updatedAt: now(),
     };
-    await db.put("applications", record);
+    await tx.store.put(record);
+    await tx.done;
     return json({ application_id: record.id }, 201);
   }
   const stageMatch = /^\/api\/applications\/([^/]+)\/stage$/.exec(path);
   if (stageMatch && method === "POST") {
     const id = decodeURIComponent(stageMatch[1]);
     const body = (await request.json()) as { stage?: ApplicationStage; note?: string | null };
-    const db = await getDB();
-    const existing = await db.get("applications", id);
-    if (!existing) {
-      return failure(404, `投递不存在：${id}`);
-    }
     const stage = body.stage;
-    if (!stage) {
-      return failure(422, "stage 不能为空");
+    if (!stage || !APPLICATION_STAGES.includes(stage)) {
+      return failure(422, "请选择有效的投递阶段");
+    }
+    if (body.note != null && (typeof body.note !== "string" || body.note.length > 2000)) {
+      return failure(422, "投递备注必须是最多 2000 字符的文本");
+    }
+    const db = await getDB();
+    const tx = db.transaction("applications", "readwrite");
+    const existing = await tx.store.get(id);
+    if (!existing) {
+      await tx.done;
+      return failure(404, `投递不存在：${id}`);
     }
     const updated: ApplicationRecord = {
       ...existing,
@@ -588,7 +651,8 @@ async function route(request: Request, url: URL): Promise<Response | null> {
       note: body.note === undefined ? existing.note : body.note,
       updatedAt: now(),
     };
-    await db.put("applications", updated);
+    await tx.store.put(updated);
+    await tx.done;
     return json({ application_id: updated.id, stage: updated.stage });
   }
   const applicationMatch = /^\/api\/applications\/([^/]+)$/.exec(path);
@@ -636,8 +700,15 @@ async function route(request: Request, url: URL): Promise<Response | null> {
     try {
       const result = await scoreJob(job);
       const db = await getDB();
+      // 模型请求可能耗时很久；只给事务内重读的当前记录补评分，保留其间抓取/同步的新事实。
+      const tx = db.transaction("jobs", "readwrite");
+      const current = await tx.store.get(job.id);
+      if (!current) {
+        await tx.done;
+        return failure(404, "岗位不存在");
+      }
       const updated: JobRecord = {
-        ...job,
+        ...current,
         matchScore: result.score,
         scoreSummary: result.summary,
         scoreAdvantages: result.advantages,
@@ -646,7 +717,8 @@ async function route(request: Request, url: URL): Promise<Response | null> {
         scorePromptVersion: result.promptVersion,
         scoredAt: now(),
       };
-      await db.put("jobs", updated);
+      await tx.store.put(updated);
+      await tx.done;
       return json(scoreView(updated));
     } catch (error) {
       return failure(422, safeErrorMessage(error));
@@ -696,7 +768,7 @@ export function installLocalApi(): void {
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/")) {
+    if (url.origin !== location.origin || !url.pathname.startsWith("/api/")) {
       return originalFetch(input, init);
     }
     const response = await route(request, url);

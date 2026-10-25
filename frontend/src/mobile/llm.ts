@@ -28,6 +28,8 @@ export interface ScoreResult {
 export const PROMPT_VERSION = "mobile-scoring-v1";
 
 const MAX_JD_CHARS = 1500;
+// 与 sync 导入契约一致，避免本机成功评分却无法同步。
+const MAX_SCORE_TEXT_CHARS = 2000;
 
 export function maskKey(key: string): string {
   if (!key) {
@@ -261,7 +263,7 @@ ${clipJd(job.jdRaw)}
     advantages: textOrNull(payload.advantages),
     gaps: textOrNull(payload.gaps),
     summary: textOrNull(payload.summary),
-    model: result.model,
+    model: textOrNull(result.model, 128),
     promptVersion: PROMPT_VERSION,
   };
 }
@@ -272,8 +274,8 @@ function stripFence(content: string): string {
   return match ? match[1].trim() : trimmed;
 }
 
-function textOrNull(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+function textOrNull(value: unknown, limit = MAX_SCORE_TEXT_CHARS): string | null {
+  return typeof value === "string" && value.trim() ? Array.from(value.trim()).slice(0, limit).join("") : null;
 }
 
 export async function assistantReply(

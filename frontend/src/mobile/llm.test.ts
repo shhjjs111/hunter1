@@ -129,6 +129,21 @@ describe("模型配置视图", () => {
 });
 
 describe("模型探测与评分", () => {
+  it("评分结论与模型名限长，结果可通过同步导入约束", async () => {
+    await saveLLM({ baseUrl: "https://api.example.com/v1", model: "demo", apiKey: "key" });
+    await saveProfile({ keywords: ["AI"], directions: [], summary: "" });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      model: "m".repeat(129),
+      choices: [{ message: { content: JSON.stringify({
+        score: 88, advantages: "优".repeat(2001), gaps: "差".repeat(2001), summary: "结".repeat(2001),
+      }) } }],
+    }))) as typeof fetch;
+    const result = await scoreJob(job());
+    expect(result.advantages).toHaveLength(2000);
+    expect(result.gaps).toHaveLength(2000);
+    expect(result.summary).toHaveLength(2000);
+    expect(result.model).toHaveLength(128);
+  });
   it("未配置时探测与评分都给出行动指引", async () => {
     expect(await testConnection({ base_url: "", model: "", api_key: "" })).toMatchObject({
       ok: false,

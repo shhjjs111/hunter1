@@ -84,6 +84,8 @@ export interface MessageRecord {
   role: string;
   content: string;
   createdAt: string;
+  /** 同一毫秒内也保持提问与回答的顺序；旧记录按创建时间读取。 */
+  sequence?: number;
 }
 
 interface HunterDB extends DBSchema {

@@ -246,6 +246,23 @@ function scoreIsNewer(existing: JobRecord, incoming: SyncJob): boolean {
   return existing.matchScore === null || isNewer(incoming.scored_at, existing.scoredAt);
 }
 
+function mergeIncomingJob(previous: SyncJob, incoming: SyncJob): SyncJob {
+  const facts = isNewer(incoming.last_seen_at, previous.last_seen_at) ? incoming : previous;
+  const score = incoming.match_score != null &&
+    (previous.match_score == null || isNewer(incoming.scored_at, previous.scored_at))
+    ? incoming : previous;
+  return {
+    ...facts,
+    match_score: score.match_score,
+    score_summary: score.score_summary,
+    score_advantages: score.score_advantages,
+    score_gaps: score.score_gaps,
+    score_model: score.score_model,
+    score_prompt_version: score.score_prompt_version,
+    scored_at: score.scored_at,
+  };
+}
+
 function sameJob(a: JobRecord, b: JobRecord): boolean {
   const fields: Array<keyof JobRecord> = [
     "title",
@@ -303,9 +320,7 @@ export async function mergeLocalSnapshot(snapshot: SyncSnapshot): Promise<SyncCo
         continue;
       }
       const previous = incomingJobs.get(url);
-      if (!previous || isNewer(item.last_seen_at, previous.last_seen_at)) {
-        incomingJobs.set(url, item);
-      }
+      incomingJobs.set(url, previous ? mergeIncomingJob(previous, item) : item);
     }
 
     for (const [url, incoming] of incomingJobs) {

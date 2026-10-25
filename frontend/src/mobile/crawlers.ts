@@ -205,7 +205,10 @@ export function parseDetailPage(html: string, selector: string): string | null {
     return null;
   }
   const text = parts.join("\n");
-  return text.length > MAX_JD_CHARS ? `${text.slice(0, MAX_JD_CHARS)}\n…（岗位描述过长，已截断）` : text;
+  const suffix = "\n…（岗位描述过长，已截断）";
+  return text.length > MAX_JD_CHARS
+    ? `${text.slice(0, MAX_JD_CHARS - suffix.length)}${suffix}`
+    : text;
 }
 
 async function fetchHtml(url: string, referer?: string): Promise<string> {

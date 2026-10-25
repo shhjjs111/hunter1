@@ -118,6 +118,18 @@ beforeEach(async () => {
   await resetDBForTests();
 });
 
+it.each([false, true])("同 URL 副本分别保留最新事实与最新评分（倒序=%s）", async (reverse) => {
+  const items = [
+    syncJob({ title: "新事实", last_seen_at: LATER, match_score: 20, scored_at: NOW }),
+    syncJob({ title: "旧事实", last_seen_at: NOW, match_score: 91, scored_at: LATER, score_summary: "新结论" }),
+  ];
+  if (reverse) items.reverse();
+  const result = await mergeLocalSnapshot(snapshot({ jobs: items }));
+  const db = await getDB();
+  expect(result.jobs_created).toBe(1);
+  expect((await db.getAll("jobs"))[0]).toMatchObject({ title: "新事实", matchScore: 91, scoreSummary: "新结论" });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();

@@ -192,8 +192,31 @@ class SyncStore:
                 if not url:
                     continue
                 previous = incoming_jobs.get(url)
-                if previous is None or _newer(item.last_seen_at, previous.last_seen_at):
+                if previous is None:
                     incoming_jobs[url] = item
+                    continue
+                # 同一 URL 的事实和评分有独立版本；整行选胜者会丢掉另一副本的新评分。
+                facts = item if _newer(item.last_seen_at, previous.last_seen_at) else previous
+                score = (
+                    item
+                    if item.match_score is not None
+                    and (previous.match_score is None or _newer(item.scored_at, previous.scored_at))
+                    else previous
+                )
+                incoming_jobs[url] = facts.model_copy(
+                    update={
+                        field: getattr(score, field)
+                        for field in (
+                            "match_score",
+                            "score_summary",
+                            "score_advantages",
+                            "score_gaps",
+                            "score_model",
+                            "score_prompt_version",
+                            "scored_at",
+                        )
+                    }
+                )
 
             for url, item in incoming_jobs.items():
                 existing = by_url.get(url)
