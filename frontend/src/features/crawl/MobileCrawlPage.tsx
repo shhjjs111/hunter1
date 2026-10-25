@@ -16,6 +16,8 @@ export function MobileCrawlPage() {
 
   const subtitle = status.isError
     ? "读取失败"
+    : snapshot?.error
+      ? "本轮抓取失败"
     : snapshot
       ? sites.length === 0 && !running
         ? "本次启动后还没有抓取"
@@ -74,12 +76,13 @@ export function MobileCrawlPage() {
       )}
       {start.isError && <p className="mobile-error mt-3">{(start.error as Error).message}</p>}
       {status.isError && <p className="mobile-error mt-3">{(status.error as Error).message}</p>}
+      {snapshot?.error && <p className="mobile-error mt-3">{snapshot.error}</p>}
 
       <div className="mobile-site-list mt-4">
         {status.isLoading && !snapshot && (
           <div className="mobile-empty">正在读取抓取进度…</div>
         )}
-        {!status.isLoading && snapshot && sites.length === 0 && (
+        {!status.isLoading && !status.isError && snapshot && !snapshot.error && !running && sites.length === 0 && (
           <div className="mobile-empty">
             本次启动后还没有抓取。打开 App 时会按 24 小时窗口自动补抓，也可以点上方
             「开始抓取」。

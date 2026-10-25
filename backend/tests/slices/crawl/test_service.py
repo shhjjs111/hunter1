@@ -17,6 +17,7 @@ from hunter1.domain.models import Job
 from hunter1.platform.db import Database
 from hunter1.slices.crawl import ListPageSpec, StaticHtmlCrawler
 from hunter1.slices.crawl.service import (
+    DETAIL_LIMIT,
     BatchCrawlResult,
     CrawlResult,
     _company_id,
@@ -529,6 +530,22 @@ class DetailCrawler:
 
 class TestDetailBackfill:
     """抓取时回填 JD 正文 —— `jd_raw` 此前恒为空（实测用户库 477 条全空）。"""
+
+    def test_unattempted_details_are_not_starved_by_repeated_failures(self, db: Database) -> None:
+        raw_jobs = [
+            _raw(f"岗位 {index}", f"https://example.com/j/{index}")
+            for index in range(DETAIL_LIMIT + 1)
+        ]
+        final_url = raw_jobs[-1].detail_url
+        first = DetailCrawler("甲", raw_jobs, details={final_url: "待抓岗位的 JD"})
+        crawl_company(first, jobs=db.jobs())
+        assert final_url not in first.detail_calls
+        second = DetailCrawler("甲", raw_jobs, details={final_url: "待抓岗位的 JD"})
+        crawl_company(second, jobs=db.jobs())
+        assert second.detail_calls[0] == final_url
+        assert len(second.detail_calls) == DETAIL_LIMIT
+        job_id = job_identity(detail_url=final_url, company="示例科技", title=raw_jobs[-1].title)
+        assert db.jobs().get_many([job_id])[job_id].jd_raw == "待抓岗位的 JD"
 
     def test_fills_jd_raw_on_new_job(self, db: Database) -> None:
         """新增岗位：详情抓到正文 → 落库后 `jd_raw` 非空。"""
