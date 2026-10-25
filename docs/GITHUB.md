@@ -54,6 +54,8 @@ PR 标题遵循 Conventional Commits。一个 PR 只包含一个逻辑单元，�
   高风险依赖变更。
 - Dependabot 每周更新 Python、前端及契约生成器 npm、Android Gradle 和
   GitHub Actions 依赖。
+- Gradle wrapper 的 major 更新在 AGP 8.x 仍依赖已移除内部 API 期间暂停；
+  minor/patch 与 AGP 自身更新继续由 Dependabot 提供。
 - 第三方 action 必须固定到完整 40 位 commit SHA，由测试门禁检查。
 - Actions 只允许 GitHub 官方 action，并强制 SHA 固定；默认 token 仅有只读权限。
 - Android SDK 通过 Windows runner 自带的 `sdkmanager` 安装，遵守同一 Action

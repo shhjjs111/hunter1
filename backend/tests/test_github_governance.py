@@ -134,6 +134,12 @@ def test_dependabot_covers_android_gradle() -> None:
     assert "directory: /frontend/android" in text
 
 
+def test_dependabot_skips_gradle_majors_until_android_plugins_support_them() -> None:
+    text = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    assert "dependency-name: gradle" in text
+    assert "version-update:semver-major" in text
+
+
 def test_codeql_scans_workflow_files() -> None:
     text = (WORKFLOWS / "codeql.yml").read_text(encoding="utf-8")
     assert "- actions" in text, "CodeQL 没扫 actions，工作流改动会绕过静态分析"
