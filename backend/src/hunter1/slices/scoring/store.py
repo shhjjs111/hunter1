@@ -138,6 +138,10 @@ class ScoreStore:
         session: Session | None = None,
     ) -> None:
         """写入画像与它的更新时间（同步导入用，保留来源设备的时间）。"""
+        if session is None:
+            with self._db.transaction() as own:
+                self.save_profile_at(profile, updated_at, session=own)
+            return
         self._db.settings().set_raw(PROFILE_KEY, profile.model_dump(), session=session)
         self._db.settings().set_raw(
             PROFILE_UPDATED_AT_KEY,

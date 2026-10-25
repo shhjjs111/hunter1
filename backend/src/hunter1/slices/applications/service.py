@@ -13,7 +13,7 @@ jobs 切片只提供岗位查询（依赖方向 `applications → jobs` 是白�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from hunter1.domain.models import Application, ApplicationStage, Job
@@ -69,16 +69,20 @@ def change_stage(
       仍是「有一条空备注」而不是「没有备注」；
     - **非空串** → 覆盖备注。
 
-    刻意不走 `model_copy(update=...)`：pydantic v2 的 `model_copy` **不重跑校验器**，
-    那样「把更新时间设到投递之前」这种非法状态会被静默造出来。这里走一次
-    `model_validate`，让领域不变量仍然兜底。
+    `updated_at` 同时是乐观锁版本；系统时钟停滞或回拨时也必须严格递增，
+    否则两个旧快照会使用同一版本连续写入，或让同步把本机新编辑当成旧数据。
+    再走一次 `model_validate`，让其余领域不变量仍然兜底。
     """
+    try:
+        updated_at = max(now, application.updated_at + timedelta(microseconds=1))
+    except TypeError as exc:
+        raise ValueError("更新时间的时区必须与投递记录一致") from exc
     payload = application.model_dump()
     resolved_note = application.note if note is None else (note or None)
     payload.update(
         {
             "stage": stage,
-            "updated_at": now,
+            "updated_at": updated_at,
             "note": resolved_note,
         }
     )

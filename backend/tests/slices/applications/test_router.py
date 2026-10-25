@@ -241,6 +241,36 @@ class TestStageEndpoint:
 class TestStageUpdateConflict:
     """阶段推进是**读-改-写**：并发下必须有人失败，而不是两边都 200 而有一边白改。"""
 
+    @pytest.mark.parametrize("clock_delta", [timedelta(), timedelta(days=-1)])
+    def test_stalled_or_backwards_clock_still_detects_concurrent_change(
+        self, db, store, seed, monkeypatch, clock_delta
+    ) -> None:
+        import hunter1.slices.applications.router as router_module
+
+        seed.upsert(_application(id="a1", updated_at=NOW))
+        app = FastAPI()
+        app.include_router(
+            build_router(store=store, jobs=JobStore(db), clock=lambda: NOW + clock_delta),
+            prefix="/api",
+        )
+        original = router_module.service.change_stage
+
+        def racing_change(application, *, stage, now, note=None):
+            mine = original(application, stage=stage, now=now, note=note)
+            other = original(
+                application, stage=ApplicationStage.INTERVIEW, now=now, note="other edit"
+            )
+            assert store.update_existing(other, expected_updated_at=application.updated_at)
+            return mine
+
+        monkeypatch.setattr(router_module.service, "change_stage", racing_change)
+        with TestClient(app) as client:
+            response = client.post("/api/applications/a1/stage", json={"stage": "offer"})
+        assert response.status_code == 409
+        stored = store.get("a1")
+        assert stored is not None and stored.stage is ApplicationStage.INTERVIEW
+        assert stored.updated_at > NOW
+
     def test_concurrent_change_is_409_not_a_silent_overwrite(
         self,
         db: Database,

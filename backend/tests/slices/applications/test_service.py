@@ -91,14 +91,22 @@ class TestChangeStage:
         change_stage(application, stage=ApplicationStage.REJECTED, now=NOW)
         assert application.stage is ApplicationStage.APPLIED
 
-    def test_time_travelling_backwards_is_rejected(self) -> None:
-        """把更新时刻设到投递之前是不可能的 —— 领域模型直接拒绝。"""
+    def test_clock_rollback_keeps_version_advancing(self) -> None:
+        """时钟回拨不应让用户无法编辑，也不应让同步忽略本机新编辑。"""
         application = new_application(job=_job(), now=NOW)
-        with pytest.raises(ValueError):
+        changed = change_stage(
+            application,
+            stage=ApplicationStage.INTERVIEW,
+            now=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+        assert changed.updated_at > application.updated_at
+        assert changed.applied_at == application.applied_at
+
+    def test_inconsistent_timezones_are_rejected(self) -> None:
+        application = new_application(job=_job(), now=NOW)
+        with pytest.raises(ValueError, match="时区"):
             change_stage(
-                application,
-                stage=ApplicationStage.INTERVIEW,
-                now=datetime(2026, 9, 1, tzinfo=UTC),
+                application, stage=ApplicationStage.INTERVIEW, now=NOW.replace(tzinfo=None)
             )
 
 
